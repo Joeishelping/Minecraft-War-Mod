@@ -1,3 +1,4 @@
 tests/harness/run_*/
 *.log
 dist/
+tests/vice/main.copy.js
