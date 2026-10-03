@@ -690,18 +690,24 @@ const S = {
     W.setRelPair(1, 2, "1", false);
     const mode = opt.mode ?? "molotov";
     const A = [], B = [];
-    for (let i = 0; i < 6; i++) A.push(soldier(1, { x: -5 + i * 2 + 0.5, y: 0, z: 0.5 }, mode === "molotov" ? "molotov" : "spear", 1, "hold"));
-    for (let i = 0; i < 6; i++) B.push(soldier(2, { x: -5 + i * 2 + 0.5, y: 0, z: (mode === "molotov" ? 16 : 10) + 0.5 }, opt.foe ?? "sword", 1, "hold"));
+    const demo = ["grenade", "molotov", "at"].includes(mode);
+    for (let i = 0; i < 6; i++) {
+      const e = soldier(1, { x: -5 + i * 2 + 0.5, y: 0, z: 0.5 }, mode === "spear" ? "spear" : mode === "gun" ? (opt.gun ?? "pistol") : "rifle", 1, "hold");
+      if (demo) W.setupSoldier(e, { faction: 1, squad: 1, weapon: mode, div: "grenadier", radius: 8, func: "hold" }, player);
+      if (mode === "legacy") { W.setupSoldier(e, { faction: 1, squad: 1, weapon: "sword", div: "grenadier", radius: 8, func: "hold" }, player); e.dyn.delete("war:kit"); e.dyn.delete("war:throw"); }
+      A.push(e);
+    }
+    for (let i = 0; i < 6; i++) B.push(soldier(2, { x: -5 + i * 2 + 0.5, y: 0, z: (["molotov", "grenade", "at", "legacy"].includes(mode) ? 16 : 10) + 0.5 }, opt.foe ?? "sword", 1, "hold"));
     step(40);
     await W.giveOrder(player, { faction: 2, order: 0, squad: 0, count: 0, radius: 200, stance: "aggressive", ao: 100, free: true, target: 5, cx: 0, cz: 0, cy: 0, then: "hold" });
-    let maxFires = 0, t0 = SIM.tick;
+    let maxFires = 0, t0 = SIM.tick, booms = 0; const ex0 = MC.world.getDimension("overworld").createExplosion; MC.world.getDimension("overworld").createExplosion = function (...a) { booms++; if (opt.boomlog) console.error("BOOM", SIM.tick, JSON.stringify(a[0]), JSON.stringify({ ...a[2], source: !!a[2]?.source })); return ex0.apply(this, a); };
     for (let t = 0; t < Number(opt.ticks ?? 1600); t += 10) {
       step(10); maxFires = Math.max(maxFires, W.fires.length);
       if (!B.some((e) => e.isValid && !W.isDowned(e)) || !A.some((e) => e.isValid && !W.isDowned(e))) break;
     }
     const up = (L) => L.filter((e) => e.isValid && !W.isDowned(e)).length;
     const burnedA = A.filter((e) => SIM.burned?.has(e.id)).length, burnedB = B.filter((e) => SIM.burned?.has(e.id)).length;
-    report({ mode, ticks: SIM.tick - t0, upA: up(A), upB: up(B), maxFires, burnedA, burnedB, moloLeft: A.map((e) => e.dyn.get("war:molo") ?? 3), held: A[0].props.get("war:gun"), weaponA: A[0].dyn.get("war:weapon"), groups: [...A[0].groups].filter((g) => /w_/.test(g)) });
+    report({ mode, ticks: SIM.tick - t0, upA: up(A), upB: up(B), maxFires, burnedA, burnedB, booms, kit: A[0].dyn.get("war:kit"), throwT: A[0].dyn.get("war:throw"), nadeLeft: A.map((e) => e.dyn.get("war:nade") ?? 3), moloLeft: A.map((e) => e.dyn.get("war:molo") ?? 3), held: A[0].props.get("war:gun"), weaponA: A[0].dyn.get("war:weapon"), groups: [...A[0].groups].filter((g) => /w_/.test(g)) });
   },
   // v6.6: relations. An old world (20 factions, 2 at war, 3 allied) upgraded to 40; diplomacy on one page; a coalition spawn
   async factions() {

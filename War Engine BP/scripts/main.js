@@ -1,4 +1,4 @@
-// War Engine v6.6: faction NPC war framework
+// War Engine v6.7: faction NPC war framework
 import { world, system, Player, ItemStack, EquipmentSlot, GameMode } from "@minecraft/server";
 import { ActionFormData, ModalFormData, FormCancelationReason } from "@minecraft/server-ui";
 import { SKINS } from "./skins.js";
@@ -52,7 +52,7 @@ const DIV = {
   garrison: { name: "Garrison", hp: "hp_40", weapon: true },
   guard: { name: "Guard", hp: "hp_60", weapon: true },
   medic: { name: "Medic", hp: "hp_30", weapon: false },
-  grenadier: { name: "SB Grenadier", hp: "hp_40", weapon: false },
+  grenadier: { name: "Demolition", hp: "hp_40", weapon: false },
   houndmaster: { name: "Houndmaster", hp: "hp_40", weapon: true },
   cavalier: { name: "Cavalier", hp: "hp_80", weapon: true },
 };
@@ -75,8 +75,10 @@ const REL_TXT = { "1": "§cHOSTILE", "0": "§7NEUTRAL", "2": "§aALLY" };
 // Gun types fire the gun pack's own NPC bullets (its script applies the damage).
 // A faction's loadout only decides which gun model is held and which gunshot plays.
 const WEAPONS = [["sword", "Sword"], ["crossbow", "Crossbow"], ["rifle", "Rifle"], ["semi", "Semi-auto"], ["smg", "SMG"],
-  ["mg", "Machine gun"], ["shotgun", "Shotgun"], ["at", "Anti-tank"], ["pistol", "Pistol"], ["sniper", "Sniper"],
-  ["spear", "Spear"], ["molotov", "Molotovs (+ sword)"]];   // (v6.6: spear, molotov)
+  ["mg", "Machine gun"], ["shotgun", "Shotgun"], ["pistol", "Pistol"], ["sniper", "Sniper"], ["spear", "Spear"]];   // (v6.6: spear)
+// v6.7: the Demolition unit's own kits (nobody else gets these): grenades or molotovs with a pistol, or a bazooka
+const DEMO = [["grenade", "Grenades (+ pistol)"], ["molotov", "Molotovs (+ pistol)"], ["at", "Bazooka"]];
+const ALL_WEAPONS = [...WEAPONS, ["at", "Anti-tank"], ["molotov", "Molotovs"]];   // (older soldiers may still carry these)
 const MELEE_W = ["sword", "spear", "molotov"];                  // hand-to-hand weapons (everything else shoots)
 const isRangedW = (w) => !MELEE_W.includes(w);
 const GUNS = ["rifle", "semi", "smg", "mg", "shotgun", "at", "pistol", "sniper"];
@@ -304,7 +306,7 @@ function sdRead(e) {
 }
 const snapshot = (e) => {
   const d = sd(e);
-  return { faction: d.faction, skin: d.skin, ranged: d.ranged, weapon: d.weapon, div: d.div, func: d.func, squad: d.squad, radius: d.radius, custom: d.custom, armor: d.armor };
+  return { faction: d.faction, skin: d.skin, ranged: d.ranged, weapon: d.div === "grenadier" ? String(gdp(e, "war:kit") ?? "grenade") : d.weapon, div: d.div, func: d.func, squad: d.squad, radius: d.radius, custom: d.custom, armor: d.armor };
 };
 
 function applyRelations(e) {
@@ -377,7 +379,6 @@ function equipArmor(e, tier) {
 function weaponItem(e) {
   const d = sd(e);
   if (d.surr || d.div === "medic") return "air";
-  if (d.div === "grenadier" && Number(gdp(e, "war:snow") ?? 3) > 0) return "snowball";
   if (GUNS.includes(d.weapon)) return `ww:${gunModel(d.faction, d.weapon)}`;
   if (d.weapon === "spear") return "iron_spear";                  // (no spear in this game version: a trident)
   if (d.ranged) return "crossbow";
@@ -478,7 +479,12 @@ function setupSoldier(e, s, player, { heal = true } = {}) {
   sdDrop(e);
   const div = DIV[s.div] ? s.div : "foot";
   setP(e, "war:faction", s.faction ?? 0);
-  const weapon = div === "medic" || div === "grenadier" ? "sword" : (s.weapon && WEAPONS.some((w) => w[0] === s.weapon) ? s.weapon : (s.ranged ? "crossbow" : "sword"));
+  let weapon = div === "medic" ? "sword" : (s.weapon && ALL_WEAPONS.some((w) => w[0] === s.weapon) ? s.weapon : (s.ranged ? "crossbow" : "sword"));
+  if (div === "grenadier") {                                       // v6.7: Demolition: kit = grenades / molotovs (with a pistol) or a bazooka
+    const kit = DEMO.some((k) => k[0] === s.weapon) ? s.weapon : String(gdp(e, "war:kit") ?? "grenade");
+    sdp(e, "war:kit", kit); sdp(e, "war:throw", kit === "at" ? undefined : kit);
+    weapon = kit === "at" ? "at" : "pistol";
+  } else { sdp(e, "war:kit", undefined); sdp(e, "war:throw", undefined); }
   sdp(e, "war:weapon", weapon);
   setP(e, "war:ranged", isRangedW(weapon));
   setP(e, "war:skin", s.skin ?? 0);
@@ -690,17 +696,11 @@ function think(e) {
 
   // ---- weapon
   let weapon = GUNS.includes(d.weapon) ? `w_${d.weapon}` : d.weapon === "spear" && d.div !== "cavalier" ? "w_spear" : d.ranged ? "w_ranged" : d.div === "cavalier" ? "w_lance" : "w_melee";
-  if (d.weapon === "molotov") molotov(e, d, now);                // (v6.6: throws one now and then, fights with the sword)
+  // v6.7: Demolition (and any older molotov soldier): throws now and then, fights with his pistol / sword between throws
+  if (d.div === "grenadier" && !gdp(e, "war:kit")) { setupSoldier(e, { ...snapshot(e), weapon: "grenade", func: "__none" }, undefined, { heal: false }); return; }   // an old snowball grenadier: re-kitted once
+  const thr = gdp(e, "war:throw") ?? (d.weapon === "molotov" ? "molotov" : undefined);
+  if (thr === "grenade") grenade(e, d, now); else if (thr === "molotov") molotov(e, d, now);
   if (d.div === "medic") weapon = "w_keepaway";
-  if (d.div === "grenadier") {
-    let snow = Number(gdp(e, "war:snow") ?? 3);
-    if (snow < 3 && now - Number(gdp(e, "war:snowr") ?? now) > 2400) {   // (v6.6) one back every 2 minutes
-      snow++; sdp(e, "war:snow", snow); sdp(e, "war:snowr", snow < 3 ? now : undefined);
-      if (snow === 1) { setP(e, "war:ranged", false); equip(e, "snowball"); }
-    }
-    if (snow > 0) { weapon = "w_keepaway"; grenadier(e, d, now); }
-    else weapon = "w_ranged";
-  }
   if (d.div === "medic") medic(e, d, now);
 
   const pat = `g_pat${d.radius <= 5 ? 4 : d.radius <= 10 ? 8 : 14}`;
@@ -832,49 +832,7 @@ function medic(e, d, now) {
     try { tgt.dimension.spawnParticle("minecraft:heart_particle", { x: tgt.location.x, y: tgt.location.y + 2, z: tgt.location.z }); } catch {}
   }, 12);
 }
-// v6.6 balance: 24 blocks max (a lob that far was mostly luck), never at a man closer than 6 (the blast / scatter
-// reaches the thrower), never where a friend stands within 3 of the target, 12 s between throws, and one snowball
-// back every 2 minutes (up to 3; it used to be 3 for life, then a crossbow)
-function grenadier(e, d, now) {
-  if (Number(gdp(e, "war:snowt") ?? 0) > now) return;
-  // only enemy soldiers, hounds, players, and tanks with an enemy crew; never mobs or empty targets
-  let best, bd = -1e9;
-  for (const o of nearbyCombatants(e.dimension.id, e.location, 24)) {
-    if (o.id === e.id) continue;
-    let ok = false;
-    if (o.typeId === SOLDIER || o.typeId === HOUND) ok = isHostile(d.faction, factionOf(o));
-    else if (o.typeId === "minecraft:player") { try { ok = playerFair(o) && isHostile(d.faction, factionOf(o)); } catch {} }
-    else if (o.typeId === "war:tank") {
-      const crew = o.getComponent("minecraft:rideable")?.getRiders() ?? [];
-      ok = crew.some((c) => isHostile(d.faction, factionOf(c)));
-    }
-    if (!ok) continue;
-    const dd = dist(o.location, e.location);
-    if (dd <= 6) continue;
-    if (nearSnap(o.dimension.id, o.location, 3).some((c) => c.id !== e.id && !c.down && (c.type === SOLDIER || c.type === "minecraft:player") && c.f && isFriendly(d.faction, c.f))) continue;   // a friend right by him
-    // value: how many enemies are packed around him (tanks count triple), then distance
-    let pack = o.typeId === "war:tank" ? 3 : 1;
-    for (const q of nearbyCombatants(o.dimension.id, o.location, 4)) if (q.id !== o.id && (q.typeId === SOLDIER || q.typeId === "minecraft:player") && isHostile(d.faction, factionOf(q))) pack++;
-    const sc = pack * 10 - dd * 0.3;
-    if (sc > bd) { bd = sc; best = o; }
-  }
-  if (!best) return;
-  callout(e, "Grenade!");
-  const snow = Number(gdp(e, "war:snow") ?? 3) - 1;
-  sdp(e, "war:snow", snow);
-  sdp(e, "war:snowt", now + 240); // 12 s
-  if (!gdp(e, "war:snowr")) sdp(e, "war:snowr", now);
-  try {
-    const from = { x: e.location.x, y: e.location.y + 1.6, z: e.location.z };
-    const sb = e.dimension.spawnEntity("minecraft:snowball", from);
-    const dx = best.location.x - from.x, dz = best.location.z - from.z, l = Math.hypot(dx, dz) || 1;
-    // lobbed arc (~40 degrees), speed scaled to distance; snowball gravity is about 0.03 per tick
-    const ang = (40 * Math.PI) / 180;
-    const sp = Math.min(1.9, Math.sqrt((0.03 * l) / Math.sin(2 * ang)) * 1.08);
-    sb.getComponent("minecraft:projectile")?.shoot({ x: (dx / l) * sp * Math.cos(ang), y: sp * Math.sin(ang), z: (dz / l) * sp * Math.cos(ang) }, { owner: e });
-  } catch {}
-  if (snow <= 0) { setP(e, "war:ranged", true); equip(e, "crossbow"); }
-}
+// (v6.7: the snowball grenadier is gone: the Demolition unit throws real grenades / molotovs, or fires a bazooka)
 
 // ================================================================ v6.6: molotovs
 // A molotov soldier fights with a sword and now and then lobs a firebomb at an enemy 5-18 blocks away: 3 carried, 15 s
@@ -948,6 +906,66 @@ system.runInterval(() => {
   }
 }, 10);
 const fleeFire = new Map();
+
+// ================================================================ v6.7: grenades (the Demolition unit's "Grenades" kit)
+// Lobbed at a group of enemies 8-22 blocks away (3 carried, 12 s between throws, one back every 90 s, one per squad every
+// 4 s, never where a friend stands within 5 of the target). It lands, fizzes ~1.5 s (anyone close by scrambles away),
+// then goes off: a real explosion that hurts and knocks people about (off a wall, too) but never breaks blocks.
+const NADE = { max: 3, cd: 240, rMin: 8, rMax: 22, refill: 1800, fuse: 30, power: 1.8, safe: 5, squadGap: 80 };
+const squadNade = new Map();
+const liveNades = []; // { dim, at, boom, by }
+function grenade(e, d, now) {
+  if (downed.has(e.id) || d.surr) return;
+  let n = Number(gdp(e, "war:nade") ?? NADE.max);
+  if (n < NADE.max && now - Number(gdp(e, "war:nader") ?? now) > NADE.refill) { n++; sdp(e, "war:nade", n); sdp(e, "war:nader", n < NADE.max ? now : undefined); }
+  if (n <= 0 || Number(gdp(e, "war:nadet") ?? 0) > now) return;
+  const sq = `${d.faction}:${d.squad}`;
+  if (now < (squadNade.get(sq) ?? 0)) return;
+  let t, bs = -1e9;
+  for (const c of nearSnap(e.dimension.id, e.location, NADE.rMax)) {
+    if (c.down || !c.f || !isHostile(d.faction, c.f) || !c.e.isValid || downed.has(c.id) || c.dd < NADE.rMin) continue;
+    let pack = 0; for (const q of nearSnap(e.dimension.id, c, 3.5)) if (!q.down && q.f && isHostile(d.faction, q.f)) pack++;
+    const sc = pack * 3 - c.dd * 0.1;
+    if (sc > bs) { bs = sc; t = c.e; }
+  }
+  if (!t?.isValid || Math.abs(t.location.y - e.location.y) > 8) return;
+  if (!clearShot(e.dimension, headLoc(e), { x: t.location.x, y: t.location.y + 1.6, z: t.location.z })) return;
+  if (nearSnap(t.dimension.id, t.location, NADE.safe).some((c) => !c.down && (c.type === SOLDIER || c.type === "minecraft:player" || c.type === HOUND) && c.f && isFriendly(d.faction, c.f))) return;
+  sdp(e, "war:nade", n - 1); sdp(e, "war:nadet", now + NADE.cd); squadNade.set(sq, now + NADE.squadGap);
+  if (!gdp(e, "war:nader")) sdp(e, "war:nader", now);
+  callout(e, "Grenade!");
+  const dd = dist(t.location, e.location), err = Math.min(2.5, dd / 9);
+  const at = { x: t.location.x + (Math.random() - 0.5) * err * 2, y: t.location.y, z: t.location.z + (Math.random() - 0.5) * err * 2 };
+  const dim = e.dimension, from = headLoc(e), T = Math.round(12 + dd * 0.9), g = walkableNear(dim, at.x, at.z, at.y) ?? at, by = e;
+  try { dim.playSound("random.bow", from, { volume: 0.6, pitch: 0.6 }); } catch {}
+  for (let k = 1; k <= T; k += 2) system.runTimeout(() => {
+    try { const u = k / T, h = Math.max(3, dd * 0.35); dim.spawnParticle("minecraft:basic_smoke_particle", { x: from.x + (g.x - from.x) * u, y: from.y + (g.y + 0.3 - from.y) * u + 4 * h * u * (1 - u), z: from.z + (g.z - from.z) * u }); } catch {}
+  }, k);
+  system.runTimeout(() => { try { dim.playSound("random.fuse", g, { volume: 0.8, pitch: 1.4 }); } catch {} liveNades.push({ dim, at: { x: g.x, y: g.y, z: g.z }, boom: tick() + NADE.fuse, by }); }, T);
+}
+system.runInterval(() => {
+  const now = tick();
+  for (let i = liveNades.length - 1; i >= 0; i--) {
+    const G = liveNades[i];
+    try {
+      if (now >= G.boom) {
+        liveNades.splice(i, 1);
+        const o = { breaksBlocks: false, causesFire: false };
+        if (G.by?.isValid) o.source = G.by;
+        G.dim.createExplosion(G.at, NADE.power, o);
+        continue;
+      }
+      G.dim.spawnParticle("minecraft:basic_smoke_particle", { x: G.at.x, y: G.at.y + 0.2, z: G.at.z });
+      for (const c of nearSnap(G.dim.id, G.at, 4.5)) {               // a live grenade at his feet: get away from it
+        if (c.type !== SOLDIER || c.down || held.has(c.id) || !c.e.isValid || now - Number(fleeFire.get(c.id) ?? -99) < 15) continue;
+        fleeFire.set(c.id, now);
+        const l = c.e.location, dx = l.x - G.at.x, dz = l.z - G.at.z, L = Math.hypot(dx, dz) || 1;
+        const out = walkableNear(c.e.dimension, G.at.x + (dx / L) * 6, G.at.z + (dz / L) * 6, l.y);
+        if (out && !dangerNear(c.e.dimension, out)) { planPersonalTo(c.e, "settle", out, now); note(c.e, "getting away from a grenade"); }
+      }
+    } catch { liveNades.splice(i, 1); }
+  }
+}, 5);
 
 // Stuck detection + catch-up teleports (works across dimensions for leaders).
 function unstick(e, d, fighting) {
@@ -1903,14 +1921,14 @@ async function eggUse(player, div) {
     .dropdown("Faction or coalition", facOpts, { defaultValueIndex: Math.min(facOpts.length - 1, def.coal !== undefined && coals[def.coal] ? NF + def.coal : Math.max(0, def.faction - 1)) })
     .dropdown("Squad", squadList(def.faction, "No squad"), { defaultValueIndex: def.squad })
     .dropdown("Function", funcs.map((x) => x[1]), { defaultValueIndex: Math.min(def.func, funcs.length - 1) })
-    .dropdown("Weapon", DIV[div].weapon ? wl : [div === "medic" ? "None (heals)" : "Snowballs, then Crossbow"], { defaultValueIndex: DIV[div].weapon ? wIdx : 0 })
+    .dropdown(div === "grenadier" ? "Kit" : "Weapon", DIV[div].weapon ? wl : div === "grenadier" ? DEMO.map((k) => k[1]) : ["None (heals)"], { defaultValueIndex: DIV[div].weapon ? wIdx : div === "grenadier" ? Math.max(0, DEMO.findIndex((k) => k[0] === def.weapon)) : 0 })
     .slider("How many", 1, 30, { valueStep: 1, defaultValue: def.count })
     .slider("Patrol / sentry radius", 4, 150, { valueStep: 2, defaultValue: def.radius });
   const r = await show(f, player);
   if (!r || r.canceled || !r.formValues) return;
   const v = r.formValues;
   const pick = Number(v[0]), coal = pick >= NF ? coals[pick - NF] : undefined;
-  const cfg = { faction: coal ? (def.faction || 1) : pick + 1, coal: coal ? pick - NF : undefined, squad: Number(v[1]), func: Number(v[2]), weapon: DIV[div].weapon ? WL[Number(v[3])][0] : "sword", count: Number(v[4]), radius: Number(v[5]) };
+  const cfg = { faction: coal ? (def.faction || 1) : pick + 1, coal: coal ? pick - NF : undefined, squad: Number(v[1]), func: Number(v[2]), weapon: DIV[div].weapon ? WL[Number(v[3])][0] : div === "grenadier" ? DEMO[Number(v[3])][0] : "sword", count: Number(v[4]), radius: Number(v[5]) };
   setJSON(player, key, cfg);
   if (coal) {
     const mem = coal.members, width = Math.min(6, cfg.count) * 1.5 + 3;
@@ -2190,7 +2208,7 @@ async function editSoldier(player, e) {
     .dropdown("Faction", ["None", ...factionList()], { defaultValueIndex: d.faction })
     .dropdown("Squad", squadList(d.faction, "No squad"), { defaultValueIndex: d.squad })
     .dropdown("Function", funcs.map((x) => x[1]), { defaultValueIndex: Math.max(0, funcs.findIndex((x) => x[0] === d.func)) })
-    .dropdown("Weapon", DIV[d.div].weapon ? (d.div === "cavalier" ? WEAPONS.slice(0, 2) : WEAPONS).map((w) => (w[0] === "sword" && d.div === "cavalier" ? "Spear" : w[1])) : ["(fixed for this unit)"], { defaultValueIndex: DIV[d.div].weapon ? Math.max(0, (d.div === "cavalier" ? WEAPONS.slice(0, 2) : WEAPONS).findIndex((w) => w[0] === d.weapon)) : 0 })
+    .dropdown(d.div === "grenadier" ? "Kit" : "Weapon", d.div === "grenadier" ? DEMO.map((k) => k[1]) : DIV[d.div].weapon ? (d.div === "cavalier" ? WEAPONS.slice(0, 2) : WEAPONS).map((w) => (w[0] === "sword" && d.div === "cavalier" ? "Spear" : w[1])) : ["(fixed for this unit)"], { defaultValueIndex: d.div === "grenadier" ? Math.max(0, DEMO.findIndex((k) => k[0] === String(gdp(e, "war:kit") ?? "grenade"))) : DIV[d.div].weapon ? Math.max(0, (d.div === "cavalier" ? WEAPONS.slice(0, 2) : WEAPONS).findIndex((w) => w[0] === d.weapon)) : 0 })
     .dropdown("Armor", ARMOR_LABEL, { defaultValueIndex: Math.max(0, ARMOR.indexOf(d.armor)) })
     .dropdown("Skin", ["Faction uniform", ...skins.map((s) => s.name)], { defaultValueIndex: Math.max(0, skins.findIndex((s) => s.slot === d.skin) + 1) })
     .slider("Patrol / sentry radius", 4, 150, { valueStep: 2, defaultValue: Math.min(150, Math.max(4, d.radius)) })
@@ -2200,8 +2218,8 @@ async function editSoldier(player, e) {
   if (!r || r.canceled || !r.formValues || !e.isValid) return;
   const v = r.formValues;
   const skinIdx = Number(v[5]);
-  const wpn = DIV[d.div].weapon ? (d.div === "cavalier" ? WEAPONS.slice(0, 2) : WEAPONS)[Number(v[3])][0] : d.weapon;
-  const s = { ...snapshot(e), faction: Number(v[0]), squad: Number(v[1]), weapon: wpn, ranged: wpn !== "sword",
+  const wpn = d.div === "grenadier" ? DEMO[Number(v[3])][0] : DIV[d.div].weapon ? (d.div === "cavalier" ? WEAPONS.slice(0, 2) : WEAPONS)[Number(v[3])][0] : d.weapon;
+  const s = { ...snapshot(e), faction: Number(v[0]), squad: Number(v[1]), weapon: wpn, ranged: isRangedW(wpn),
     armor: ARMOR[Number(v[4])] ?? "none",
     skin: skinIdx ? skins[skinIdx - 1].slot : 0, radius: Number(v[6]), custom: String(v[7]).trim(), owner: d.owner, func: "__none" };
   const func = funcs[Number(v[2])][0];
@@ -2900,12 +2918,12 @@ function hurt(ent, amount, src) {
 // Weapons differ: rifles/MGs keep accuracy at range; pistols, SMGs and shotguns fall off fast.
 const GUN_SPEC = {
   rifle:   { bullet: "ww:nrifle_projectile",   sight: 200, fire: 200, mag: 1,  gap: 0, reload: 30,  speed: 5.0, spread: 0.007 },
-  semi:    { bullet: "ww:nsemi_projectile",    sight: 200, fire: 200, mag: 8,  gap: 10, reload: 45, speed: 5.0, spread: 0.009 },   // (v6.6: 8 rounds, same damage per second)
+  semi:    { bullet: "ww:nsemi_projectile",    sight: 200, fire: 200, mag: 8,  gap: 13, reload: 20, speed: 5.0, spread: 0.009 },   // (v6.7: 8 rounds at the old pace: ~14 ticks a shot, in a burst and overall)
   smg:     { bullet: "ww:nsmg_projectile",     sight: 200, fire: 120, mag: 20, gap: 2, reload: 35,  speed: 4.5, spread: 0.018 },
   mg:      { bullet: "ww:nlmg_projectile",     sight: 200, fire: 200, mag: 30, gap: 2, reload: 50, speed: 5.0, spread: 0.010 },
   shotgun: { bullet: "ww:nshotgun_projectile", sight: 200, fire: 40,  mag: 1,  gap: 0, reload: 20,  speed: 3.5, spread: 0.035 },   // (v6.6: a pump takes a second)
   at:      { bullet: "ww:nbazooka_projectile", sight: 200, fire: 120, mag: 1,  gap: 0, reload: 70, speed: 2.3, spread: 0.010 },
-  pistol:  { bullet: "ww:nsemi_projectile",    sight: 200, fire: 200, mag: 7,  gap: 10, reload: 35, speed: 4.5, spread: 0.015 },   // (v6.6: a 7-round magazine, same damage per second)
+  pistol:  { bullet: "ww:nsemi_projectile",    sight: 200, fire: 200, mag: 7,  gap: 14, reload: 20, speed: 4.5, spread: 0.015 },   // (v6.7: 7 rounds at the old pace: ~15 ticks a shot, in a burst and overall)
   sniper:  { bullet: "ww:nrifle_projectile",   sight: 250, fire: 250, mag: 1,  gap: 0, reload: 45,  speed: 6.0, spread: 0.0025 },
 };
 const gunState = new Map(); // soldier id -> { target, ammo, next, seen, check, step }
@@ -3143,7 +3161,7 @@ function gunTick(e, now) {
   else {
     st.ammo = spec.mag; st.next = now + spec.reload + Math.floor(Math.random() * 8);
     try { e.dimension.playSound("random.click", e.location, { volume: 0.35, pitch: 0.7 }); } catch {}   // a quiet reload
-    callout(e, "Reloading!");
+    if (Math.random() < 0.35 && perc.get(e.id)?.threat) callout(e, "Reloading!");   // (v6.7: not every reload, and only in a fight)
   }
 }
 system.runInterval(() => {
@@ -5559,10 +5577,12 @@ function voiceOf(f) { const v = getJSON(world, "war:vlang", {})[f]; return VOICE
 const CALL_KEY = { "Enemy spotted!": "spotted", "Contact!": "contact", "Flanking!": "flanking", "Charge!": "charge", "Go, go, go!": "gogogo",
   "Moving up!": "moving_up", "Suppressing!": "suppressing", "I'm hit!": "hit", "Man down!": "man_down", "You're okay!": "okay", "Fall back!": "fall_back",
   "Cover me!": "cover_me", "Target down!": "target_down", "Clear!": "clear", "Hold position!": "hold", "Follow me!": "follow",
-  "Medic!": "medic", "Thanks!": "thanks", "Reloading!": "reloading", "Grenade!": "grenade", "Don't shoot!": "surrender" };
+  "Medic!": "medic", "Thanks!": "thanks", "Reloading!": "reloading", "Grenade!": "grenade", "Don't shoot!": "surrender", "Taking fire!": "under_fire" };
 // lines each language has recordings for (the rest stay silent until recorded and added here)
 const BASE_LINES = ["spotted", "contact", "flanking", "charge", "gogogo", "moving_up", "suppressing", "hit", "man_down", "okay", "fall_back", "cover_me", "target_down", "clear", "hold", "follow"];
-const VOICE_HAS = {};
+const MORE_LINES = ["under_fire", "idle_quiet", "idle_sharp", "idle_smoke", "idle_done", "idle_legs", "medic", "thanks", "surrender", "reloading", "grenade"];
+const VOICE_HAS = Object.fromEntries(["en_us", "greek", "korean", "mongolian", "hebrew"].map((l) => [l, [...BASE_LINES, ...MORE_LINES]]));   // (v6.7: recorded so far)
+const IDLE_LINES = ["idle_quiet", "idle_sharp", "idle_smoke", "idle_done", "idle_legs"];
 const voiceHas = (lang, key) => (VOICE_HAS[lang] ?? BASE_LINES).includes(key);
 const CALL_ALL = BASE_LINES;
 const lastCall = new Map(); // soldier id / squad line -> tick
@@ -5571,10 +5591,11 @@ function callout(e, text) {
   try {
     if (!e?.isValid || held.has(e.id) || (downed.has(e.id) && text !== "I'm hit!" && text !== "Medic!")) return;
     const test = text === "Testing!";
-    const key = test ? CALL_ALL[Math.floor(Math.random() * CALL_ALL.length)] : CALL_KEY[text];
-    if (!key) return;
     const f = Number(P(e, "war:faction") ?? 0), lang = voiceOf(f);
-    if (!lang || lang === "none" || !voiceHas(lang, key)) return;
+    if (!lang || lang === "none") return;
+    const has = VOICE_HAS[lang] ?? BASE_LINES;
+    const key = test ? has[Math.floor(Math.random() * has.length)] : text === "IDLE" ? IDLE_LINES[Math.floor(Math.random() * IDLE_LINES.length)] : CALL_KEY[text];
+    if (!key || !voiceHas(lang, key)) return;
     const now = tick();
     if (!test) {
       if (now - (lastCall.get(e.id) ?? -9999) < 160) return;                    // one shout per man every ~8 s
@@ -5653,6 +5674,39 @@ const downed = new Map(); // id -> until tick
 const isDowned = (e) => downed.has(e.id);
 const downPos = new Map(); // id -> where he fell
 const medicCall = new Map(); // id -> last "Medic!" (v6.6)
+// v6.7: "Taking heavy fire!": hit by an enemy's shot now and then (the per-man / per-squad limits keep it rare)
+world.afterEvents.entityHurt.subscribe((ev) => {
+  try {
+    const v = ev.hurtEntity, src = ev.damageSource?.damagingEntity;
+    if (v?.typeId !== SOLDIER || downed.has(v.id) || ev.damageSource?.cause !== "projectile" || !src?.isValid) return;
+    if (Math.random() < 0.3 && isHostile(Number(P(v, "war:faction") ?? 0), factionOf(src))) callout(v, "Taking fire!");
+  } catch {}
+});
+// v6.7: idle talk. A squad near a player that's had nothing to do for a minute (no enemy seen, not marching, nobody
+// fighting): now and then one of them says something. At most one line per squad every ~1.5-2.5 min, one every 30 s
+// anywhere; the first sign of a fight and it stops.
+const squadBusyT = new Map(), squadIdleT = new Map();
+let idleAnyT = -9999;
+system.runInterval(() => {
+  const now = tick();
+  const groups = new Map();
+  for (const p of world.getAllPlayers()) {
+    for (const c of nearSnap(p.dimension.id, p.location, 24)) {
+      if (c.type !== SOLDIER || c.down || held.has(c.id) || !c.e.isValid) continue;
+      const d = sd(c.e), k = `${d.faction}:${d.squad}`;
+      if (perc.get(c.id)?.threat || combatLock.has(c.id) || (perc.get(c.id)?.alert ?? "calm") !== "calm" || (marchOfE(c.e) && !marchOfE(c.e).final)) squadBusyT.set(k, now);
+      if (!groups.has(k)) groups.set(k, []); groups.get(k).push(c.e);
+    }
+  }
+  if (now - idleAnyT < 600) return;
+  for (const [k, list] of groups) {
+    if (now - (squadBusyT.get(k) ?? -9999) < 1200 || now - (squadIdleT.get(k) ?? -9999) < 1800 + ((k.length * 97) % 1200)) continue;
+    if (Math.random() > 0.35) continue;
+    squadIdleT.set(k, now); idleAnyT = now;
+    callout(list[Math.floor(Math.random() * list.length)], "IDLE");
+    break;
+  }
+}, 100);
 function goDown(e, killer) {
   const now = tick();
   try {                                                          // (v6.5) the man who dropped him calls it

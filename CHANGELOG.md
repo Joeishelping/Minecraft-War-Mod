@@ -1,5 +1,29 @@
 # War Engine changelog
 
+## v6.7 (Demolition unit, real grenades, more callouts, idle talk)
+
+- **The snowball grenadier is now the Demolition unit** (Demolition Egg). It's the only unit with these weapons.
+  Pick one of three kits:
+  - **Grenades (+ pistol).** Real grenades, no more snowballs. Lobbed at a group of enemies 8-22 blocks away. 3
+    carried, 12 s between throws, one back every 90 s, and one per squad every 4 s. Never thrown where a friend
+    stands within 5 of the target. It lands, fizzes ~1.5 s (soldiers nearby scramble away from it), then explodes:
+    it hurts and throws people about, but it **never breaks blocks**.
+  - **Molotovs (+ pistol).** As in v6.6.
+  - **Bazooka.** The gun pack's anti-tank weapon (taken off every other unit's weapon list).
+  - Old snowball grenadiers in a world are re-kitted to grenades automatically.
+- **New callout lines** for US English, Greek, Korean, Mongolian and Hebrew:
+  - "Taking heavy fire!": now and then when shot at.
+  - "Medic!": only if no medic is on his way, and only about half the wounded.
+  - "Thanks!": after a revive.
+  - "Don't shoot!": on surrender.
+  - "Dry, cover me!": about 1 reload in 3, and only in a fight.
+  - "Frag out!": on throwing a grenade or molotov.
+- **Idle talk** for the same 5 languages. After a minute with nothing happening (no enemy seen, not marching,
+  nobody fighting), one soldier of a squad near you says one of 5 calm or tired lines now and then. At most one
+  line per squad every 1.5-2.5 minutes, and one every 30 s anywhere. Any sign of a fight stops it.
+- **Gun pace.** The 8-round semi-auto and 7-round pistol from v6.6 now fire at exactly the old pace, both in a
+  burst and overall.
+
 ## v6.6 (neutral by default, one-page diplomacy, 40 factions, 64 skins, coalition spawns, spear & molotov)
 
 - **Everyone starts neutral.** A new world starts with every faction neutral to every other (it used to be all

@@ -3208,6 +3208,611 @@
           "volume": 1.0
         }
       ]
+    },
+    "war.voice.en_us.under_fire": {
+      "category": "hostile",
+      "min_distance": 6.0,
+      "max_distance": 32.0,
+      "sounds": [
+        {
+          "name": "sounds/war_voice/en_us/under_fire",
+          "volume": 1.0
+        }
+      ]
+    },
+    "war.voice.en_us.idle_quiet": {
+      "category": "hostile",
+      "min_distance": 6.0,
+      "max_distance": 32.0,
+      "sounds": [
+        {
+          "name": "sounds/war_voice/en_us/idle_quiet",
+          "volume": 1.0
+        }
+      ]
+    },
+    "war.voice.en_us.idle_sharp": {
+      "category": "hostile",
+      "min_distance": 6.0,
+      "max_distance": 32.0,
+      "sounds": [
+        {
+          "name": "sounds/war_voice/en_us/idle_sharp",
+          "volume": 1.0
+        }
+      ]
+    },
+    "war.voice.en_us.idle_smoke": {
+      "category": "hostile",
+      "min_distance": 6.0,
+      "max_distance": 32.0,
+      "sounds": [
+        {
+          "name": "sounds/war_voice/en_us/idle_smoke",
+          "volume": 1.0
+        }
+      ]
+    },
+    "war.voice.en_us.idle_done": {
+      "category": "hostile",
+      "min_distance": 6.0,
+      "max_distance": 32.0,
+      "sounds": [
+        {
+          "name": "sounds/war_voice/en_us/idle_done",
+          "volume": 1.0
+        }
+      ]
+    },
+    "war.voice.en_us.idle_legs": {
+      "category": "hostile",
+      "min_distance": 6.0,
+      "max_distance": 32.0,
+      "sounds": [
+        {
+          "name": "sounds/war_voice/en_us/idle_legs",
+          "volume": 1.0
+        }
+      ]
+    },
+    "war.voice.en_us.medic": {
+      "category": "hostile",
+      "min_distance": 6.0,
+      "max_distance": 32.0,
+      "sounds": [
+        {
+          "name": "sounds/war_voice/en_us/medic",
+          "volume": 1.0
+        }
+      ]
+    },
+    "war.voice.en_us.thanks": {
+      "category": "hostile",
+      "min_distance": 6.0,
+      "max_distance": 32.0,
+      "sounds": [
+        {
+          "name": "sounds/war_voice/en_us/thanks",
+          "volume": 1.0
+        }
+      ]
+    },
+    "war.voice.en_us.surrender": {
+      "category": "hostile",
+      "min_distance": 6.0,
+      "max_distance": 32.0,
+      "sounds": [
+        {
+          "name": "sounds/war_voice/en_us/surrender",
+          "volume": 1.0
+        }
+      ]
+    },
+    "war.voice.en_us.reloading": {
+      "category": "hostile",
+      "min_distance": 6.0,
+      "max_distance": 32.0,
+      "sounds": [
+        {
+          "name": "sounds/war_voice/en_us/reloading",
+          "volume": 1.0
+        }
+      ]
+    },
+    "war.voice.en_us.grenade": {
+      "category": "hostile",
+      "min_distance": 6.0,
+      "max_distance": 32.0,
+      "sounds": [
+        {
+          "name": "sounds/war_voice/en_us/grenade",
+          "volume": 1.0
+        }
+      ]
+    },
+    "war.voice.greek.under_fire": {
+      "category": "hostile",
+      "min_distance": 6.0,
+      "max_distance": 32.0,
+      "sounds": [
+        {
+          "name": "sounds/war_voice/greek/under_fire",
+          "volume": 1.0
+        }
+      ]
+    },
+    "war.voice.greek.idle_quiet": {
+      "category": "hostile",
+      "min_distance": 6.0,
+      "max_distance": 32.0,
+      "sounds": [
+        {
+          "name": "sounds/war_voice/greek/idle_quiet",
+          "volume": 1.0
+        }
+      ]
+    },
+    "war.voice.greek.idle_sharp": {
+      "category": "hostile",
+      "min_distance": 6.0,
+      "max_distance": 32.0,
+      "sounds": [
+        {
+          "name": "sounds/war_voice/greek/idle_sharp",
+          "volume": 1.0
+        }
+      ]
+    },
+    "war.voice.greek.idle_smoke": {
+      "category": "hostile",
+      "min_distance": 6.0,
+      "max_distance": 32.0,
+      "sounds": [
+        {
+          "name": "sounds/war_voice/greek/idle_smoke",
+          "volume": 1.0
+        }
+      ]
+    },
+    "war.voice.greek.idle_done": {
+      "category": "hostile",
+      "min_distance": 6.0,
+      "max_distance": 32.0,
+      "sounds": [
+        {
+          "name": "sounds/war_voice/greek/idle_done",
+          "volume": 1.0
+        }
+      ]
+    },
+    "war.voice.greek.idle_legs": {
+      "category": "hostile",
+      "min_distance": 6.0,
+      "max_distance": 32.0,
+      "sounds": [
+        {
+          "name": "sounds/war_voice/greek/idle_legs",
+          "volume": 1.0
+        }
+      ]
+    },
+    "war.voice.greek.medic": {
+      "category": "hostile",
+      "min_distance": 6.0,
+      "max_distance": 32.0,
+      "sounds": [
+        {
+          "name": "sounds/war_voice/greek/medic",
+          "volume": 1.0
+        }
+      ]
+    },
+    "war.voice.greek.thanks": {
+      "category": "hostile",
+      "min_distance": 6.0,
+      "max_distance": 32.0,
+      "sounds": [
+        {
+          "name": "sounds/war_voice/greek/thanks",
+          "volume": 1.0
+        }
+      ]
+    },
+    "war.voice.greek.surrender": {
+      "category": "hostile",
+      "min_distance": 6.0,
+      "max_distance": 32.0,
+      "sounds": [
+        {
+          "name": "sounds/war_voice/greek/surrender",
+          "volume": 1.0
+        }
+      ]
+    },
+    "war.voice.greek.reloading": {
+      "category": "hostile",
+      "min_distance": 6.0,
+      "max_distance": 32.0,
+      "sounds": [
+        {
+          "name": "sounds/war_voice/greek/reloading",
+          "volume": 1.0
+        }
+      ]
+    },
+    "war.voice.greek.grenade": {
+      "category": "hostile",
+      "min_distance": 6.0,
+      "max_distance": 32.0,
+      "sounds": [
+        {
+          "name": "sounds/war_voice/greek/grenade",
+          "volume": 1.0
+        }
+      ]
+    },
+    "war.voice.korean.under_fire": {
+      "category": "hostile",
+      "min_distance": 6.0,
+      "max_distance": 32.0,
+      "sounds": [
+        {
+          "name": "sounds/war_voice/korean/under_fire",
+          "volume": 1.0
+        }
+      ]
+    },
+    "war.voice.korean.idle_quiet": {
+      "category": "hostile",
+      "min_distance": 6.0,
+      "max_distance": 32.0,
+      "sounds": [
+        {
+          "name": "sounds/war_voice/korean/idle_quiet",
+          "volume": 1.0
+        }
+      ]
+    },
+    "war.voice.korean.idle_sharp": {
+      "category": "hostile",
+      "min_distance": 6.0,
+      "max_distance": 32.0,
+      "sounds": [
+        {
+          "name": "sounds/war_voice/korean/idle_sharp",
+          "volume": 1.0
+        }
+      ]
+    },
+    "war.voice.korean.idle_smoke": {
+      "category": "hostile",
+      "min_distance": 6.0,
+      "max_distance": 32.0,
+      "sounds": [
+        {
+          "name": "sounds/war_voice/korean/idle_smoke",
+          "volume": 1.0
+        }
+      ]
+    },
+    "war.voice.korean.idle_done": {
+      "category": "hostile",
+      "min_distance": 6.0,
+      "max_distance": 32.0,
+      "sounds": [
+        {
+          "name": "sounds/war_voice/korean/idle_done",
+          "volume": 1.0
+        }
+      ]
+    },
+    "war.voice.korean.idle_legs": {
+      "category": "hostile",
+      "min_distance": 6.0,
+      "max_distance": 32.0,
+      "sounds": [
+        {
+          "name": "sounds/war_voice/korean/idle_legs",
+          "volume": 1.0
+        }
+      ]
+    },
+    "war.voice.korean.medic": {
+      "category": "hostile",
+      "min_distance": 6.0,
+      "max_distance": 32.0,
+      "sounds": [
+        {
+          "name": "sounds/war_voice/korean/medic",
+          "volume": 1.0
+        }
+      ]
+    },
+    "war.voice.korean.thanks": {
+      "category": "hostile",
+      "min_distance": 6.0,
+      "max_distance": 32.0,
+      "sounds": [
+        {
+          "name": "sounds/war_voice/korean/thanks",
+          "volume": 1.0
+        }
+      ]
+    },
+    "war.voice.korean.surrender": {
+      "category": "hostile",
+      "min_distance": 6.0,
+      "max_distance": 32.0,
+      "sounds": [
+        {
+          "name": "sounds/war_voice/korean/surrender",
+          "volume": 1.0
+        }
+      ]
+    },
+    "war.voice.korean.reloading": {
+      "category": "hostile",
+      "min_distance": 6.0,
+      "max_distance": 32.0,
+      "sounds": [
+        {
+          "name": "sounds/war_voice/korean/reloading",
+          "volume": 1.0
+        }
+      ]
+    },
+    "war.voice.korean.grenade": {
+      "category": "hostile",
+      "min_distance": 6.0,
+      "max_distance": 32.0,
+      "sounds": [
+        {
+          "name": "sounds/war_voice/korean/grenade",
+          "volume": 1.0
+        }
+      ]
+    },
+    "war.voice.mongolian.under_fire": {
+      "category": "hostile",
+      "min_distance": 6.0,
+      "max_distance": 32.0,
+      "sounds": [
+        {
+          "name": "sounds/war_voice/mongolian/under_fire",
+          "volume": 1.0
+        }
+      ]
+    },
+    "war.voice.mongolian.idle_quiet": {
+      "category": "hostile",
+      "min_distance": 6.0,
+      "max_distance": 32.0,
+      "sounds": [
+        {
+          "name": "sounds/war_voice/mongolian/idle_quiet",
+          "volume": 1.0
+        }
+      ]
+    },
+    "war.voice.mongolian.idle_sharp": {
+      "category": "hostile",
+      "min_distance": 6.0,
+      "max_distance": 32.0,
+      "sounds": [
+        {
+          "name": "sounds/war_voice/mongolian/idle_sharp",
+          "volume": 1.0
+        }
+      ]
+    },
+    "war.voice.mongolian.idle_smoke": {
+      "category": "hostile",
+      "min_distance": 6.0,
+      "max_distance": 32.0,
+      "sounds": [
+        {
+          "name": "sounds/war_voice/mongolian/idle_smoke",
+          "volume": 1.0
+        }
+      ]
+    },
+    "war.voice.mongolian.idle_done": {
+      "category": "hostile",
+      "min_distance": 6.0,
+      "max_distance": 32.0,
+      "sounds": [
+        {
+          "name": "sounds/war_voice/mongolian/idle_done",
+          "volume": 1.0
+        }
+      ]
+    },
+    "war.voice.mongolian.idle_legs": {
+      "category": "hostile",
+      "min_distance": 6.0,
+      "max_distance": 32.0,
+      "sounds": [
+        {
+          "name": "sounds/war_voice/mongolian/idle_legs",
+          "volume": 1.0
+        }
+      ]
+    },
+    "war.voice.mongolian.medic": {
+      "category": "hostile",
+      "min_distance": 6.0,
+      "max_distance": 32.0,
+      "sounds": [
+        {
+          "name": "sounds/war_voice/mongolian/medic",
+          "volume": 1.0
+        }
+      ]
+    },
+    "war.voice.mongolian.thanks": {
+      "category": "hostile",
+      "min_distance": 6.0,
+      "max_distance": 32.0,
+      "sounds": [
+        {
+          "name": "sounds/war_voice/mongolian/thanks",
+          "volume": 1.0
+        }
+      ]
+    },
+    "war.voice.mongolian.surrender": {
+      "category": "hostile",
+      "min_distance": 6.0,
+      "max_distance": 32.0,
+      "sounds": [
+        {
+          "name": "sounds/war_voice/mongolian/surrender",
+          "volume": 1.0
+        }
+      ]
+    },
+    "war.voice.mongolian.reloading": {
+      "category": "hostile",
+      "min_distance": 6.0,
+      "max_distance": 32.0,
+      "sounds": [
+        {
+          "name": "sounds/war_voice/mongolian/reloading",
+          "volume": 1.0
+        }
+      ]
+    },
+    "war.voice.mongolian.grenade": {
+      "category": "hostile",
+      "min_distance": 6.0,
+      "max_distance": 32.0,
+      "sounds": [
+        {
+          "name": "sounds/war_voice/mongolian/grenade",
+          "volume": 1.0
+        }
+      ]
+    },
+    "war.voice.hebrew.under_fire": {
+      "category": "hostile",
+      "min_distance": 6.0,
+      "max_distance": 32.0,
+      "sounds": [
+        {
+          "name": "sounds/war_voice/hebrew/under_fire",
+          "volume": 1.0
+        }
+      ]
+    },
+    "war.voice.hebrew.idle_quiet": {
+      "category": "hostile",
+      "min_distance": 6.0,
+      "max_distance": 32.0,
+      "sounds": [
+        {
+          "name": "sounds/war_voice/hebrew/idle_quiet",
+          "volume": 1.0
+        }
+      ]
+    },
+    "war.voice.hebrew.idle_sharp": {
+      "category": "hostile",
+      "min_distance": 6.0,
+      "max_distance": 32.0,
+      "sounds": [
+        {
+          "name": "sounds/war_voice/hebrew/idle_sharp",
+          "volume": 1.0
+        }
+      ]
+    },
+    "war.voice.hebrew.idle_smoke": {
+      "category": "hostile",
+      "min_distance": 6.0,
+      "max_distance": 32.0,
+      "sounds": [
+        {
+          "name": "sounds/war_voice/hebrew/idle_smoke",
+          "volume": 1.0
+        }
+      ]
+    },
+    "war.voice.hebrew.idle_done": {
+      "category": "hostile",
+      "min_distance": 6.0,
+      "max_distance": 32.0,
+      "sounds": [
+        {
+          "name": "sounds/war_voice/hebrew/idle_done",
+          "volume": 1.0
+        }
+      ]
+    },
+    "war.voice.hebrew.idle_legs": {
+      "category": "hostile",
+      "min_distance": 6.0,
+      "max_distance": 32.0,
+      "sounds": [
+        {
+          "name": "sounds/war_voice/hebrew/idle_legs",
+          "volume": 1.0
+        }
+      ]
+    },
+    "war.voice.hebrew.medic": {
+      "category": "hostile",
+      "min_distance": 6.0,
+      "max_distance": 32.0,
+      "sounds": [
+        {
+          "name": "sounds/war_voice/hebrew/medic",
+          "volume": 1.0
+        }
+      ]
+    },
+    "war.voice.hebrew.thanks": {
+      "category": "hostile",
+      "min_distance": 6.0,
+      "max_distance": 32.0,
+      "sounds": [
+        {
+          "name": "sounds/war_voice/hebrew/thanks",
+          "volume": 1.0
+        }
+      ]
+    },
+    "war.voice.hebrew.surrender": {
+      "category": "hostile",
+      "min_distance": 6.0,
+      "max_distance": 32.0,
+      "sounds": [
+        {
+          "name": "sounds/war_voice/hebrew/surrender",
+          "volume": 1.0
+        }
+      ]
+    },
+    "war.voice.hebrew.reloading": {
+      "category": "hostile",
+      "min_distance": 6.0,
+      "max_distance": 32.0,
+      "sounds": [
+        {
+          "name": "sounds/war_voice/hebrew/reloading",
+          "volume": 1.0
+        }
+      ]
+    },
+    "war.voice.hebrew.grenade": {
+      "category": "hostile",
+      "min_distance": 6.0,
+      "max_distance": 32.0,
+      "sounds": [
+        {
+          "name": "sounds/war_voice/hebrew/grenade",
+          "volume": 1.0
+        }
+      ]
     }
   }
 }
