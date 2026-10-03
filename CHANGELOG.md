@@ -13,6 +13,11 @@
     for the next bit of their route that's on land. While the glider is carrying them, there's no extra push.
   - **Getting out.** The "get out of the water" spot is only ever a bank you can climb out onto, never the top of a
     wall. A crossing that gets nowhere for 10 s is given up for the nearest real bank.
+  - **Streams with a bank.** The route planner wouldn't plan the step out of the water onto a bank one block above
+    its surface, so the route ended in the middle of the stream and the squad waited there, swimming. The glider also
+    dragged swimmers along the bottom and then refused to "lift" them onto the bank. Now routes climb out like a
+    player does, and swimmers are carried at the surface. Test, a stream across the whole field with a 1-high bank:
+    before, 70 s in the water and they never got across. Now, across in ~330 ticks, ~1.5 s wet each.
 - **Wall-top defenders.**
   - **Firing slots.** A gap in a battlement (between two merlons) or a window in a wall-walk now counts as a firing
     slot. v6.2's ledge safety had banned every cell next to the drop, so defenders stood back from the merlons,

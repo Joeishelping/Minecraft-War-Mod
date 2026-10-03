@@ -637,9 +637,10 @@ const S = {
   async pondWall() {
     SIM.bounds = { x0: -50, x1: 50, z0: -20, z1: 70, y0: -8, y1: 30 };
     fill(-50, -5, -20, 50, -1, 70, "grass_block");
-    fill(-8, -3, 8, 8, -1, 16, "water");                                  // the pond, 3 deep, right up to the wall
+    if (opt.stream) { fill(-50, -3, 8, 50, -1, 12, "water"); fill(-50, 0, 13, 50, 0, 13, "grass_block"); }   // a stream across the whole field, a 1-high bank beyond
+    else fill(-8, -3, 8, 8, -1, 16, "water");                             // the pond, 3 deep, right up to the wall
     fill(-30, 0, 17, 30, 3, 18, "stone_bricks");                        // a 4-high wall
-    if (opt.gap !== "0") fill(24, 0, 17, 26, 3, 18, "air"); else for (let k = 0; k < 4; k++) fill(-20 + k, 0, 16, -20 + k, k, 16, "stone_bricks");   // a gap far right, or steps up along the wall
+    if (opt.stream) fill(-30, 0, 17, 30, 3, 18, "air"); else if (opt.gap !== "0") fill(24, 0, 17, 26, 3, 18, "air"); else for (let k = 0; k < 4; k++) fill(-20 + k, 0, 16, -20 + k, k, 16, "stone_bricks");   // a gap far right, or steps up along the wall
     spawnPlayer({ x: 0, y: 0, z: -15 });
     for (let i = 0; i < 8; i++) soldier(1, { x: -3 + (i % 4) * 2 + 0.5, y: 0, z: Math.floor(i / 4) * 2 + 0.5 }, "rifle", 1, "hold");
     step(40);
@@ -651,6 +652,7 @@ const S = {
       const wet = alive(1).filter((e) => e.isInWater).length; wetMax = Math.max(wetMax, wet); wetSum += wet;
       if (alive(1).filter((e) => Math.hypot(e._loc.x - dest.x, e._loc.z - dest.z) < 10 && (opt.inpond ? !e.isInWater : Math.abs(e._loc.y - dest.y) < 2)).length >= 7 && (!opt.inpond || SIM.tick - t0 > 600)) arrived = SIM.tick - t0;
       if (opt.trace && SIM.tick % 100 === 0) console.error("T", SIM.tick, alive(1).map((e) => `${e._loc.x.toFixed(0)},${e._loc.y.toFixed(0)},${e._loc.z.toFixed(0)}${e.isInWater ? "w" : ""}:${(W.notes.get(e.id)?.text ?? "").slice(0, 12)}`).join(" "));
+      if (opt.w1 !== undefined && SIM.tick >= Number(opt.from ?? 0) && SIM.tick <= Number(opt.to ?? 1e9)) { const e = alive(1)[Number(opt.w1)]; const g = W.gliders.get(e.id); const r = W.routeOf(e); console.error("W1", SIM.tick, e._loc.x.toFixed(2), e._loc.y.toFixed(2), e._loc.z.toFixed(2), e.isInWater ? "wet" : "dry", (W.notes.get(e.id)?.text ?? "").slice(0, 18), g ? `G k${g.k} p${g.paused ? 1 : 0} b${g.blocked ?? 0} tgt ${JSON.stringify(g.pts[g.k])}` : "-", "r", r ? `${r.idx}/${r.pts.length} ${JSON.stringify(r.pts.slice(r.idx, r.idx + 3).map((q) => [q.x, q.y, q.z, q.w ? "w" : ""]))}` : "-", "pers", W.personal.has(e.id), "vel", e.vel.y.toFixed(2), [...e.groups].filter((q) => /g_/.test(q)).join(",")); }
     }
     report({ arrivedTicks: arrived, wetMax, wetSec: +(wetSum / 2 / 8).toFixed(1), final: alive(1).map((e) => `${e._loc.x.toFixed(0)},${e._loc.y.toFixed(0)},${e._loc.z.toFixed(0)}${e.isInWater ? "w" : ""}`), notes: Object.fromEntries(Object.entries(M.notes).sort((a, b) => b[1] - a[1]).slice(0, 8)) });
   },

@@ -4487,8 +4487,9 @@ function stepCost(a, b, diag, job) {
     else if (-dy > 10 && !b.w) return Infinity;
     else if (-dy > 5 && !b.w) base += (-dy) * 0.3;
   } else {
-    if (dy > 1) return Infinity;                                // only steps a soldier can always take
-    if (dy === 1) base += 0.4;
+    if (dy > 1 && !(a.w && !b.w && dy === 2)) return Infinity;    // only steps a soldier can always take (v6.4: and out of
+    if (dy === 2) base += 1.5;                                  // the water onto a bank a block above its surface: from the
+    if (dy === 1) base += 0.4;                                  // top water block that's 2 up; a route used to end in the stream)
     else if (dy < 0) {
       const h = -dy;
       if (!b.w) {
@@ -6290,7 +6291,7 @@ system.runInterval(() => {
         if (pz.n >= 2 && POST_FUNCS.includes(sd(e).func)) { personal.delete(e.id); travelTo.delete(e.id); setGroups(e, { g: "g_none" }); note(e, "holding here"); continue; }
         if (pz.n === 1) {
           // v6.4: shake loose, the way a hit does it: a hop and a step back / aside (never toward a drop or lava)
-          if (mk && !dangerNear(e.dimension, l) && !inWater(e)) {
+          if (mk && !busy && !dangerNear(e.dimension, l) && !inWater(e)) {   // (not in a fight: there standing still is often the point)
             const dx = l.x - mk.location.x, dz = l.z - mk.location.z, L0 = Math.hypot(dx, dz) || 1, side = (e.id.charCodeAt(e.id.length - 1) & 1) ? 1 : -1;
             const vx = (dx / L0) * 0.22 + (-dz / L0) * side * 0.18, vz = (dz / L0) * 0.22 + (dx / L0) * side * 0.18;
             if (safeAhead(e, vx, vz)) push(e, { x: vx, y: 0.36, z: vz }, 3);
@@ -7333,7 +7334,14 @@ system.runInterval(() => {
       const seg = Math.hypot(b.x - a.x, b.z - a.z) || 1;
       const f = 1 - Math.hypot(b.x - nx, b.z - nz) / seg;
       let y = b.climb ? p.y : b.y > a.y ? (f >= 0.3 ? b.y : a.y) : b.y < a.y ? (f >= 0.6 ? b.y : a.y) : b.y;   // (to a ladder: on his own level)
-      if (y > p.y + 1.1) {                                         // v6.0: he's below his route (fell off it): never lifted up to it
+      // v6.4: swimming: carried at the surface (in the top water block), not along the bottom; and out onto a bank up to
+      // a block above the water (from the bottom, the bank looked like a wall: "below his route", stuck in the stream)
+      let surf;
+      if (b.w || a.w || inWater(e)) {
+        surf = waterSurface(e.dimension, b.w ? b : p);
+        if (b.w) y = Math.max(y, surf - 1);
+      }
+      if (y > p.y + 1.1 && !(surf !== undefined && inWater(e) && y <= surf + 1.2)) {   // v6.0: he's below his route (fell off it): never lifted up to it
         g.blocked = (g.blocked ?? 0) + 1;
         if (g.blocked > 10) {                                      // v6.2: a short route of his own back up onto it (out of a trench, off a ledge below)
           gliders.delete(id); personal.delete(id); travelTo.delete(id);

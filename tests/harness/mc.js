@@ -391,6 +391,7 @@ function physTick(e) {
   // horizontal: walking intent plus whatever impulse momentum is left
   const w = e.walk ?? { x: 0, z: 0 };
   let vx = e.vel.x + w.x, vz = e.vel.z + w.z;
+  if (inW && SIM.harsh) { vx *= 0.55; vz *= 0.55; }                 // v6.4: swimming is slow (harsh mode)
   const tryMove = (nx, nz) => {
     const fy = Math.floor(l.y + 0.01);
     if (passCell(nx, fy, nz) && passCell(nx, fy + 1, nz)) return true;
