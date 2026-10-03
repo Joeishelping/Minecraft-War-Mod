@@ -23,8 +23,8 @@
     slot. v6.2's ledge safety had banned every cell next to the drop, so defenders stood back from the merlons,
     saw nothing and "took a firing position" forever. A man on a post with no shot from where he stands takes the
     slot within his post's reach that sees the enemy. A bare wall-top edge is still treated as a ledge.
-  - Test, 6 defenders on a battlement against 6 attackers across a moat: before, defenders lost (0 standing, 5
-    attackers left). Now they hold the wall in most runs.
+  - Test, 6 defenders on a battlement against 6 attackers across a moat, 4 runs: v6.3.1 held the wall in 2. v6.4
+    holds it in 4 of 4.
   - **Never teleported off a post.** A man on a post (hold, post, sentry, stand) is never stuck-rescue teleported to
     his squad any more. That's how wall-top men ended up on the far side of the wall. If he can't make a move, he
     gives it up and holds where he is.
