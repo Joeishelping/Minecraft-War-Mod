@@ -1,0 +1,20 @@
+{
+  "format_version": "1.10.0",
+  "minecraft:client_entity": {
+    "description": {
+      "identifier": "war:tank",
+      "materials": {
+        "default": "entity_alphatest"
+      },
+      "textures": {
+        "default": "textures/entity/war_vehicle/palette"
+      },
+      "geometry": {
+        "default": "geometry.war_tank"
+      },
+      "render_controllers": [
+        "controller.render.war_simple"
+      ]
+    }
+  }
+}

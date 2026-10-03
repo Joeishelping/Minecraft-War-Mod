@@ -1,0 +1,72 @@
+{
+  "format_version": "1.21.50",
+  "minecraft:entity": {
+    "description": {
+      "identifier": "war:mg_nest",
+      "is_spawnable": false,
+      "is_summonable": true
+    },
+    "components": {
+      "minecraft:type_family": {
+        "family": [
+          "war_nest",
+          "inanimate"
+        ]
+      },
+      "minecraft:collision_box": {
+        "width": 1.6,
+        "height": 1.0
+      },
+      "minecraft:health": {
+        "value": 60,
+        "max": 60
+      },
+      "minecraft:physics": {
+        "has_gravity": true,
+        "has_collision": true
+      },
+      "minecraft:pushable": {
+        "is_pushable": false,
+        "is_pushable_by_piston": false
+      },
+      "minecraft:knockback_resistance": {
+        "value": 1.0
+      },
+      "minecraft:persistent": {},
+      "minecraft:damage_sensor": {
+        "triggers": [
+          {
+            "cause": "fall",
+            "deals_damage": "no"
+          },
+          {
+            "cause": "drowning",
+            "deals_damage": "no"
+          }
+        ]
+      },
+      "minecraft:rideable": {
+        "seat_count": 1,
+        "family_types": [
+          "player",
+          "war_soldier"
+        ],
+        "interact_text": "Man the gun",
+        "pull_in_entities": false,
+        "crouching_skip_interact": true,
+        "seats": [
+          {
+            "position": [
+              0,
+              0.0,
+              -0.8
+            ]
+          }
+        ]
+      },
+      "minecraft:nameable": {
+        "always_show": false
+      }
+    }
+  }
+}

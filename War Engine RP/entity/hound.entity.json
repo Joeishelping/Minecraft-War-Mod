@@ -1,0 +1,49 @@
+{
+  "format_version": "1.10.0",
+  "minecraft:client_entity": {
+    "description": {
+      "identifier": "war:hound",
+      "materials": {
+        "default": "entity_alphatest"
+      },
+      "textures": {
+        "h1": "textures/entity/war_hound/hound_01",
+        "h2": "textures/entity/war_hound/hound_02",
+        "h3": "textures/entity/war_hound/hound_03",
+        "h4": "textures/entity/war_hound/hound_04",
+        "h5": "textures/entity/war_hound/hound_05",
+        "h6": "textures/entity/war_hound/hound_06",
+        "h7": "textures/entity/war_hound/hound_07",
+        "h8": "textures/entity/war_hound/hound_08",
+        "h9": "textures/entity/war_hound/hound_09",
+        "h10": "textures/entity/war_hound/hound_10",
+        "h11": "textures/entity/war_hound/hound_11",
+        "h12": "textures/entity/war_hound/hound_12",
+        "h13": "textures/entity/war_hound/hound_13",
+        "h14": "textures/entity/war_hound/hound_14",
+        "h15": "textures/entity/war_hound/hound_15",
+        "h16": "textures/entity/war_hound/hound_16",
+        "h17": "textures/entity/war_hound/hound_17",
+        "h18": "textures/entity/war_hound/hound_18",
+        "h19": "textures/entity/war_hound/hound_19",
+        "h20": "textures/entity/war_hound/hound_20"
+      },
+      "geometry": {
+        "default": "geometry.war_hound"
+      },
+      "render_controllers": [
+        "controller.render.war_hound"
+      ],
+      "scripts": {
+        "animate": [
+          "walk",
+          "look"
+        ]
+      },
+      "animations": {
+        "walk": "animation.war.hound_walk",
+        "look": "animation.war.hound_look"
+      }
+    }
+  }
+}

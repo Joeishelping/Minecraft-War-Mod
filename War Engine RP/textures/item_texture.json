@@ -1,0 +1,54 @@
+{
+  "resource_pack_name": "war_engine",
+  "texture_name": "atlas.items",
+  "texture_data": {
+    "war_egg_foot": {
+      "textures": "textures/items/war_egg_foot"
+    },
+    "war_egg_garrison": {
+      "textures": "textures/items/war_egg_garrison"
+    },
+    "war_egg_guard": {
+      "textures": "textures/items/war_egg_guard"
+    },
+    "war_egg_medic": {
+      "textures": "textures/items/war_egg_medic"
+    },
+    "war_egg_grenadier": {
+      "textures": "textures/items/war_egg_grenadier"
+    },
+    "war_egg_houndmaster": {
+      "textures": "textures/items/war_egg_houndmaster"
+    },
+    "war_egg_cavalier": {
+      "textures": "textures/items/war_egg_cavalier"
+    },
+    "war_command_baton": {
+      "textures": "textures/items/war_command_baton"
+    },
+    "war_unit_wand": {
+      "textures": "textures/items/war_unit_wand"
+    },
+    "war_flag": {
+      "textures": "textures/items/war_flag"
+    },
+    "war_boat_item": {
+      "textures": "textures/items/war_boat_item"
+    },
+    "war_plane_item": {
+      "textures": "textures/items/war_plane_item"
+    },
+    "war_tank_item": {
+      "textures": "textures/items/war_tank_item"
+    },
+    "war_chronicle": {
+      "textures": "textures/items/war_chronicle"
+    },
+    "war_war_horn": {
+      "textures": "textures/items/war_war_horn"
+    },
+    "war_mg_nest_item": {
+      "textures": "textures/items/war_mg_nest_item"
+    }
+  }
+}

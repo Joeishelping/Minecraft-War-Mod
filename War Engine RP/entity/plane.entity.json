@@ -1,0 +1,28 @@
+{
+  "format_version": "1.10.0",
+  "minecraft:client_entity": {
+    "description": {
+      "identifier": "war:plane",
+      "materials": {
+        "default": "entity_alphatest"
+      },
+      "textures": {
+        "default": "textures/entity/war_vehicle/palette"
+      },
+      "geometry": {
+        "default": "geometry.war_plane"
+      },
+      "render_controllers": [
+        "controller.render.war_simple"
+      ],
+      "scripts": {
+        "animate": [
+          "spin"
+        ]
+      },
+      "animations": {
+        "spin": "animation.war.prop_spin"
+      }
+    }
+  }
+}

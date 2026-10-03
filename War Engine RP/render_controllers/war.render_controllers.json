@@ -1,0 +1,803 @@
+{
+  "format_version": "1.8.0",
+  "render_controllers": {
+    "controller.render.war_soldier": {
+      "arrays": {
+        "textures": {
+          "Array.t": [
+            "Texture.f1",
+            "Texture.f2",
+            "Texture.f3",
+            "Texture.f4",
+            "Texture.f5",
+            "Texture.f6",
+            "Texture.f7",
+            "Texture.f8",
+            "Texture.f9",
+            "Texture.f10",
+            "Texture.f11",
+            "Texture.f12",
+            "Texture.f13",
+            "Texture.f14",
+            "Texture.f15",
+            "Texture.f16",
+            "Texture.f17",
+            "Texture.f18",
+            "Texture.f19",
+            "Texture.f20",
+            "Texture.s1",
+            "Texture.s2",
+            "Texture.s3",
+            "Texture.s4",
+            "Texture.s5",
+            "Texture.s6",
+            "Texture.s7",
+            "Texture.s8",
+            "Texture.s9",
+            "Texture.s10",
+            "Texture.s11",
+            "Texture.s12",
+            "Texture.s13",
+            "Texture.s14",
+            "Texture.s15",
+            "Texture.s16",
+            "Texture.s17",
+            "Texture.s18",
+            "Texture.s19",
+            "Texture.s20",
+            "Texture.s21",
+            "Texture.s22",
+            "Texture.s23",
+            "Texture.s24",
+            "Texture.s25",
+            "Texture.s26",
+            "Texture.s27",
+            "Texture.s28",
+            "Texture.s29",
+            "Texture.s30",
+            "Texture.s31",
+            "Texture.s32",
+            "Texture.m1",
+            "Texture.m2",
+            "Texture.m3",
+            "Texture.m4",
+            "Texture.m5",
+            "Texture.m6",
+            "Texture.m7",
+            "Texture.m8",
+            "Texture.m9",
+            "Texture.m10",
+            "Texture.m11",
+            "Texture.m12",
+            "Texture.m13",
+            "Texture.m14",
+            "Texture.m15",
+            "Texture.m16",
+            "Texture.m17",
+            "Texture.m18",
+            "Texture.m19",
+            "Texture.m20",
+            "Texture.c1",
+            "Texture.c2",
+            "Texture.c3",
+            "Texture.c4",
+            "Texture.c5",
+            "Texture.c6",
+            "Texture.c7",
+            "Texture.c8",
+            "Texture.c9",
+            "Texture.c10",
+            "Texture.c11",
+            "Texture.c12",
+            "Texture.c13",
+            "Texture.c14",
+            "Texture.c15",
+            "Texture.c16",
+            "Texture.c17",
+            "Texture.c18",
+            "Texture.c19",
+            "Texture.c20"
+          ]
+        }
+      },
+      "geometry": "q.property('war:cav') ? Geometry.cav : Geometry.default",
+      "materials": [
+        {
+          "*": "Material.default"
+        }
+      ],
+      "part_visibility": [
+        {
+          "spear": "!q.property('war:ranged')"
+        }
+      ],
+      "textures": [
+        "Array.t[q.property('war:cav') ? (72 + (math.max(q.property('war:faction'), 1) - 1)) : (q.property('war:skin') > 0 ? (19 + q.property('war:skin')) : (q.property('war:medic') ? (52 + (math.max(q.property('war:faction'), 1) - 1)) : (math.max(q.property('war:faction'), 1) - 1)))]"
+      ]
+    },
+    "controller.render.war_hound": {
+      "arrays": {
+        "textures": {
+          "Array.t": [
+            "Texture.h1",
+            "Texture.h2",
+            "Texture.h3",
+            "Texture.h4",
+            "Texture.h5",
+            "Texture.h6",
+            "Texture.h7",
+            "Texture.h8",
+            "Texture.h9",
+            "Texture.h10",
+            "Texture.h11",
+            "Texture.h12",
+            "Texture.h13",
+            "Texture.h14",
+            "Texture.h15",
+            "Texture.h16",
+            "Texture.h17",
+            "Texture.h18",
+            "Texture.h19",
+            "Texture.h20"
+          ]
+        }
+      },
+      "geometry": "Geometry.default",
+      "materials": [
+        {
+          "*": "Material.default"
+        }
+      ],
+      "textures": [
+        "Array.t[(math.max(q.property('war:faction'), 1) - 1)]"
+      ]
+    },
+    "controller.render.war_flag": {
+      "arrays": {
+        "textures": {
+          "Array.t": [
+            "Texture.o1",
+            "Texture.o2",
+            "Texture.o3",
+            "Texture.o4",
+            "Texture.o5",
+            "Texture.o6",
+            "Texture.o7",
+            "Texture.o8",
+            "Texture.o9",
+            "Texture.o10",
+            "Texture.o11",
+            "Texture.o12",
+            "Texture.o13",
+            "Texture.o14",
+            "Texture.o15",
+            "Texture.o16",
+            "Texture.o17",
+            "Texture.o18",
+            "Texture.o19",
+            "Texture.o20",
+            "Texture.r1",
+            "Texture.r2",
+            "Texture.r3",
+            "Texture.r4",
+            "Texture.r5",
+            "Texture.r6",
+            "Texture.r7",
+            "Texture.r8",
+            "Texture.r9",
+            "Texture.r10",
+            "Texture.r11",
+            "Texture.r12",
+            "Texture.r13",
+            "Texture.r14",
+            "Texture.r15",
+            "Texture.r16",
+            "Texture.r17",
+            "Texture.r18",
+            "Texture.r19",
+            "Texture.r20"
+          ]
+        }
+      },
+      "geometry": "Geometry.default",
+      "materials": [
+        {
+          "*": "Material.default"
+        }
+      ],
+      "textures": [
+        "Array.t[(q.property('war:rally') ? 20 : 0) + (math.max(q.property('war:faction'), 1) - 1)]"
+      ]
+    },
+    "controller.render.war_simple": {
+      "geometry": "Geometry.default",
+      "materials": [
+        {
+          "*": "Material.default"
+        }
+      ],
+      "textures": [
+        "Texture.default"
+      ]
+    },
+    "controller.render.war_gun_m1903": {
+      "geometry": "Geometry.g_m1903",
+      "materials": [
+        {
+          "*": "Material.default"
+        }
+      ],
+      "textures": [
+        "Texture.gt_m1903"
+      ],
+      "part_visibility": [
+        {
+          "*": true
+        },
+        {
+          "Bayonet": false
+        },
+        {
+          "Scope6x": false
+        },
+        {
+          "Scope6x2": false
+        },
+        {
+          "Scope6x3": false
+        },
+        {
+          "Normalsight": true
+        }
+      ]
+    },
+    "controller.render.war_gun_garand": {
+      "geometry": "Geometry.g_garand",
+      "materials": [
+        {
+          "*": "Material.default"
+        }
+      ],
+      "textures": [
+        "Texture.gt_garand"
+      ],
+      "part_visibility": [
+        {
+          "*": true
+        },
+        {
+          "Bayonet": false
+        },
+        {
+          "Explosive": false
+        },
+        {
+          "Grenade": false
+        }
+      ]
+    },
+    "controller.render.war_gun_thompson": {
+      "geometry": "Geometry.g_thompson",
+      "materials": [
+        {
+          "*": "Material.default"
+        }
+      ],
+      "textures": [
+        "Texture.gt_thompson"
+      ],
+      "part_visibility": [
+        {
+          "*": true
+        }
+      ]
+    },
+    "controller.render.war_gun_bar": {
+      "geometry": "Geometry.g_bar",
+      "materials": [
+        {
+          "*": "Material.default"
+        }
+      ],
+      "textures": [
+        "Texture.gt_bar"
+      ],
+      "part_visibility": [
+        {
+          "*": true
+        }
+      ]
+    },
+    "controller.render.war_gun_model1912": {
+      "geometry": "Geometry.g_model1912",
+      "materials": [
+        {
+          "*": "Material.default"
+        }
+      ],
+      "textures": [
+        "Texture.gt_model1912"
+      ],
+      "part_visibility": [
+        {
+          "*": true
+        }
+      ]
+    },
+    "controller.render.war_gun_bazooka": {
+      "geometry": "Geometry.g_bazooka",
+      "materials": [
+        {
+          "*": "Material.default"
+        }
+      ],
+      "textures": [
+        "Texture.gt_bazooka"
+      ],
+      "part_visibility": [
+        {
+          "*": true
+        }
+      ]
+    },
+    "controller.render.war_gun_m1911": {
+      "geometry": "Geometry.g_m1911",
+      "materials": [
+        {
+          "*": "Material.default"
+        }
+      ],
+      "textures": [
+        "Texture.gt_m1911"
+      ],
+      "part_visibility": [
+        {
+          "*": true
+        }
+      ]
+    },
+    "controller.render.war_gun_kar98": {
+      "geometry": "Geometry.g_kar98",
+      "materials": [
+        {
+          "*": "Material.default"
+        }
+      ],
+      "textures": [
+        "Texture.gt_kar98"
+      ],
+      "part_visibility": [
+        {
+          "*": true
+        },
+        {
+          "Bayonet": false
+        },
+        {
+          "Silencer": false
+        },
+        {
+          "Launcher": false
+        },
+        {
+          "Grenade": false
+        },
+        {
+          "Launcheraim": false
+        },
+        {
+          "Scope3x": false
+        },
+        {
+          "Scope4x": false
+        }
+      ]
+    },
+    "controller.render.war_gun_g43": {
+      "geometry": "Geometry.g_g43",
+      "materials": [
+        {
+          "*": "Material.default"
+        }
+      ],
+      "textures": [
+        "Texture.gt_g43"
+      ],
+      "part_visibility": [
+        {
+          "*": true
+        },
+        {
+          "Scope4x": false
+        },
+        {
+          "Scope4x2": false
+        },
+        {
+          "Scope4x3": false
+        },
+        {
+          "Black": false
+        }
+      ]
+    },
+    "controller.render.war_gun_mp40": {
+      "geometry": "Geometry.g_mp40",
+      "materials": [
+        {
+          "*": "Material.default"
+        }
+      ],
+      "textures": [
+        "Texture.gt_mp40"
+      ],
+      "part_visibility": [
+        {
+          "*": true
+        }
+      ]
+    },
+    "controller.render.war_gun_mg42": {
+      "geometry": "Geometry.g_mg42",
+      "materials": [
+        {
+          "*": "Material.default"
+        }
+      ],
+      "textures": [
+        "Texture.gt_mg42"
+      ],
+      "part_visibility": [
+        {
+          "*": true
+        }
+      ]
+    },
+    "controller.render.war_gun_pzb39": {
+      "geometry": "Geometry.g_pzb39",
+      "materials": [
+        {
+          "*": "Material.default"
+        }
+      ],
+      "textures": [
+        "Texture.gt_pzb39"
+      ],
+      "part_visibility": [
+        {
+          "*": true
+        }
+      ]
+    },
+    "controller.render.war_gun_p08": {
+      "geometry": "Geometry.g_p08",
+      "materials": [
+        {
+          "*": "Material.default"
+        }
+      ],
+      "textures": [
+        "Texture.gt_p08"
+      ],
+      "part_visibility": [
+        {
+          "*": true
+        }
+      ]
+    },
+    "controller.render.war_gun_mosin": {
+      "geometry": "Geometry.g_mosin",
+      "materials": [
+        {
+          "*": "Material.default"
+        }
+      ],
+      "textures": [
+        "Texture.gt_mosin"
+      ],
+      "part_visibility": [
+        {
+          "*": true
+        },
+        {
+          "Bayonet": false
+        },
+        {
+          "Scope": false
+        },
+        {
+          "Optic": false
+        }
+      ]
+    },
+    "controller.render.war_gun_svt38": {
+      "geometry": "Geometry.g_svt38",
+      "materials": [
+        {
+          "*": "Material.default"
+        }
+      ],
+      "textures": [
+        "Texture.gt_svt38"
+      ],
+      "part_visibility": [
+        {
+          "*": true
+        },
+        {
+          "Bayonet": false
+        },
+        {
+          "Scope": false
+        },
+        {
+          "Scope2": false
+        },
+        {
+          "Scope3": false
+        },
+        {
+          "gu": false
+        },
+        {
+          "gun3": false
+        },
+        {
+          "gun4": false
+        }
+      ]
+    },
+    "controller.render.war_gun_ppsh41d": {
+      "geometry": "Geometry.g_ppsh41d",
+      "materials": [
+        {
+          "*": "Material.default"
+        }
+      ],
+      "textures": [
+        "Texture.gt_ppsh41d"
+      ],
+      "part_visibility": [
+        {
+          "*": true
+        }
+      ]
+    },
+    "controller.render.war_gun_dp28": {
+      "geometry": "Geometry.g_dp28",
+      "materials": [
+        {
+          "*": "Material.default"
+        }
+      ],
+      "textures": [
+        "Texture.gt_dp28"
+      ],
+      "part_visibility": [
+        {
+          "*": true
+        }
+      ]
+    },
+    "controller.render.war_gun_tt33": {
+      "geometry": "Geometry.g_tt33",
+      "materials": [
+        {
+          "*": "Material.default"
+        }
+      ],
+      "textures": [
+        "Texture.gt_tt33"
+      ],
+      "part_visibility": [
+        {
+          "*": true
+        }
+      ]
+    },
+    "controller.render.war_gun_type99": {
+      "geometry": "Geometry.g_type99",
+      "materials": [
+        {
+          "*": "Material.default"
+        }
+      ],
+      "textures": [
+        "Texture.gt_type99"
+      ],
+      "part_visibility": [
+        {
+          "*": true
+        },
+        {
+          "Bayonet": false
+        },
+        {
+          "Scope4x": false
+        },
+        {
+          "Scope3x": false
+        },
+        {
+          "Scope2x": false
+        },
+        {
+          "Three": false
+        },
+        {
+          "Boder2": false
+        },
+        {
+          "Downv": false
+        },
+        {
+          "Boder3": false
+        },
+        {
+          "Cross": false
+        },
+        {
+          "Boder": false
+        },
+        {
+          "Flag": false
+        },
+        {
+          "bone9": false
+        },
+        {
+          "bone5": false
+        },
+        {
+          "bone6": false
+        },
+        {
+          "bone7": false
+        },
+        {
+          "bone8": false
+        },
+        {
+          "Bipod": false
+        },
+        {
+          "gun2": false
+        },
+        {
+          "gun3": false
+        },
+        {
+          "gun4": false
+        }
+      ]
+    },
+    "controller.render.war_gun_type100": {
+      "geometry": "Geometry.g_type100",
+      "materials": [
+        {
+          "*": "Material.default"
+        }
+      ],
+      "textures": [
+        "Texture.gt_type100"
+      ],
+      "part_visibility": [
+        {
+          "*": true
+        }
+      ]
+    },
+    "controller.render.war_gun_type96": {
+      "geometry": "Geometry.g_type96",
+      "materials": [
+        {
+          "*": "Material.default"
+        }
+      ],
+      "textures": [
+        "Texture.gt_type96"
+      ],
+      "part_visibility": [
+        {
+          "*": true
+        }
+      ]
+    },
+    "controller.render.war_gun_nagant": {
+      "geometry": "Geometry.g_nagant",
+      "materials": [
+        {
+          "*": "Material.default"
+        }
+      ],
+      "textures": [
+        "Texture.gt_nagant"
+      ],
+      "part_visibility": [
+        {
+          "*": true
+        }
+      ]
+    },
+    "controller.render.war_gun_mab38": {
+      "geometry": "Geometry.g_mab38",
+      "materials": [
+        {
+          "*": "Material.default"
+        }
+      ],
+      "textures": [
+        "Texture.gt_mab38"
+      ],
+      "part_visibility": [
+        {
+          "*": true
+        }
+      ]
+    },
+    "controller.render.war_gun_lewis": {
+      "geometry": "Geometry.g_lewis",
+      "materials": [
+        {
+          "*": "Material.default"
+        }
+      ],
+      "textures": [
+        "Texture.gt_lewis"
+      ],
+      "part_visibility": [
+        {
+          "*": true
+        }
+      ]
+    },
+    "controller.render.war_gun_mas35": {
+      "geometry": "Geometry.g_mas35",
+      "materials": [
+        {
+          "*": "Material.default"
+        }
+      ],
+      "textures": [
+        "Texture.gt_mas35"
+      ],
+      "part_visibility": [
+        {
+          "*": true
+        }
+      ]
+    },
+    "controller.render.war_gun_m1903s": {
+      "geometry": "Geometry.g_m1903s",
+      "materials": [
+        {
+          "*": "Material.default"
+        }
+      ],
+      "textures": [
+        "Texture.gt_m1903s"
+      ],
+      "part_visibility": [
+        {
+          "*": true
+        }
+      ]
+    },
+    "controller.render.war_gun_kar98s": {
+      "geometry": "Geometry.g_kar98s",
+      "materials": [
+        {
+          "*": "Material.default"
+        }
+      ],
+      "textures": [
+        "Texture.gt_kar98s"
+      ],
+      "part_visibility": [
+        {
+          "*": true
+        }
+      ]
+    }
+  }
+}

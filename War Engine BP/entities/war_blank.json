@@ -1,0 +1,27 @@
+{
+  "format_version": "1.21.50",
+  "minecraft:entity": {
+    "description": {
+      "identifier": "war:blank",
+      "is_spawnable": false,
+      "is_summonable": true
+    },
+    "components": {
+      "minecraft:collision_box": {
+        "width": 0.1,
+        "height": 0.1
+      },
+      "minecraft:projectile": {
+        "on_hit": {
+          "remove_on_hit": {}
+        },
+        "power": 0.1,
+        "gravity": 0.0
+      },
+      "minecraft:physics": {},
+      "minecraft:despawn": {
+        "despawn_from_distance": {}
+      }
+    }
+  }
+}

@@ -1,0 +1,59 @@
+{
+  "format_version": "1.10.0",
+  "minecraft:client_entity": {
+    "description": {
+      "identifier": "war:flag",
+      "materials": {
+        "default": "entity_alphatest"
+      },
+      "textures": {
+        "o1": "textures/entity/war_flag/war_01",
+        "r1": "textures/entity/war_flag/rally_01",
+        "o2": "textures/entity/war_flag/war_02",
+        "r2": "textures/entity/war_flag/rally_02",
+        "o3": "textures/entity/war_flag/war_03",
+        "r3": "textures/entity/war_flag/rally_03",
+        "o4": "textures/entity/war_flag/war_04",
+        "r4": "textures/entity/war_flag/rally_04",
+        "o5": "textures/entity/war_flag/war_05",
+        "r5": "textures/entity/war_flag/rally_05",
+        "o6": "textures/entity/war_flag/war_06",
+        "r6": "textures/entity/war_flag/rally_06",
+        "o7": "textures/entity/war_flag/war_07",
+        "r7": "textures/entity/war_flag/rally_07",
+        "o8": "textures/entity/war_flag/war_08",
+        "r8": "textures/entity/war_flag/rally_08",
+        "o9": "textures/entity/war_flag/war_09",
+        "r9": "textures/entity/war_flag/rally_09",
+        "o10": "textures/entity/war_flag/war_10",
+        "r10": "textures/entity/war_flag/rally_10",
+        "o11": "textures/entity/war_flag/war_11",
+        "r11": "textures/entity/war_flag/rally_11",
+        "o12": "textures/entity/war_flag/war_12",
+        "r12": "textures/entity/war_flag/rally_12",
+        "o13": "textures/entity/war_flag/war_13",
+        "r13": "textures/entity/war_flag/rally_13",
+        "o14": "textures/entity/war_flag/war_14",
+        "r14": "textures/entity/war_flag/rally_14",
+        "o15": "textures/entity/war_flag/war_15",
+        "r15": "textures/entity/war_flag/rally_15",
+        "o16": "textures/entity/war_flag/war_16",
+        "r16": "textures/entity/war_flag/rally_16",
+        "o17": "textures/entity/war_flag/war_17",
+        "r17": "textures/entity/war_flag/rally_17",
+        "o18": "textures/entity/war_flag/war_18",
+        "r18": "textures/entity/war_flag/rally_18",
+        "o19": "textures/entity/war_flag/war_19",
+        "r19": "textures/entity/war_flag/rally_19",
+        "o20": "textures/entity/war_flag/war_20",
+        "r20": "textures/entity/war_flag/rally_20"
+      },
+      "geometry": {
+        "default": "geometry.war_flag"
+      },
+      "render_controllers": [
+        "controller.render.war_flag"
+      ]
+    }
+  }
+}

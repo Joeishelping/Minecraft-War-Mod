@@ -1,0 +1,9 @@
+{
+  "format_version": "1.21.40",
+  "war:war_table": {
+    "sound": "wood"
+  },
+  "war:sandbag": {
+    "sound": "sand"
+  }
+}

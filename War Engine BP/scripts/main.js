@@ -1,0 +1,5602 @@
+// War Engine v5.3: faction NPC war framework
+import { world, system, Player, ItemStack, EquipmentSlot, GameMode } from "@minecraft/server";
+import { ActionFormData, ModalFormData, FormCancelationReason } from "@minecraft/server-ui";
+import { SKINS } from "./skins.js";
+
+// ================================================================ constants
+const SOLDIER = "war:soldier", HOUND = "war:hound", WAYPOINT = "war:waypoint", FLAG = "war:flag";
+const VEHICLES = ["war:boat", "war:plane", "war:tank"];
+const NF = 20, NSLOT = 1600;
+// Marker numbers are two-part (row x column, 40 x 40 = 1600). A soldier and his marker share a row tag
+// and a column tag, so each soldier checks only 80 conditions for 1600 possible markers.
+const GRID = 40;
+const rowOf = (s) => Math.floor((s - 1) / GRID) + 1, colOf = (s) => ((s - 1) % GRID) + 1;
+function tagMarker(ent, s) {
+  for (const t of ent.getTags()) if (t.startsWith("war_wr") || t.startsWith("war_wc") || t.startsWith("war_wp")) ent.removeTag(t);
+  if (s) { ent.addTag(`war_wr${rowOf(s)}`); ent.addTag(`war_wc${colOf(s)}`); }
+}
+function untagMarker(ent) { for (const t of ent.getTags()) if (t.startsWith("war_wr") || t.startsWith("war_wc") || t.startsWith("war_wp")) ent.removeTag(t); }
+const COLORS = [
+  ["White", "§f"], ["Red", "§c"], ["Blue", "§9"], ["Green", "§2"], ["Yellow", "§e"],
+  ["Purple", "§5"], ["Orange", "§6"], ["Black", "§8"], ["Gray", "§7"], ["Pink", "§d"],
+  ["Cyan", "§3"], ["Brown", "§n"], ["Lime", "§a"], ["Light Blue", "§b"], ["Magenta", "§u"],
+  ["Gold", "§p"], ["Navy", "§1"], ["Maroon", "§4"], ["Olive", "§g"], ["Teal", "§s"],
+];
+const DIV = {
+  foot: { name: "Foot Soldier", hp: "hp_40", weapon: true },
+  garrison: { name: "Garrison", hp: "hp_40", weapon: true },
+  guard: { name: "Guard", hp: "hp_60", weapon: true },
+  medic: { name: "Medic", hp: "hp_30", weapon: false },
+  grenadier: { name: "SB Grenadier", hp: "hp_40", weapon: false },
+  houndmaster: { name: "Houndmaster", hp: "hp_40", weapon: true },
+  cavalier: { name: "Cavalier", hp: "hp_80", weapon: true },
+};
+const ARMY_FUNCS = [["hold", "Hold"], ["patrol", "Patrol"], ["follow", "Follow me"]];
+const FUNCS = {
+  foot: ARMY_FUNCS, grenadier: ARMY_FUNCS, houndmaster: ARMY_FUNCS, cavalier: ARMY_FUNCS,
+  garrison: [["post", "Man post"], ["sentry", "Sentry"], ["patrol", "Patrol"]],
+  guard: [["escort", "Escort me"], ["stand", "Stand guard"], ["patrol", "Patrol"]],
+  medic: [["squad", "Stay with squad"], ["follow", "Follow me"]],
+};
+const FUNC_LABEL = { charge: "Charging", ...Object.fromEntries(Object.values(FUNCS).flat()) };
+const ANCHORED = ["hold", "patrol", "post", "sentry", "stand"];
+const REL_TXT = { "1": "§cHOSTILE", "0": "§7NEUTRAL", "2": "§aALLY" };
+
+// ================================================================ weapons & gun loadouts
+// Gun types fire the gun pack's own NPC bullets (its script applies the damage).
+// A faction's loadout only decides which gun model is held and which gunshot plays.
+const WEAPONS = [["sword", "Sword"], ["crossbow", "Crossbow"], ["rifle", "Rifle"], ["semi", "Semi-auto"], ["smg", "SMG"],
+  ["mg", "Machine gun"], ["shotgun", "Shotgun"], ["at", "Anti-tank"], ["pistol", "Pistol"], ["sniper", "Sniper"]];
+const GUNS = ["rifle", "semi", "smg", "mg", "shotgun", "at", "pistol", "sniper"];
+const LOADOUTS = {
+  american: { name: "American", rifle: "m1903", semi: "garand", smg: "thompson", mg: "bar", shotgun: "model1912", at: "bazooka", pistol: "m1911", sniper: "m1903s" },
+  german: { name: "German", rifle: "kar98", semi: "g43", smg: "mp40", mg: "mg42", shotgun: "model1912", at: "pzb39", pistol: "p08", sniper: "kar98s" },
+  soviet: { name: "Eastern European", rifle: "mosin", semi: "svt38", smg: "ppsh41d", mg: "dp28", shotgun: "model1912", at: "bazooka", pistol: "tt33", sniper: "kar98s" },
+  japanese: { name: "Eastern", rifle: "type99", semi: "type99", smg: "type100", mg: "type96", shotgun: "model1912", at: "bazooka", pistol: "nagant", sniper: "kar98s" },
+  western: { name: "Western European", rifle: "m1903", semi: "garand", smg: "mab38", mg: "lewis", shotgun: "model1912", at: "bazooka", pistol: "mas35", sniper: "m1903s" },
+};
+const LOADOUT_KEYS = Object.keys(LOADOUTS);
+const BULLETS = ["ww:nrifle_projectile", "ww:nsemi_projectile", "ww:nsmg_projectile", "ww:nlmg_projectile", "ww:nshotgun_projectile", "ww:nbazooka_projectile"];
+function loadoutOf(f) {
+  const all = getJSON(world, "war:loadouts", {});
+  return LOADOUTS[all[f]] ? all[f] : "american";
+}
+const gunModel = (f, weapon) => LOADOUTS[loadoutOf(f)][weapon];
+let gunPackWarned = false;
+// order must match the resource pack's gun render controllers (war:gun = index + 1)
+const GUN_MODELS = ["m1903", "garand", "thompson", "bar", "model1912", "bazooka", "m1911", "kar98", "g43", "mp40", "mg42", "pzb39", "p08", "mosin", "svt38", "ppsh41d", "dp28", "tt33", "type99", "type100", "type96", "nagant", "mab38", "lewis", "mas35", "m1903s", "kar98s"];
+
+// ================================================================ caches & world data
+let relCache, namesCache, squadsCache;
+let markerCache = new Map();
+function getRel() {
+  if (relCache) return relCache;
+  let r = world.getDynamicProperty("war:rel");
+  if (typeof r !== "string" || r.length !== NF * NF) {
+    r = "";
+    for (let a = 1; a <= NF; a++) for (let b = 1; b <= NF; b++) r += a === b ? "2" : "1";
+    world.setDynamicProperty("war:rel", r);
+  }
+  return (relCache = r);
+}
+const relAt = (a, b) => (a && b ? getRel()[(a - 1) * NF + (b - 1)] : "0");
+const relVersion = () => Number(world.getDynamicProperty("war:relv") ?? 0);
+function setRelPair(a, b, v, announce = true) {
+  if (!a || !b || a === b || relAt(a, b) === v) return;
+  const arr = getRel().split("");
+  arr[(a - 1) * NF + (b - 1)] = v;
+  arr[(b - 1) * NF + (a - 1)] = v;
+  relCache = arr.join("");
+  world.setDynamicProperty("war:rel", relCache);
+  world.setDynamicProperty("war:relv", relVersion() + 1);
+  if (announce) say(`${factionLabel(a)} §fis now ${REL_TXT[v]}§r§f with ${factionLabel(b)}`);
+}
+const isHostile = (a, b) => !!a && !!b && a !== b && relAt(a, b) === "1";
+const isFriendly = (a, b) => !!a && !!b && (a === b || relAt(a, b) === "2");
+function getNames() {
+  if (namesCache) return namesCache;
+  try { const n = JSON.parse(String(world.getDynamicProperty("war:names") ?? "[]")); if (Array.isArray(n)) return (namesCache = n); } catch {}
+  return (namesCache = []);
+}
+function getSquads() {
+  if (squadsCache) return squadsCache;
+  try { const s = JSON.parse(String(world.getDynamicProperty("war:squads") ?? "{}")); if (s && typeof s === "object") return (squadsCache = s); } catch {}
+  return (squadsCache = {});
+}
+const squadName = (f, n) => (n ? (getSquads()[f]?.[n - 1] || `Squad ${n}`) : "No squad");
+const squadList = (f, first) => [first, ...[1, 2, 3, 4, 5, 6, 7, 8, 9].map((n) => `${n}: ${squadName(f, n)}`)];
+const setting = (k, def) => { const v = world.getDynamicProperty(`war:set_${k}`); return v === undefined ? def : v; };
+function factionLabel(f, plain = false) {
+  if (!f) return plain ? "None" : "§7None§r";
+  const [color, code] = COLORS[f - 1];
+  const custom = getNames()[f - 1];
+  const txt = custom ? `${color} (${custom})` : color;
+  return plain ? txt : `${code}${txt}§r`;
+}
+const factionList = () => COLORS.map((_, i) => factionLabel(i + 1));
+
+// ================================================================ helpers
+const sleep = (t) => new Promise((res) => system.runTimeout(() => res(undefined), t));
+async function show(form, player) {
+  for (let i = 0; i < 20; i++) {
+    const r = await form.show(player);
+    if (r.canceled && r.cancelationReason === FormCancelationReason.UserBusy) { await sleep(5); continue; }
+    return r;
+  }
+  return undefined;
+}
+function getJSON(h, key, fallback) {
+  try { const v = h.getDynamicProperty(key); if (typeof v === "string") return JSON.parse(v); } catch {}
+  return fallback;
+}
+const setJSON = (h, key, val) => h.setDynamicProperty(key, JSON.stringify(val));
+const dist = (a, b) => Math.hypot(a.x - b.x, a.y - b.y, a.z - b.z);
+const flat = (a, b) => Math.hypot(a.x - b.x, a.z - b.z);
+const findPlayer = (id) => (id ? world.getAllPlayers().find((p) => p.id === id) : undefined);
+const tick = () => system.currentTick;
+const DIMS = ["overworld", "nether", "the_end"];
+const allOfCache = new Map(); // type -> { t, list }  (one world search per type per tick)
+function allOf(type) {
+  const now = system.currentTick, c = allOfCache.get(type);
+  if (c && c.t === now) return c.list.filter((e) => e.isValid);
+  const out = [];
+  for (const d of DIMS) { try { out.push(...world.getDimension(d).getEntities({ type })); } catch {} }
+  allOfCache.set(type, { t: now, list: out });
+  return out;
+}
+const isRiding = (e) => { try { return !!e.getComponent("minecraft:riding"); } catch { return false; } };
+const fwdFromYaw = (yaw) => ({ x: -Math.sin((yaw * Math.PI) / 180), z: Math.cos((yaw * Math.PI) / 180) });
+function giveItem(player, id) {
+  try { player.getComponent("minecraft:inventory").container.addItem(new ItemStack(id, 1)); } catch {}
+}
+function mainhand(player) {
+  try { return player.getComponent("minecraft:equippable").getEquipment(EquipmentSlot.Mainhand)?.typeId; } catch { return undefined; }
+}
+
+// ================================================================ entity properties
+// Values set on the same tick an entity spawns can be dropped by the game, so every
+// property is mirrored in a dynamic property and re-applied until it sticks.
+const PROPS = ["war:faction", "war:skin", "war:ranged", "war:cav", "war:medic", "war:rally", "war:gun", "war:firing", "war:aiming", "war:down", "war:nest", "war:pose"];
+function P(e, key) {
+  const v = e.getDynamicProperty(`p_${key}`);
+  if (v !== undefined) return v;
+  try { return e.getProperty(key); } catch { return undefined; }
+}
+function setP(e, key, val) {
+  sdDrop(e);
+  e.setDynamicProperty(`p_${key}`, val);
+  try { e.setProperty(key, val); } catch {}
+  const ent = e;
+  system.runTimeout(() => { if (ent.isValid) syncProps(ent); }, 2);
+}
+function syncProps(e) {
+  if (e.typeId === SOLDIER) syncSkin(e);
+  for (const k of PROPS) {
+    if (k === "war:skin" && e.typeId === SOLDIER) continue;
+    const v = e.getDynamicProperty(`p_${k}`);
+    if (v === undefined) continue;
+    try { if (e.getProperty(k) !== v) e.setProperty(k, v); } catch {}
+  }
+}
+
+// ================================================================ players
+function playerFaction(p) {
+  for (let i = 1; i <= NF; i++) if (p.hasTag(`war_f${i}`)) return i;
+  return 0;
+}
+function setPlayerFaction(p, f) {
+  for (let i = 1; i <= NF; i++) p.removeTag(`war_f${i}`);
+  if (f) p.addTag(`war_f${f}`);
+  try { p.nameTag = f ? `${COLORS[f - 1][1]}[${COLORS[f - 1][0]}]§r ${p.name}` : p.name; } catch {}
+}
+const factionOf = (e) => (e.typeId === "minecraft:player" ? playerFaction(e) : e.getDynamicProperty("war:surr") ? 0 : Number(P(e, "war:faction") ?? 0));
+
+// ================================================================ soldier data
+const sdCache = new Map(); // id -> { t, d }
+const sdDrop = (e) => { try { sdCache.delete(e.id); } catch {} };
+function sd(e) {
+  const c = sdCache.get(e.id), now = system.currentTick;
+  if (c && now - c.t <= 2) return c.d;
+  const d = sdRead(e);
+  sdCache.set(e.id, { t: now, d });
+  if (sdCache.size > 3000) sdCache.clear();
+  return d;
+}
+function sdRead(e) {
+  return {
+    faction: Number(P(e, "war:faction") ?? 0),
+    skin: Number(P(e, "war:skin") ?? 0),
+    ranged: Boolean(P(e, "war:ranged")),
+    weapon: String(e.getDynamicProperty("war:weapon") ?? (P(e, "war:ranged") ? "crossbow" : "sword")),
+    div: String(e.getDynamicProperty("war:div") ?? "foot"),
+    func: String(e.getDynamicProperty("war:func") ?? "hold"),
+    squad: Number(e.getDynamicProperty("war:squad") ?? 0),
+    radius: Number(e.getDynamicProperty("war:radius") ?? 8),
+    owner: e.getDynamicProperty("war:owner"),
+    leader: e.getDynamicProperty("war:leader"),
+    goal: Number(e.getDynamicProperty("war:goal") ?? 0),
+    custom: String(e.getDynamicProperty("war:custom") ?? ""),
+    retreat: Boolean(e.getDynamicProperty("war:retreat")),
+    surr: Number(e.getDynamicProperty("war:surr") ?? 0),
+    armor: String(e.getDynamicProperty("war:armor") ?? "none"),
+  };
+}
+const snapshot = (e) => {
+  const d = sd(e);
+  return { faction: d.faction, skin: d.skin, ranged: d.ranged, weapon: d.weapon, div: d.div, func: d.func, squad: d.squad, radius: d.radius, custom: d.custom, armor: d.armor };
+};
+
+function applyRelations(e) {
+  const surr = !!e.getDynamicProperty("war:surr");
+  const f = Number(P(e, "war:faction") ?? 0);
+  for (let i = 1; i <= NF; i++) {
+    const wantH = !surr && f > 0 && i !== f && relAt(f, i) === "1";
+    if (wantH !== e.hasTag(`war_h${i}`)) wantH ? e.addTag(`war_h${i}`) : e.removeTag(`war_h${i}`);
+    const wantF = !surr && i === f;
+    if (wantF !== e.hasTag(`war_f${i}`)) wantF ? e.addTag(`war_f${i}`) : e.removeTag(`war_f${i}`);
+  }
+  e.setDynamicProperty("war:relv", relVersion());
+  updateName(e);
+}
+function updateName(e) {
+  const f = Number(P(e, "war:faction") ?? 0);
+  const code = f ? COLORS[f - 1][1] : "§7";
+  let txt;
+  if (e.typeId === HOUND) txt = "War Hound";
+  else {
+    const d = sd(e);
+    txt = (d.custom || DIV[d.div]?.name || "Soldier") + (d.squad ? ` §7- ${squadName(f, d.squad)}` : "");
+    if (downed.has(e.id)) txt += " §4(DOWNED - right-click)";
+    else if (pows.has(e.id)) txt += " §6(prisoner)";
+    else if (d.surr) txt += " §7(surrendered)";
+    else if (d.retreat) txt += " §c(falling back)";
+    if (e.typeId === SOLDIER) txt += `\n${healthBar(e)}`;
+    const ro = String(e.getDynamicProperty("war:readout") ?? "");
+    if (ro) txt += `\n§8${ro}`;
+  }
+  try { e.nameTag = `${code}[${factionLabel(f, true)}]§r ${txt}`; } catch {}
+}
+function setGroups(e, want) {
+  const cur = getJSON(e, "war:st", {});
+  let changed = false;
+  for (const k of ["w", "t", "g", "s", "d", "r"]) {
+    if (want[k] && cur[k] !== want[k]) { e.triggerEvent(`war:${want[k]}`); cur[k] = want[k]; changed = true; }
+  }
+  if (changed) setJSON(e, "war:st", cur);
+}
+function equip(e, item) {
+  if (e.typeId === SOLDIER) { try { setP(e, "war:gun", 0); } catch {} }
+  if (item.startsWith("ww:")) {
+    try {
+      const SCOPED = { kar98s: "kar98", m1903s: "m1903" };
+      const model = item.slice(3), held = SCOPED[model] ? `ww:${SCOPED[model]}` : item;
+      e.runCommand(`replaceitem entity @s slot.weapon.mainhand 0 ${held}`);
+      setP(e, "war:gun", GUN_MODELS.indexOf(model) + 1); // the soldier model draws the pack's gun
+      return;
+    }
+    catch {
+      e.setDynamicProperty("war:weapon", "crossbow");
+      try { e.runCommand("replaceitem entity @s slot.weapon.mainhand 0 crossbow"); } catch {}
+      if (!gunPackWarned) { gunPackWarned = true; world.sendMessage("§cGun soldiers need the TWW Gun Pack active in this world. Using crossbows instead."); }
+      return;
+    }
+  }
+  try { e.runCommand(`replaceitem entity @s slot.weapon.mainhand 0 ${item}`); }
+  catch { if (item === "iron_spear") { try { e.runCommand("replaceitem entity @s slot.weapon.mainhand 0 trident"); } catch {} } }
+}
+const ARMOR = ["none", "leather", "iron", "netherite"];
+const ARMOR_LABEL = ["No armor", "Leather (full set)", "Iron (full set)", "Netherite (full set)"];
+function equipArmor(e, tier) {
+  const t = ARMOR.includes(tier) ? tier : "none";
+  const parts = [["slot.armor.head", "helmet"], ["slot.armor.chest", "chestplate"], ["slot.armor.legs", "leggings"], ["slot.armor.feet", "boots"]];
+  for (const [slot, piece] of parts) {
+    try { e.runCommand(`replaceitem entity @s ${slot} 0 ${t === "none" ? "air" : `${t}_${piece}`}`); } catch {}
+  }
+}
+function weaponItem(e) {
+  const d = sd(e);
+  if (d.surr || d.div === "medic") return "air";
+  if (d.div === "grenadier" && Number(e.getDynamicProperty("war:snow") ?? 3) > 0) return "snowball";
+  if (GUNS.includes(d.weapon)) return `ww:${gunModel(d.faction, d.weapon)}`;
+  if (d.ranged) return "crossbow";
+  return d.div === "cavalier" ? "air" : "iron_sword"; // the cavalier's lance is part of its model
+}
+
+// ================================================================ waypoints & flags
+const slotOf = (m) => Number(m.getDynamicProperty("war:slot") ?? 0);
+const markers = () => [...allOf(WAYPOINT), ...allOf(FLAG)];
+function marker(slot) {
+  if (!slot) return undefined;
+  if (!markerCache.has(slot)) markerCache.set(slot, markers().find((m) => slotOf(m) === slot));
+  const m = markerCache.get(slot);
+  return m && m.isValid ? m : undefined;
+}
+function claimSlot(m) {
+  const taken = new Set(markers().map(slotOf));
+  for (const v of threatSlot.values()) taken.add(v);
+  const assign = (i) => { m.setDynamicProperty("war:slot", i); tagMarker(m, i); m.setDynamicProperty("war:born", Date.now()); markerCache.delete(i); return i; };
+  for (let i = 1; i <= NSLOT; i++) if (!taken.has(i)) return assign(i);
+  // all slots taken: recycle the oldest marker nobody uses any more
+  const used = usedSlots();
+  let old, ob = Infinity;
+  for (const w of allOf(WAYPOINT)) {
+    if (w.id === m.id) continue;
+    const sl = slotOf(w), b = Number(w.getDynamicProperty("war:born") ?? 0);
+    if (!used.has(sl) && b < ob) { ob = b; old = w; }
+  }
+  if (old) { const sl = slotOf(old); try { old.remove(); } catch {} return assign(sl); }
+  return 0;
+}
+function makeWaypoint(dim, loc, reuse = true) {
+  if (reuse) {
+    const near = dim.getEntities({ type: WAYPOINT, location: loc, maxDistance: 2.5, excludeTags: ["war_mine"] })[0];   // never someone's personal marker
+    if (near && slotOf(near)) return slotOf(near);
+  }
+  const m = dim.spawnEntity(WAYPOINT, loc);
+  allOfCache.delete(WAYPOINT);                                   // v5.3: the next claim this tick sees this marker too (no shared numbers)
+  try { m.addEffect("invisibility", 20000000, { showParticles: false }); } catch {}
+  const s = claimSlot(m);
+  if (!s) m.remove();
+  else { const seen = getJSON(world, "war:slotseen", {}); seen[s] = Date.now(); setJSON(world, "war:slotseen", seen); }
+  return s;
+}
+function setGoal(e, slot) {
+  for (const t of e.getTags()) if (t.startsWith("war_go") || t.startsWith("war_gr") || t.startsWith("war_gc")) e.removeTag(t);
+  if (slot) { e.addTag(`war_gr${rowOf(slot)}`); e.addTag(`war_gc${colOf(slot)}`); }
+  e.setDynamicProperty("war:goal", slot);
+  try { noteRefs(e); } catch {}
+}
+const SLOT_KEYS = ["war:goal", "war:home", "war:mwp", "war:chargegoal", "war:ordergoal", "war:catchup", "war:mymk"];
+let slotRefs = null; // soldier id -> [slots] (last known, kept while he's out of range)
+function getRefs() { if (!slotRefs) slotRefs = getJSON(world, "war:slotrefs", {}); return slotRefs; }
+function noteRefs(e) {
+  const r = SLOT_KEYS.map((k) => Number(e.getDynamicProperty(k) ?? 0)).filter((x) => x > 0);
+  getRefs()[e.id] = [...new Set(r)];
+}
+function usedSlots() {
+  const used = new Set();
+  for (const list of Object.values(getRefs())) for (const sl of list) used.add(sl);
+  for (const m of Object.values(getMarches())) for (const l of m.lanes) used.add(l);
+  for (const v of threatSlot.values()) used.add(v);
+  return used;
+}
+function gcWaypoints(soldiers) {
+  for (const s of soldiers) { try { noteRefs(s); } catch {} }
+  const used = usedSlots();
+  const now = Date.now();
+  for (const m of [...allOf(WAYPOINT), ...allOf(FLAG)]) {
+    try { if (slotOf(m) && !m.hasTag(`war_wr${rowOf(slotOf(m))}`)) tagMarker(m, slotOf(m)); } catch {}   // migrate old tags
+  }
+  for (const m of allOf(WAYPOINT)) {
+    try {
+      m.addEffect("invisibility", 20000000, { showParticles: false });   // no shadow "dots"
+      const born = Number(m.getDynamicProperty("war:born") ?? 0);
+      if (!used.has(slotOf(m)) && now - born > 30000) m.remove();
+    } catch {}
+  }
+  setJSON(world, "war:slotrefs", getRefs());
+}
+function nearestFlag(dim, loc, pred, maxD = 300) {
+  let best, bd = maxD;
+  for (const f of allOf(FLAG)) {
+    if (f.dimension.id !== dim.id || Math.abs(f.location.x - loc.x) > maxD || Math.abs(f.location.z - loc.z) > maxD || !pred(f)) continue;
+    const d0 = dist(f.location, loc);
+    if (d0 < bd) { bd = d0; best = f; }
+  }
+  return best;
+}
+
+// ================================================================ setup
+function setupSoldier(e, s, player, { heal = true } = {}) {
+  sdDrop(e);
+  const div = DIV[s.div] ? s.div : "foot";
+  setP(e, "war:faction", s.faction ?? 0);
+  const weapon = div === "medic" || div === "grenadier" ? "sword" : (s.weapon && WEAPONS.some((w) => w[0] === s.weapon) ? s.weapon : (s.ranged ? "crossbow" : "sword"));
+  e.setDynamicProperty("war:weapon", weapon);
+  setP(e, "war:ranged", weapon !== "sword");
+  setP(e, "war:skin", s.skin ?? 0);
+  setP(e, "war:cav", div === "cavalier");
+  setP(e, "war:medic", div === "medic");
+  e.setDynamicProperty("war:div", div);
+  e.setDynamicProperty("war:squad", s.squad ?? 0);
+  e.setDynamicProperty("war:radius", s.radius ?? 8);
+  e.setDynamicProperty("war:custom", s.custom ?? "");
+  e.setDynamicProperty("war:armor", s.armor ?? "none");
+  if (div === "guard") e.setDynamicProperty("war:owner", s.owner ?? player?.id);
+  if (div === "houndmaster") e.addTag("war_hm"); else e.removeTag("war_hm");
+  e.triggerEvent(div === "cavalier" ? "war:body_cav" : "war:body_foot");
+  if (heal) e.triggerEvent(`war:${DIV[div].hp}`);
+  equip(e, weaponItem(e));
+  equipArmor(e, s.armor ?? "none");
+  applyRelations(e);
+  if (s.func === "__none") return e;
+  const ok = FUNCS[div].some((f) => f[0] === s.func);
+  return giveFunction(e, ok ? s.func : FUNCS[div][0][0], player);
+}
+
+function replaceSoldier(e) {
+  const s = { ...snapshot(e), owner: e.getDynamicProperty("war:owner") };
+  const hp = e.getComponent("minecraft:health");
+  const cur = hp ? hp.currentValue : undefined;
+  const n = e.dimension.spawnEntity(SOLDIER, e.location, { spawnEvent: "war:init" });
+  setupSoldier(n, { ...s, func: "__none" }, undefined);
+  try { if (cur !== undefined) n.getComponent("minecraft:health").setCurrentValue(cur); } catch {}
+  e.remove();
+  return n;
+}
+function retame(e, player) {
+  const t = e.getComponent("minecraft:tameable");
+  if (!t || !player) return e;
+  let owner;
+  try { owner = t.tamedToPlayerId; } catch {}
+  if (owner === player.id) return e;
+  try { t.tame(player); } catch {}
+  try { owner = t.tamedToPlayerId; } catch {}
+  if (owner === player.id || !owner) return e;
+  const n = replaceSoldier(e);
+  try { n.getComponent("minecraft:tameable").tame(player); } catch {}
+  return n;
+}
+
+// Give a soldier a function; goalSlot optionally points it at a waypoint/flag.
+function marchMembership(e, slot) {
+  const ms = getMarches();
+  let changed = false;
+  for (const m of Object.values(ms)) {
+    m.members = m.members ?? [];
+    const inLanes = slot && m.lanes.includes(slot);
+    const has = m.members.includes(e.id);
+    if (inLanes && !has) { m.members.push(e.id); changed = true; }
+    else if (!inLanes && has) { m.members = m.members.filter((x) => x !== e.id); changed = true; }
+  }
+  if (changed) saveMarches();
+}
+// wipe everything left over from earlier orders: searches, noises, water exits, catch-ups, fall-backs
+function freshMind(e) {
+  try { sdDrop(e); } catch {}
+  travelTo.delete(e.id); climbing.delete(e.id);
+  medicTask.delete(e.id); personal.delete(e.id);
+  shaken.delete(e.id); sweep.delete(e.id); brain.delete(e.id); reinforcing.delete(e.id); hornCone.delete(e.id);
+  const s = perc.get(e.id);
+  if (s) { s.threat = undefined; s.searchUntil = 0; s.lastSeen = undefined; s.noise = undefined; s.noiseT = -999; s.alert = "calm"; s.seen.clear(); }
+  crossing.delete(e.id); exitSpot.delete(e.id); wetSince.delete(e.id); assist.delete(e.id);
+  e.setDynamicProperty("war:retreat", false); e.setDynamicProperty("war:retreatUntil", 0);
+  e.setDynamicProperty("war:calm", 0); e.setDynamicProperty("war:stuck", 0);
+  e.setDynamicProperty("war:ordergoal", undefined); e.setDynamicProperty("war:catchup", undefined);
+}
+function giveFunction(e, func, player, goalSlot) {
+  sdDrop(e);
+  e.setDynamicProperty("war:ordergoal", undefined);
+  e.setDynamicProperty("war:catchup", undefined);
+  const d = sd(e);
+  e.setDynamicProperty("war:func", func);
+  e.setDynamicProperty("war:retreat", false);
+  if (func === "follow" || func === "escort") {
+    const leader = func === "escort" ? findPlayer(d.owner) ?? player : player;
+    if (leader) { e = retame(e, leader); e.setDynamicProperty("war:leader", leader.id); }
+    setGoal(e, 0);
+  } else if (func === "charge") {
+    setGoal(e, goalSlot ?? 0);
+    e.setDynamicProperty("war:chargegoal", goalSlot ?? 0);
+  } else if (func === "squad") {
+    let slot = Number(e.getDynamicProperty("war:mwp") ?? 0);
+    if (!marker(slot)) { slot = makeWaypoint(e.dimension, e.location, false); e.setDynamicProperty("war:mwp", slot); }
+    setGoal(e, slot);
+  } else {
+    const slot = goalSlot ?? makeWaypoint(e.dimension, e.location);
+    setGoal(e, slot);
+    e.setDynamicProperty("war:home", slot);
+  }
+  updateName(e);
+  setJSON(e, "war:st", {});
+  try { marchMembership(e, Number(e.getDynamicProperty("war:goal") ?? 0)); } catch {}
+  think(e);
+  return e;
+}
+
+// ================================================================ surrender
+function surrender(e, captor) {
+  try { sdDrop(e); } catch {}
+  const d = sd(e);
+  if (d.surr) return;
+  e.setDynamicProperty("war:prevfunc", d.func);
+  e.setDynamicProperty("war:surr", captor);
+  const slot = makeWaypoint(e.dimension, e.location);
+  setGoal(e, slot);
+  e.setDynamicProperty("war:home", slot);
+  equip(e, "air");
+  applyRelations(e);
+  setGroups(e, { w: "w_none", t: "t_off", g: "g_post", s: "s_1", d: "d_off", r: "r_off" });
+}
+function resume(e) {
+  try { sdDrop(e); } catch {}
+  if (!e.getDynamicProperty("war:surr")) return;
+  e.setDynamicProperty("war:surr", 0);
+  equip(e, weaponItem(e));
+  applyRelations(e);
+  const prev = String(e.getDynamicProperty("war:prevfunc") ?? "hold");
+  const d = sd(e);
+  giveFunction(e, prev === "follow" || prev === "escort" ? prev : prev === "charge" ? "hold" : prev, findPlayer(d.leader));
+}
+
+// ================================================================ the brain
+function speedGroup(e, urgent) {
+  const until = Number(e.getDynamicProperty("war:pacet") ?? 0), was = e.getDynamicProperty("war:pace");
+  const mode = urgent ? "u" : "w";
+  if (typeof was === "string" && was.startsWith(mode) && tick() < until) return was.slice(1);
+  const g = speedGroupRoll(e, urgent);
+  e.setDynamicProperty("war:pace", mode + g);
+  e.setDynamicProperty("war:pacet", tick() + 160 + Math.floor(Math.random() * 80));
+  return g;
+}
+function speedGroupRoll(e, urgent) {
+  const cav = !!P(e, "war:cav");
+  const pace = e.id.charCodeAt(e.id.length - 1) % 3; // personal pace: slow, steady, quick
+  let s = urgent ? 3 + Math.floor(Math.random() * 3) : 1 + pace + (Math.random() < 0.3 ? (Math.random() < 0.5 ? -1 : 1) : 0);
+  s = Math.max(1, Math.min(5, s));
+  if (cav) s = 5 + Math.max(1, Math.min(3, Math.ceil(s / 2)));
+  return `s_${s}`;
+}
+
+function think(e) {
+  sdDrop(e);
+  if (!downed.has(e.id) && e.getDynamicProperty("war:downed") !== undefined) downed.set(e.id, tick() + 300);   // still down after a reload
+  if (downed.has(e.id)) { setGroups(e, { w: "w_none", t: "t_off", g: "g_none", s: "s_1", d: "d_off", r: "r_off" }); return; }
+  if (!pows.has(e.id) && e.getDynamicProperty("war:pow") !== undefined) { try { pows.set(e.id, JSON.parse(String(e.getDynamicProperty("war:pow")))); } catch {} }
+  if (!ridingNest(e) && (P(e, "war:nest") || e.getDynamicProperty("war:gunSaved"))) { setP(e, "war:nest", false); e.setDynamicProperty("war:gunSaved", undefined); if (!pows.has(e.id)) equip(e, weaponItem(e)); }
+  if (pows.has(e.id) && Number(P(e, "war:gun") ?? 0) !== 0) { setP(e, "war:gun", 0); equip(e, "air"); }   // stays disarmed
+  if (pows.has(e.id)) { const pm = powMove(e, tick()); if (pm) { if (pm.slot !== undefined) setGoal(e, pm.g === "g_wp" ? pm.slot : 0); setGroups(e, { w: pm.w, t: pm.t, g: pm.g, s: pm.s, d: pm.d, r: pm.r }); } return; }
+  const d = sd(e);
+  const now = tick();
+  // while engaging, the order's own goal is parked in war:ordergoal
+  const parked = e.getDynamicProperty("war:ordergoal");
+  if (parked !== undefined) d.goal = Number(parked);
+  if (d.surr) {
+    // resume when the war with the captor is over
+    if (!isHostile(d.faction, d.surr)) resume(e);
+    else setGroups(e, { w: "w_none", t: "t_off", g: "g_post", s: "s_1", d: "d_off", r: "r_off" });
+    return;
+  }
+  const riding = isRiding(e);
+  const hp = e.getComponent("minecraft:health");
+  const hpr = hp ? hp.currentValue / hp.effectiveMax : 1;
+  const lastHurt = Number(e.getDynamicProperty("war:hurt") ?? -9999);
+  const alert = Number(e.getDynamicProperty("war:alert") ?? -9999) > now;
+  const fighting = now - lastHurt < 80;
+
+  // ---- morale
+  let foes = 0, friends = 0;
+  for (const o of nearbyCombatants(e.dimension.id, e.location, 12)) {
+    if (o.id === e.id || (o.typeId !== SOLDIER && o.typeId !== "minecraft:player" && o.typeId !== HOUND)) continue;
+    const of = factionOf(o);
+    if (isHostile(d.faction, of)) foes++;
+    else if (isFriendly(d.faction, of)) friends++;
+  }
+  let retreat = d.retreat;
+  const canRetreat = !riding && (d.div !== "garrison" || d.func === "patrol");
+  if (!retreat && canRetreat && (hpr < 0.3 || (hpr < 0.6 && foes >= friends * 2 + 3))) {
+    retreat = true;
+    e.setDynamicProperty("war:retreat", true);
+    if (e.getDynamicProperty("war:ordergoal") !== undefined) { setGoal(e, Number(e.getDynamicProperty("war:ordergoal"))); e.setDynamicProperty("war:ordergoal", undefined); }
+    updateName(e);
+  } else if (retreat && hpr > 0.75 && foes <= friends + 1 && now > Number(e.getDynamicProperty("war:retreatUntil") ?? 0) &&
+             (hpr >= 0.95 || !nearestFlag(e.dimension, e.location, (f) => !!P(f, "war:rally") && isFriendly(d.faction, Number(P(f, "war:faction"))), 128))) {
+    retreat = false;
+    e.setDynamicProperty("war:retreat", false);
+    const home = Number(e.getDynamicProperty("war:home") ?? 0);
+    if (ANCHORED.includes(d.func)) setGoal(e, home);
+    else if (d.func === "squad") setGoal(e, Number(e.getDynamicProperty("war:mwp") ?? 0));
+    else if (d.func === "charge") setGoal(e, Number(e.getDynamicProperty("war:chargegoal") ?? 0)); // rejoin the charge
+    else setGoal(e, 0);
+    d.goal = Number(e.getDynamicProperty("war:goal") ?? 0);
+    updateName(e);
+  }
+  if (hp && hpr < 1 && now - lastHurt > 200) {
+    const rf = nearestFlag(e.dimension, e.location, (f) => !!P(f, "war:rally") && isFriendly(d.faction, Number(P(f, "war:faction"))), 8);
+    let heal = 0;
+    if (rf) heal = 2;                                              // at a rally point: real healing
+    else if (now - Number(e.getDynamicProperty("war:selfheal") ?? -9999) > 340) { heal = 1; e.setDynamicProperty("war:selfheal", now); } // alone: ~1 HP per 17 s
+    if (heal) hp.setCurrentValue(Math.min(hp.effectiveMax, hp.currentValue + heal));
+  }
+
+  // ---- weapon
+  let weapon = GUNS.includes(d.weapon) ? `w_${d.weapon}` : d.ranged ? "w_ranged" : d.div === "cavalier" ? "w_lance" : "w_melee";
+  if (d.div === "medic") weapon = "w_keepaway";
+  if (d.div === "grenadier") {
+    const snow = Number(e.getDynamicProperty("war:snow") ?? 3);
+    if (snow > 0) { weapon = "w_keepaway"; grenadier(e, d, now); }
+    else weapon = "w_ranged";
+  }
+  if (d.div === "medic") medic(e, d, now);
+
+  const pat = `g_pat${d.radius <= 5 ? 4 : d.radius <= 10 ? 8 : 14}`;
+  const melee = weapon === "w_melee" || weapon === "w_lance";
+  let want;
+  if (retreat) {
+    const rally = nearestFlag(e.dimension, e.location, (f) => !!P(f, "war:rally") && isFriendly(d.faction, Number(P(f, "war:faction"))), 128);
+    // falling back along a real route to the rally flag (not a straight line Minecraft has to work out)
+    const mv = rally ? travel(e, rally.location, "rally", now, true) : undefined;
+    const slot = mv?.slot ?? (rally ? slotOf(rally) : Number(e.getDynamicProperty("war:home") ?? 0));
+    if (slot !== d.goal) setGoal(e, slot);
+    want = { w: weapon, t: "t_off", g: mv ? mv.g : slot ? "g_wp" : "g_flee", s: speedGroup(e, true), d: "d_off", r: "r_off" }; // no fighting back while falling back
+  } else {
+    const anchor = ["hold", "post", "sentry", "stand"].includes(d.func) ? marker(d.goal) : undefined;
+    const cu = d.func === "charge" ? e.getDynamicProperty("war:catchup") : undefined;
+    const bLeash = d.func === "post" ? 2 : d.func === "sentry" ? d.radius + 4 : d.func === "hold" ? (freeOf(e) ? aoOf(e) : 18) : 6;
+    const wet = inWater(e);
+    const engaged = medicMove(e, d, now) ?? shakenMove(e, d, now) ?? waterExit(e, d, now) ?? (personal.has(e.id) ? followPersonal(e, now) : undefined) ?? regroupMove(e, d, now) ?? (wet ? undefined : drillMove(e, d, now, melee, anchor, bLeash)) ?? (wet ? undefined : engagement(e, d, now, d.goal, melee)) ?? reinforceMove(e, d, now) ??
+      (cu !== undefined && marker(Number(cu)) ? (note(e, "catching up"), { g: "g_wp", slot: Number(cu), t: "t_mid", urgent: true }) : undefined) ??
+      patrolSweep(e, d, now);
+    // how far each stationary order may leave its spot to fight: post barely, hold to meet a charge, sentry its whole radius
+    const leash = d.func === "post" ? (melee ? 4 : 2) : d.func === "sentry" ? d.radius + 4 : d.func === "hold" ? (freeOf(e) ? aoOf(e) : 18) : (freeOf(e) && d.func === "stand" ? 12 : 4);
+    if (anchor && !riding && dist(e.location, anchor.location) > leash + 2 && Number(e.getDynamicProperty("war:calm") ?? 0) <= now) {
+      e.setDynamicProperty("war:calm", now + 60); // chased too far: walk back to the line
+    }
+    const calm = Number(e.getDynamicProperty("war:calm") ?? 0) > now;
+    const walk = speedGroup(e, fighting || alert);
+    switch (d.func) {
+      case "hold": want = { w: weapon, t: melee ? "t_short" : "t_mid", g: "g_wp", s: walk, d: "d_off" }; break;
+      case "patrol": want = { w: weapon, t: "t_mid", g: pat, s: walk, d: d.div === "guard" ? "d_on" : "d_off" }; break;
+      case "follow": want = { w: weapon, t: "t_mid", g: "g_owner", s: speedGroup(e, true), d: "d_off" }; break;
+      case "escort": want = { w: weapon, t: "t_off", g: "g_owner", s: speedGroup(e, true), d: "d_on" }; break; // bodyguards: defend, don't chase
+      case "post": want = { w: weapon, t: melee && !alert ? "t_short" : "t_mid", g: "g_post", s: walk, d: "d_off" }; break;
+      case "sentry": want = { w: weapon, t: `t_s${d.radius <= 8 ? 8 : d.radius <= 16 ? 16 : d.radius <= 24 ? 24 : 32}`, g: "g_post", s: walk, d: "d_off" }; break; // sortie within its radius
+      case "stand": want = { w: weapon, t: "t_mid", g: "g_post", s: walk, d: "d_on" }; break;
+      case "squad": medicAnchor(e, d); want = { w: weapon, t: "t_off", g: "g_wp", s: walk, d: "d_off" }; break;
+      case "charge": {
+        const m = marker(d.goal);
+        if (arriveCharge(e, d)) return; // arrived: take a formation spot, then hold or patrol
+        want = { w: weapon, t: "t_mid", g: m ? "g_wp" : "g_none", s: speedGroup(e, true), d: "d_off" };
+        break;
+      }
+      default: want = { w: weapon, t: "t_mid", g: "g_wp", s: walk, d: "d_off" };
+    }
+    want.r = d.div === "medic" ? "r_off" : "r_on";
+    // contact rule: units on the move engage what they see, and react to what they hear or what the squad reports
+    // (contact is handled by perception/engagement below)
+    if (d.weapon === "at") want.t = "t_at";                                        // anti-tank: only enemy-crewed vehicles
+    else if (["rifle", "mg"].includes(d.weapon) && want.t === "t_mid") want.t = "t_far"; // long guns see farther
+    // a gunner with an enemy right on top of him fights hand-to-hand, then goes back to shooting
+    if (GUNS.includes(d.weapon) && d.weapon !== "at" && closeEnemy(e, d, 2.5)) want.w = "w_melee";
+    if (d.div === "medic") want.t = "t_off";
+    if (calm) { want.w = "w_none"; want.t = "t_off"; }
+    // ---- perception overrides the order while there's something to deal with; then the order resumes
+    if (engaged && !calm) {
+      if (e.getDynamicProperty("war:ordergoal") === undefined) e.setDynamicProperty("war:ordergoal", d.goal);
+      setGoal(e, engaged.slot ?? 0);
+      e.setDynamicProperty("war:ordergoal", d.goal);
+      want.g = engaged.g;
+      if (want.t !== "t_at") want.t = engaged.t;
+      want.s = engaged.slow ? "s_1" : speedGroup(e, engaged.urgent);
+    } else if (e.getDynamicProperty("war:ordergoal") !== undefined) {
+      setGoal(e, Number(e.getDynamicProperty("war:ordergoal")));  // back to the order
+      e.setDynamicProperty("war:ordergoal", undefined);
+    }
+  }
+  setGroups(e, want);
+  if (!riding) unstick(e, d, fighting);
+}
+
+function closeEnemy(e, d, r) {
+  for (const o of nearbyCombatants(e.dimension.id, e.location, r)) {
+    if (o.id !== e.id && (o.typeId === SOLDIER || o.typeId === HOUND || o.typeId === "minecraft:player") && isHostile(d.faction, factionOf(o))) return o;
+  }
+  return undefined;
+}
+
+// Medic waypoint drifts to the centre of its squad (or nearby allies).
+function medicAnchor(e, d) {
+  const m = marker(Number(e.getDynamicProperty("war:mwp") ?? 0));
+  if (!m) return;
+  let sx = 0, sy = 0, sz = 0, n = 0;
+  for (const o of e.dimension.getEntities({ type: SOLDIER, location: e.location, maxDistance: d.squad ? 64 : 16 })) {
+    const od = sd(o);
+    if (o.id === e.id || od.div === "medic" || od.faction !== d.faction || (d.squad && od.squad !== d.squad)) continue;
+    sx += o.location.x; sy += o.location.y; sz += o.location.z; n++;
+  }
+  if (!n) return;
+  const c = { x: sx / n, y: sy / n, z: sz / n };
+  if (dist(c, m.location) > 3) { try { m.teleport(c); } catch {} }
+}
+function medic(e, d, now) {
+  if (Number(e.getDynamicProperty("war:healt") ?? 0) > now) return;
+  let best, bestR = 0.8;
+  for (const o of e.dimension.getEntities({ location: e.location, maxDistance: 8 })) {
+    if (o.id === e.id || (o.typeId !== SOLDIER && o.typeId !== "minecraft:player" && o.typeId !== HOUND)) continue;
+    if (!isFriendly(d.faction, factionOf(o))) continue;
+    const h = o.getComponent("minecraft:health");
+    if (!h) continue;
+    const r = h.currentValue / h.effectiveMax;
+    if (r < bestR) { bestR = r; best = o; }
+  }
+  if (!best) return;
+  e.setDynamicProperty("war:healt", now + 60);
+  const tgt = best;
+  try {
+    const from = { x: e.location.x, y: e.location.y + 1.5, z: e.location.z };
+    const p = e.dimension.spawnEntity("minecraft:splash_potion", from);
+    const dx = tgt.location.x - from.x, dz = tgt.location.z - from.z, dy = tgt.location.y + 1 - from.y;
+    const l = Math.hypot(dx, dz) || 1;
+    p.getComponent("minecraft:projectile")?.shoot({ x: (dx / l) * 0.5, y: 0.25 + dy * 0.05, z: (dz / l) * 0.5 }, { owner: e });
+  } catch {}
+  system.runTimeout(() => {
+    if (!tgt.isValid) return;
+    const h = tgt.getComponent("minecraft:health");
+    if (h) h.setCurrentValue(Math.min(h.effectiveMax, h.currentValue + 4));
+    try { tgt.dimension.spawnParticle("minecraft:heart_particle", { x: tgt.location.x, y: tgt.location.y + 2, z: tgt.location.z }); } catch {}
+  }, 12);
+}
+function grenadier(e, d, now) {
+  if (Number(e.getDynamicProperty("war:snowt") ?? 0) > now) return;
+  // only enemy soldiers, hounds, players, and tanks with an enemy crew; never mobs or empty targets
+  let best, bd = -1e9;
+  for (const o of nearbyCombatants(e.dimension.id, e.location, 32)) {
+    if (o.id === e.id) continue;
+    let ok = false;
+    if (o.typeId === SOLDIER || o.typeId === HOUND) ok = isHostile(d.faction, factionOf(o));
+    else if (o.typeId === "minecraft:player") { try { ok = o.getGameMode() !== GameMode.Creative && isHostile(d.faction, factionOf(o)); } catch {} }
+    else if (o.typeId === "war:tank") {
+      const crew = o.getComponent("minecraft:rideable")?.getRiders() ?? [];
+      ok = crew.some((c) => isHostile(d.faction, factionOf(c)));
+    }
+    if (!ok) continue;
+    const dd = dist(o.location, e.location);
+    if (dd <= 3) continue;
+    // value: how many enemies are packed around him (tanks count triple), then distance
+    let pack = o.typeId === "war:tank" ? 3 : 1;
+    for (const q of nearbyCombatants(o.dimension.id, o.location, 4)) if (q.id !== o.id && (q.typeId === SOLDIER || q.typeId === "minecraft:player") && isHostile(d.faction, factionOf(q))) pack++;
+    const sc = pack * 10 - dd * 0.3;
+    if (sc > bd) { bd = sc; best = o; }
+  }
+  if (!best) return;
+  callout(e, "Grenade!");
+  const snow = Number(e.getDynamicProperty("war:snow") ?? 3) - 1;
+  e.setDynamicProperty("war:snow", snow);
+  e.setDynamicProperty("war:snowt", now + 200); // 10 s
+  try {
+    const from = { x: e.location.x, y: e.location.y + 1.6, z: e.location.z };
+    const sb = e.dimension.spawnEntity("minecraft:snowball", from);
+    const dx = best.location.x - from.x, dz = best.location.z - from.z, l = Math.hypot(dx, dz) || 1;
+    // lobbed arc (~40 degrees), speed scaled to distance; snowball gravity is about 0.03 per tick
+    const ang = (40 * Math.PI) / 180;
+    const sp = Math.min(1.9, Math.sqrt((0.03 * l) / Math.sin(2 * ang)) * 1.08);
+    sb.getComponent("minecraft:projectile")?.shoot({ x: (dx / l) * sp * Math.cos(ang), y: sp * Math.sin(ang), z: (dz / l) * sp * Math.cos(ang) }, { owner: e });
+  } catch {}
+  if (snow <= 0) { setP(e, "war:ranged", true); equip(e, "crossbow"); }
+}
+
+// Stuck detection + catch-up teleports (works across dimensions for leaders).
+function unstick(e, d, fighting) {
+  const now = tick();
+  let goalLoc, stop = 3;
+  if ((d.func === "follow" || d.func === "escort") && d.leader) {
+    const p = findPlayer(d.leader);
+    if (p) {
+      if (isRiding(p)) return; // leader in a vehicle: swim after / wait
+      if (p.dimension.id !== e.dimension.id || dist(p.location, e.location) > 24) { tpNear(e, p.location, p.dimension); return; }
+      goalLoc = p.location;
+    }
+  } else {
+    const m = marker(Number(e.getDynamicProperty("war:goal") ?? 0));
+    if (m) { goalLoc = m.location; stop = d.func === "patrol" ? d.radius + 2 : 4; }
+  }
+  if (!goalLoc || fighting) return;
+  const far = flat(goalLoc, e.location);
+  if (far <= stop + 2) return;
+  const dim = e.dimension, p0 = e.location;
+  const hx = (goalLoc.x - p0.x) / (far || 1), hz = (goalLoc.z - p0.z) / (far || 1);
+  const onRoute = routeOf(e);                                     // v5.3: the route already decided every step, drop and climb
+  if (climbing.has(e.id)) return;
+  // ---- fall awareness first: is the way forward a drop?
+  if (now % 20 < 10 && !onRoute) { try { if (descend(e, goalLoc)) return; } catch {} }
+  // ---- climb assist (every second): step up, boost over 2-high walls, hop small gaps (off-route only)
+  if (now % 20 < 10 && !onRoute) {
+    const ax = p0.x + hx * 0.9, az = p0.z + hz * 0.9, y = Math.floor(p0.y);
+    const at = (dy) => solidAt(dim, { x: ax, y: y + dy, z: az });
+    if (at(0) && !at(1) && !at(2)) {                      // 1-block step
+      push(e, { x: hx * 0.15, y: 0.42, z: hz * 0.15 }, 2);
+    } else if (at(0) && at(1) && !at(2) && !at(3)) {      // 2-high wall: boost onto it
+      const top = { x: Math.floor(ax) + 0.5, y: y + 2, z: Math.floor(az) + 0.5 };
+      if (standable(dim, top)) { try { e.teleport(top); } catch {} }
+    } else if (!at(-1) && !at(-2)) {                      // hole ahead: hop it if there's ground beyond
+      const bx = p0.x + hx * 2, bz = p0.z + hz * 2;
+      if (standable(dim, { x: Math.floor(bx) + 0.5, y, z: Math.floor(bz) + 0.5 })) push(e, { x: hx * 0.55, y: 0.32, z: hz * 0.55 }, 2);
+    }
+  }
+  // ---- stuck recovery (every 5 s): side-step, then back off, then a short teleport as last resort
+  const lpt = Number(e.getDynamicProperty("war:lpt") ?? 0);
+  if (now - lpt < 100) return;
+  const lp = e.getDynamicProperty("war:lp");
+  const moved = lp && typeof lp === "object" ? dist(lp, p0) : 99;
+  e.setDynamicProperty("war:lp", { x: p0.x, y: p0.y, z: p0.z });
+  e.setDynamicProperty("war:lpt", now);
+  let stage = Number(e.getDynamicProperty("war:stuck") ?? 0);
+  if (moved >= 1) { if (stage) e.setDynamicProperty("war:stuck", 0); return; }
+  stage++;
+  if (stage >= 2 && personal.has(e.id) && !personal.get(e.id).planning) { personal.delete(e.id); travelTo.delete(e.id); rTrack.delete(e.id); e.setDynamicProperty("war:stuck", 0); return; }   // his route didn't work from here: plan again
+  if (stage >= 2 && isIndoors(e) && !personal.has(e.id)) { planPersonal(e, "exit", outsideGoal, now); e.setDynamicProperty("war:stuck", 0); return; }
+  if (stage >= 2 && canBuild(e, now) && (breakSoft(e, goalLoc, now) || placeStep(e, goalLoc, now))) { e.setDynamicProperty("war:stuck", 0); return; }
+  e.setDynamicProperty("war:stuck", stage);
+  const side = e.id.charCodeAt(e.id.length - 1) % 2 ? 1 : -1;
+  try {
+    if (stage === 1) push(e, { x: -hz * side * 0.6, y: 0.2, z: hx * side * 0.6 }, 2);
+    else if (stage === 2) push(e, { x: -hx * 0.7 - hz * side * 0.3, y: 0.2, z: -hz * 0.7 + hx * side * 0.3 }, 2);
+    else {
+      if (onRoute) {                                             // last resort on a route: onto the next route point, never across a wall or into a pit
+        const nx = onRoute.pts[Math.min(onRoute.pts.length - 1, onRoute.idx + 1)];
+        if (nx && dist(nx, p0) < 4 && Math.abs(nx.y - p0.y) <= 1.2 && !nx.climb && standable(dim, { x: Math.floor(nx.x) + 0.5, y: Math.floor(nx.y), z: Math.floor(nx.z) + 0.5 })) { try { e.teleport({ x: nx.x, y: nx.y, z: nx.z }); } catch {} }
+      }
+      else if (far < 10) tpNear(e, goalLoc, dim);
+      else tpNear(e, { x: p0.x + hx * 4, y: p0.y, z: p0.z + hz * 4 }, dim, true);
+      e.setDynamicProperty("war:stuck", 0);
+    }
+  } catch {}
+}
+function standable(dim, loc) {
+  try {
+    const feet = dim.getBlock(loc), head = dim.getBlock({ x: loc.x, y: loc.y + 1, z: loc.z }), floor = dim.getBlock({ x: loc.x, y: loc.y - 1, z: loc.z });
+    return feet?.isAir && head?.isAir && floor && !floor.isAir && !floor.isLiquid;
+  } catch { return false; }
+}
+function tpNear(e, loc, dim, sameLevel = false) {
+  const base = { x: Math.floor(loc.x) + 0.5, y: Math.floor(loc.y), z: Math.floor(loc.z) + 0.5 };
+  for (const dy of sameLevel ? [0, 1, -1] : [0, 1, -1, 2, -2, 3])
+    for (const [dx, dz] of [[0, 0], [1, 0], [-1, 0], [0, 1], [0, -1], [1, 1], [-1, -1], [1, -1], [-1, 1], [2, 0], [0, 2]]) {
+      const c = { x: base.x + dx, y: base.y + dy, z: base.z + dz };
+      if (standable(dim, c)) { try { e.teleport(c, { dimension: dim }); } catch {} return; }
+    }
+}
+
+world.afterEvents.entitySpawn.subscribe((ev) => {
+  const b = ev.entity;
+  let id;
+  try { id = b.typeId; } catch { return; }
+  if (!BULLETS.includes(id)) return;
+  system.run(() => {
+    try {
+      const owner = b.getComponent("minecraft:projectile")?.owner;
+      if (!owner || owner.typeId !== SOLDIER) return;
+      const d = sd(owner);
+      if (!GUNS.includes(d.weapon)) return;
+      const m = gunModel(d.faction, d.weapon);
+      owner.dimension.playSound(`${m}_shot_mid`, owner.location, { volume: 1.5 });
+      try { owner.dimension.playSound(`${m}_shot_far`, owner.location, { volume: 6 }); } catch {}
+      setP(owner, "war:firing", true);
+      const o = owner;
+      system.runTimeout(() => { if (o.isValid) setP(o, "war:firing", false); }, 4);
+      try {
+        const h = owner.getHeadLocation(), v = owner.getViewDirection();
+        owner.dimension.spawnParticle("ww:flash", { x: h.x + v.x * 1.3, y: h.y - 0.25 + v.y * 1.3, z: h.z + v.z * 1.3 });
+      } catch {}
+    } catch {}
+  });
+});
+
+// ================================================================ main loops
+let phase = 0;
+system.runInterval(() => {
+  markerCache = new Map();
+  phase ^= 1;
+  const v = relVersion();
+  const soldiers = allOf(SOLDIER);
+  for (const e of soldiers) {
+    try {
+      if (e.getDynamicProperty("war:div") === undefined) { setupSoldier(e, { faction: 0, div: "foot", func: "hold" }, undefined); continue; }
+      syncProps(e);
+      // old one-number goal tags (v4.2.1 and earlier): re-tag with the two-part scheme
+      if (!e.hasTag("war_g2")) { setGoal(e, Number(e.getDynamicProperty("war:goal") ?? 0)); e.addTag("war_g2"); }
+      // soldiers armed before guns were drawn on the model: re-arm once
+      if (e.getDynamicProperty("p_war:gun") === undefined && GUNS.includes(String(e.getDynamicProperty("war:weapon") ?? ""))) equip(e, weaponItem(e));
+      if (e.getDynamicProperty("war:relv") !== v) applyRelations(e);
+      if ((e.id.charCodeAt(e.id.length - 1) & 1) === phase) think(e);
+    } catch {}
+  }
+  for (const h of allOf(HOUND)) {
+    try {
+      syncProps(h);
+      const m = world.getEntity(String(h.getDynamicProperty("war:master") ?? ""));
+      if (m && m.isValid) {
+        // hounds always share their master's faction and stay near him
+        if (P(h, "war:faction") !== P(m, "war:faction") || !!m.getDynamicProperty("war:surr") !== !!h.getDynamicProperty("war:surr")) {
+          setP(h, "war:faction", P(m, "war:faction"));
+          h.setDynamicProperty("war:surr", m.getDynamicProperty("war:surr") ?? 0);
+          applyRelations(h);
+        }
+        if (m.dimension.id !== h.dimension.id || dist(m.location, h.location) > 24) tpNear(h, m.location, m.dimension);
+      }
+      if (h.getDynamicProperty("war:relv") !== v) applyRelations(h);
+    } catch {}
+  }
+  if (tick() % 200 < 10) { try { gcWaypoints(soldiers); } catch {} }
+}, 10);
+
+const CIVILIANS = ["minecraft:villager_v2", "minecraft:villager", "minecraft:wandering_trader"];
+world.beforeEvents.entityHurt.subscribe((ev) => {
+  try {
+    const v = ev.hurtEntity;
+    if (v?.typeId === SOLDIER && !downed.has(v.id)) {
+      const cause = String(ev.damageSource.cause ?? "");
+      const h = v.getComponent("minecraft:health");
+      if (h && ev.damage >= h.currentValue && cause !== "void" && !dying.has(v.id)) {
+        ev.cancel = true;                                            // falls wounded instead of dying
+        system.run(() => { try { if (v.isValid) { const hh = v.getComponent("minecraft:health"); if (hh) hh.setCurrentValue(1); goDown(v); } } catch {} });
+        return;
+      }
+    }
+  } catch {}
+  try {
+    const v = ev.hurtEntity, a = ev.damageSource.damagingEntity;
+    if (v && CIVILIANS.includes(v.typeId) && setting("civil", true) && a &&
+        (a.typeId === SOLDIER || a.typeId === HOUND || (a.typeId === "minecraft:player" && String(ev.damageSource.cause ?? "").includes("xplosion")))) { ev.cancel = true; return; }
+  } catch {}
+  try {   // realism: damage in soldier combat
+    const k = realism().dmg;
+    const hv = ev.hurtEntity;
+    const bySoldier = ev.damageSource.damagingEntity?.typeId === SOLDIER ||
+      (hv?.typeId === "minecraft:player" && !ev.damageSource.damagingEntity && tick() - (shotAtPlayer.get(hv.id) ?? -999) < 12);
+    if (k !== 1 && (hv?.typeId === SOLDIER || bySoldier)) ev.damage = ev.damage * k;
+  } catch {}
+  // tanks shrug off small arms; no single hit takes more than ~a third of one
+  try {
+    if (ev.hurtEntity?.typeId === "war:tank") {
+      const c = String(ev.damageSource.cause ?? "");
+      const blast = c.includes("xplosion");
+      if (!blast && ev.damage <= 25) ev.damage = ev.damage * 0.1;
+      ev.damage = Math.min(ev.damage, 30);
+      return;
+    }
+  } catch {}
+  try {
+    const v = ev.hurtEntity, a = ev.damageSource.damagingEntity;
+    if (!a || !v || a.id === v.id) return;
+    const fa = factionOf(a), fv = factionOf(v);
+    if (fa && fv && isFriendly(fa, fv)) ev.damage = ev.damage * 0.25; // friendly fire: possible, but difficult
+  } catch {}
+});
+world.afterEvents.entityHurt.subscribe((ev) => {
+  try { chronHit(ev.damageSource.damagingEntity, ev.hurtEntity); } catch {}
+  const v = ev.hurtEntity;
+  if (!v?.isValid || (v.typeId !== SOLDIER && v.typeId !== "minecraft:player" && v.typeId !== HOUND)) return;
+  const f = factionOf(v);
+  if (!f) return;
+  const now = tick();
+  if (v.typeId === SOLDIER) v.setDynamicProperty("war:hurt", now);
+  const sq = v.typeId === SOLDIER ? sd(v).squad : 0;
+  for (const o of nearbyCombatants(v.dimension.id, v.location, 64)) {
+    if (o.typeId !== SOLDIER) continue;
+    const of = Number(P(o, "war:faction"));
+    if (!isFriendly(of, f)) continue;
+    const near = dist(o.location, v.location) <= 16;
+    if (near || (sq && of === f && sd(o).squad === sq)) o.setDynamicProperty("war:alert", now + 200); // squad shares contact
+  }
+});
+
+// ---- flags: capture
+system.runInterval(() => {
+  for (const flag of allOf(FLAG)) {
+    try {
+      if (P(flag, "war:rally")) continue;
+      const owner = Number(P(flag, "war:faction"));
+      const counts = new Map();
+      for (const o of flag.dimension.getEntities({ location: flag.location, maxDistance: 7 })) {
+        if (o.typeId !== SOLDIER && o.typeId !== "minecraft:player" && o.typeId !== HOUND) continue;
+        const f = factionOf(o);
+        if (f) counts.set(f, (counts.get(f) ?? 0) + 1);
+      }
+      let defended = false, cap = 0, capN = 0;
+      for (const [f, n] of counts) {
+        if (isFriendly(owner, f)) defended = true;
+        else if (isHostile(owner, f) && n > capN) { cap = f; capN = n; }
+      }
+      let prog = Number(flag.getDynamicProperty("war:cap") ?? 0);
+      prog = defended || !cap ? Math.max(0, prog - 1) : prog + 1;
+      flag.setDynamicProperty("war:cap", prog);
+      if (cap && !defended && prog > 0) {
+        for (const p of flag.dimension.getPlayers({ location: flag.location, maxDistance: 20 }))
+          p.onScreenDisplay.setActionBar(`${factionLabel(cap)} §fcapturing ${factionLabel(owner)}§f's flag ${"§a|".repeat(prog)}${"§7|".repeat(Math.max(0, 8 - prog))}`);
+      }
+      if (prog >= 8) {
+        flag.setDynamicProperty("war:cap", 0);
+        setP(flag, "war:faction", cap);
+        say(`§l${factionLabel(cap)} §r§fcaptured ${factionLabel(owner)}§f's war flag!`);
+        chronFlagCaptured(flag.dimension, flag.location, `${factionLabel(cap, true)} captured ${factionLabel(owner, true)}'s war flag.`);
+        if (setting("capture", "neutral") === "neutral") {
+          setRelPair(owner, cap, "0");
+          for (const e of [...allOf(SOLDIER), ...allOf(HOUND)]) { try { applyRelations(e); } catch {} }
+        } else {
+          for (const e of flag.dimension.getEntities({ type: SOLDIER, location: flag.location, maxDistance: 64 })) {
+            if (Number(P(e, "war:faction")) === owner) surrender(e, cap);
+          }
+          say(`${factionLabel(owner)} §7soldiers near the flag have surrendered.`);
+        }
+      }
+    } catch {}
+  }
+}, 40);
+
+// ---- flags: breaking (own faction or creative), and vehicle pickup
+const flagHits = new Map();
+world.afterEvents.entityHitEntity.subscribe((ev) => {
+  const p = ev.damagingEntity, t = ev.hitEntity;
+  if (!(p instanceof Player) || !t?.isValid) return;
+  if (t.typeId === FLAG) {
+    const f = Number(P(t, "war:faction"));
+    const creative = p.getGameMode() === GameMode.Creative;
+    if (!creative && playerFaction(p) !== f) { p.onScreenDisplay.setActionBar("§cYou can't break an enemy flag. Capture it!"); return; }
+    const n = (flagHits.get(t.id) ?? 0) + 1;
+    flagHits.set(t.id, n);
+    if (n < 3) { p.onScreenDisplay.setActionBar(`§7Breaking flag... ${n}/3`); return; }
+    flagHits.delete(t.id);
+    const war = !P(t, "war:rally");
+    t.remove();
+    giveItem(p, "war:flag");
+    if (war && f) withdraw(f);
+    return;
+  }
+  if (VEHICLES.includes(t.typeId) || t.typeId === NEST) {
+    const item = { "war:boat": "war:boat_item", "war:plane": "war:plane_item", "war:tank": "war:tank_item", "war:mg_nest": "war:mg_nest_item" }[t.typeId];
+    if (mainhand(p) !== item) return;
+    const riders = t.getComponent("minecraft:rideable")?.getRiders() ?? [];
+    if (riders.length) { p.onScreenDisplay.setActionBar("§cEveryone has to get out first."); return; }
+    t.remove();
+    giveItem(p, item);
+  }
+});
+
+// Breaking your own war flag: wars with that faction go neutral until it places one again.
+function withdraw(f) {
+  const store = getJSON(world, "war:withdrawn", {});
+  const list = new Set(store[f] ?? []);
+  for (let b = 1; b <= NF; b++) if (isHostile(f, b)) { list.add(b); setRelPair(f, b, "0", false); }
+  store[f] = [...list];
+  setJSON(world, "war:withdrawn", store);
+  say(`${factionLabel(f)} §ftook down its war flag. Its wars are on hold (Neutral) until it places one again.`);
+  for (const e of [...allOf(SOLDIER), ...allOf(HOUND)]) { try { applyRelations(e); } catch {} }
+}
+function warFlagPlaced(f) {
+  const store = getJSON(world, "war:withdrawn", {});
+  const list = store[f] ?? [];
+  for (const b of list) if (relAt(f, b) === "0") setRelPair(f, b, "1", false);
+  if (list.length) say(`${factionLabel(f)} §fraised its war flag again. §cThe war resumes.`);
+  delete store[f];
+  setJSON(world, "war:withdrawn", store);
+  for (const e of allOf(SOLDIER)) { try { if (Number(P(e, "war:faction")) === f && e.getDynamicProperty("war:surr")) resume(e); } catch {} }
+  for (const e of [...allOf(SOLDIER), ...allOf(HOUND)]) { try { applyRelations(e); } catch {} }
+}
+
+// ---- players: guards come to you when you respawn
+world.afterEvents.playerSpawn.subscribe((ev) => {
+  const p = ev.player;
+  setPlayerFaction(p, playerFaction(p));
+  if (ev.initialSpawn) return;
+  system.runTimeout(() => {
+    for (const g of allOf(SOLDIER)) {
+      try { if (g.getDynamicProperty("war:owner") === p.id && sd(g).div === "guard") tpNear(g, p.location, p.dimension); } catch {}
+    }
+  }, 20);
+});
+
+// ================================================================ vehicles
+// Steering: the pilot's mouse sets the heading, W/S set speed. Jump fires (plane: bomb, tank: shell).
+// Using the Command Baton while seated opens the vehicle menu (board / disembark / fire).
+const vstate = new Map();      // id -> {speed, last, cd, age, dir, dim}
+const riderCache = new Map();  // id -> rider ids
+const projectiles = new Map(); // entity -> {kind, owner, age} (bombs)
+const shells = [];             // scripted tank shells
+let vehicleList = [];
+const HUD = {
+  "war:plane": "§7W/S speed · mouse steer · left-click bomb · §fslot 9: bombsight§7 · baton menu",
+  "war:tank": "§7W/S drive · mouse turn · left-click fire · baton menu",
+  "war:boat": "§7W/S row · mouse steer · baton menu",
+};
+const RELOAD = { "war:plane": 160, "war:tank": 60 }; // ticks: bomb 8 s, cannon 3 s
+function reloadBar(v, st) {
+  const total = RELOAD[v.typeId];
+  if (!total) return "";
+  const name = v.typeId === "war:plane" ? "BOMB" : "CANNON";
+  const left = Math.max(0, st.cd - tick());
+  if (!left) return `§a§l${name} READY§r`;
+  const filled = Math.round((1 - left / total) * 10);
+  return `§c${name} §f${"█".repeat(filled)}§8${"█".repeat(10 - filled)} §f${Math.ceil(left / 20)}s`;
+}
+// where the shot will land, shown as a marker in the world
+function tankAim(v, pilot) {
+  const look = pilot.getViewDirection(), f = fwdFromYaw(v.getRotation().y), loc = v.location;
+  const ly = Math.max(-0.15, Math.min(0.3, look.y)), lh = Math.hypot(look.x, look.z) || 1;
+  const dir = { x: (look.x / lh) * Math.sqrt(1 - ly * ly), y: ly, z: (look.z / lh) * Math.sqrt(1 - ly * ly) };
+  const from = { x: loc.x + f.x * 4.2, y: loc.y + 1.5, z: loc.z + f.z * 4.2 };
+  let hit;
+  try { const b = v.dimension.getBlockFromRay(from, dir, { maxDistance: 100, includeLiquidBlocks: false, includePassableBlocks: false }); if (b) hit = { x: b.block.location.x + b.faceLocation.x, y: b.block.location.y + b.faceLocation.y, z: b.block.location.z + b.faceLocation.z }; } catch {}
+  return hit;
+}
+function bombAim(v, nv) {
+  const dim = v.dimension;
+  let p = { x: v.location.x, y: v.location.y - 1.2, z: v.location.z };
+  let vel = { x: nv.x * 0.8, y: -0.1, z: nv.z * 0.8 };
+  for (let i = 0; i < 160; i++) {
+    vel = { x: vel.x * 0.98, y: (vel.y - 0.04) * 0.98, z: vel.z * 0.98 };
+    p = { x: p.x + vel.x, y: p.y + vel.y, z: p.z + vel.z };
+    if (solidAt(dim, p)) return { x: p.x, y: Math.floor(p.y) + 1.1, z: p.z };
+  }
+  return undefined;
+}
+function marker3(dim, at, particle) {
+  for (const o of [[0, 0], [0.6, 0], [-0.6, 0], [0, 0.6], [0, -0.6]]) {
+    try { dim.spawnParticle(particle, { x: at.x + o[0], y: at.y + 0.2, z: at.z + o[1] }); } catch {}
+  }
+}
+system.runInterval(() => { vehicleList = VEHICLES.flatMap((t) => allOf(t)); }, 20);
+system.runInterval(() => {
+  for (const v of vehicleList) { try { if (v.isValid) drive(v); } catch {} }
+  stepShells();
+  for (const [b, info] of [...projectiles]) {
+    try {
+      if (!b.isValid) { projectiles.delete(b); continue; }
+      info.age++;
+      const vel = b.getVelocity();
+      const sp = Math.hypot(vel.x, vel.y, vel.z);
+      const dir = sp > 0.01 ? { x: vel.x / sp, y: vel.y / sp, z: vel.z / sp } : { x: 0, y: -1, z: 0 };
+      let hit = info.age > (info.kind === "shell" ? 40 : 200); // shells reach roughly 100 blocks
+      if (!hit) hit = solidAt(b.dimension, b.location);
+      if (!hit) { try { hit = !!b.dimension.getBlockFromRay(b.location, dir, { maxDistance: Math.max(0.8, sp * 1.2), includeLiquidBlocks: false, includePassableBlocks: false }); } catch {} }
+      if (!hit && info.age > 1) {
+        try {
+          hit = b.dimension.getEntitiesFromRay(b.location, dir, { maxDistance: Math.max(1, sp * 1.2) }).some((h) => {
+            const o = h.entity;
+            return o.id !== b.id && o.id !== info.owner && !VEHICLES.includes(o.typeId) && o.typeId !== "war:bomb" && o.typeId !== "war:shell" &&
+              o.typeId !== WAYPOINT && o.typeId !== FLAG && !(riderCache.get(info.owner) ?? []).includes(o.id);
+          });
+        } catch {}
+      }
+      if (!hit && info.age > 1) {
+        hit = b.dimension.getEntities({ location: b.location, maxDistance: 1.6 }).some((o) =>
+          o.id !== b.id && o.id !== info.owner && !VEHICLES.includes(o.typeId) && o.typeId !== "war:bomb" && o.typeId !== "war:shell" &&
+          o.typeId !== WAYPOINT && o.typeId !== FLAG && !(riderCache.get(info.owner) ?? []).includes(o.id));
+      }
+      if (hit) {
+        explode(b.dimension, b.location, 4, { breaksBlocks: !!setting("blockdmg", true), causesFire: false, source: info.src?.isValid ? info.src : undefined });
+        projectiles.delete(b);
+        b.remove();
+      }
+    } catch { projectiles.delete(b); }
+  }
+}, 1);
+
+const chaseCam = new Set(); // players using the chase camera
+const bombsight = new Set(); // pilots currently looking through the bombsight
+function updateBombsight(pilot, v) {
+  const want = pilot.selectedSlotIndex === 8;
+  if (want) {
+    const loc = v.location;
+    let y = loc.y - 1.6;
+    if (solidAt(v.dimension, { x: loc.x, y, z: loc.z })) y = loc.y + 0.3;
+    try { pilot.camera.setCamera("minecraft:free", { location: { x: loc.x, y, z: loc.z }, rotation: { x: 90, y: v.getRotation().y } }); bombsight.add(pilot.id); } catch {}
+  } else if (bombsight.has(pilot.id)) {
+    bombsight.delete(pilot.id);
+    try {
+      if (chaseCam.has(pilot.id)) pilot.camera.setCamera("minecraft:fixed_boom", { entityOffset: { x: 0, y: 2.5, z: 0 }, viewOffset: { x: 0, y: 0 } });
+      else pilot.camera.clear();
+    } catch {}
+  }
+}
+system.runInterval(() => {
+  for (const id of [...chaseCam]) {
+    const p = findPlayer(id);
+    if (!p || !myVehicle(p)) { chaseCam.delete(id); try { p?.camera.clear(); } catch {} }
+  }
+  for (const id of [...bombsight]) {
+    const p = findPlayer(id);
+    if (!p || myVehicle(p)?.typeId !== "war:plane") { bombsight.delete(id); try { p?.camera.clear(); } catch {} }
+  }
+}, 10);
+const fireRequests = new Map(); // player id -> tick of last left-click
+const mountedAt = new Map(); // player id -> tick he got into a vehicle
+world.afterEvents.playerSwingStart.subscribe((ev) => {
+  const v = myVehicle(ev.player) ?? (ridingNest(ev.player) ? ev.player.getComponent("minecraft:riding")?.entityRidingOn : undefined);
+  if (!v || v.typeId === "war:boat") return;
+  const src = String(ev.swingSource ?? "");
+  if (src && !["Attack", "None", "Mine"].includes(src)) return;            // entering (Interact), using items etc. never fire
+  if (tick() - (mountedAt.get(ev.player.id) ?? -999) < 20) return;          // first second in the seat: ignore
+  fireRequests.set(ev.player.id, tick());
+});
+function consumeFire(p) {
+  const t = fireRequests.get(p.id);
+  if (t === undefined || tick() - t > 4) return false;
+  fireRequests.delete(p.id);
+  return true;
+}
+function solidAt(dim, loc) {
+  try { const b = dim.getBlock(loc); return !!b && !b.isAir && !b.isLiquid; } catch { return false; }
+}
+function blockedAhead(v, dir, reach, heights) {
+  for (const h of heights) {
+    try {
+      const from = { x: v.location.x, y: v.location.y + h, z: v.location.z };
+      if (v.dimension.getBlockFromRay(from, dir, { maxDistance: reach, includeLiquidBlocks: false, includePassableBlocks: false })) return true;
+    } catch {}
+  }
+  return false;
+}
+function yawOf(d) { return (Math.atan2(-d.x, d.z) * 180) / Math.PI; }
+function turnToward(cur, want, maxStep) {
+  const diff = ((want - cur + 540) % 360) - 180;
+  return cur + Math.max(-maxStep, Math.min(maxStep, diff));
+}
+// What's under the shooter's crosshair (block or entity), up to `range` blocks.
+function aimPoint(v, shooter, range = 150) {
+  const eye = shooter.getHeadLocation(), dir = shooter.getViewDirection(), dim = v.dimension;
+  const crew = (v.getComponent("minecraft:rideable")?.getRiders() ?? []).map((r) => r.id);
+  let best = range, at;
+  try {
+    const b = dim.getBlockFromRay(eye, dir, { maxDistance: range, includeLiquidBlocks: false, includePassableBlocks: false });
+    if (b) {
+      const p = { x: b.block.location.x + b.faceLocation.x, y: b.block.location.y + b.faceLocation.y, z: b.block.location.z + b.faceLocation.z };
+      best = dist(eye, p); at = p;
+    }
+  } catch {}
+  try {
+    for (const h of dim.getEntitiesFromRay(eye, dir, { maxDistance: best })) {
+      const o = h.entity;
+      if (o.id === v.id || crew.includes(o.id) || o.typeId === WAYPOINT || o.typeId === "war:shell" || o.typeId === "war:bomb") continue;
+      if (h.distance < best) { best = h.distance; at = { x: eye.x + dir.x * best, y: eye.y + dir.y * best, z: eye.z + dir.z * best }; }
+      break;
+    }
+  } catch {}
+  return { point: at ?? { x: eye.x + dir.x * range, y: eye.y + dir.y * range, z: eye.z + dir.z * range }, hit: !!at };
+}
+// Shells fly in a straight line from the barrel to the crosshair point, 4 blocks per tick.
+function fireShell(v, shooter) {
+  const f = fwdFromYaw(v.getRotation().y), loc = v.location;
+  const muzzle = { x: loc.x + f.x * 4.2, y: loc.y + 1.6, z: loc.z + f.z * 4.2 };
+  const { point } = aimPoint(v, shooter);
+  const dx = point.x - muzzle.x, dy = point.y - muzzle.y, dz = point.z - muzzle.z, l = Math.hypot(dx, dy, dz) || 1;
+  try {
+    const ent = v.dimension.spawnEntity("war:shell", muzzle);
+    shells.push({ ent, pos: muzzle, dir: { x: dx / l, y: dy / l, z: dz / l }, left: l, owner: v.id, src: shooter, dim: v.dimension });
+  } catch {}
+}
+function stepShells() {
+  for (let i = shells.length - 1; i >= 0; i--) {
+    const sh = shells[i];
+    let boom;
+    const step = Math.min(4, sh.left);
+    try {
+      const b = sh.dim.getBlockFromRay(sh.pos, sh.dir, { maxDistance: Math.max(0.1, step), includeLiquidBlocks: false, includePassableBlocks: false });
+      if (b) boom = { x: b.block.location.x + b.faceLocation.x, y: b.block.location.y + b.faceLocation.y, z: b.block.location.z + b.faceLocation.z };
+    } catch {}
+    if (!boom) {
+      try {
+        const crew = riderCache.get(sh.owner) ?? [];
+        const h = sh.dim.getEntitiesFromRay(sh.pos, sh.dir, { maxDistance: Math.max(0.1, step) }).find((x) =>
+          x.entity.id !== sh.owner && !crew.includes(x.entity.id) && x.entity.id !== sh.ent?.id &&
+          ![WAYPOINT, "war:shell", "war:bomb"].includes(x.entity.typeId));
+        if (h) {
+          boom = { x: sh.pos.x + sh.dir.x * h.distance, y: sh.pos.y + sh.dir.y * h.distance, z: sh.pos.z + sh.dir.z * h.distance };
+          hurt(h.entity, 30, sh.src); // direct hit
+        }
+      } catch {}
+    }
+    sh.pos = { x: sh.pos.x + sh.dir.x * step, y: sh.pos.y + sh.dir.y * step, z: sh.pos.z + sh.dir.z * step };
+    sh.left -= step;
+    if (!boom && sh.left <= 0.01) boom = sh.pos; // reached the aim point, or max range in open air
+    if (boom) {
+      explode(sh.dim, boom, 5, { breaksBlocks: !!setting("blockdmg", true), causesFire: false, source: sh.src?.isValid ? sh.src : undefined });
+      try { sh.ent?.remove(); } catch {}
+      shells.splice(i, 1);
+    } else { try { sh.ent?.teleport(sh.pos); } catch {} }
+  }
+}
+function fire(kind, v, pilot, from, vel) {
+  try {
+    const b = v.dimension.spawnEntity(kind === "shell" ? "war:shell" : "war:bomb", from);
+    b.applyImpulse(vel);
+    projectiles.set(b, { kind, owner: v.id, age: 0, src: pilot });
+  } catch {}
+}
+
+function drive(v) {
+  const rideable = v.getComponent("minecraft:rideable");
+  const riders = rideable ? rideable.getRiders() : [];
+  const prevRiders = riderCache.get(v.id) ?? [];
+  for (const r of riders) if (r.typeId === "minecraft:player" && !prevRiders.includes(r.id)) { mountedAt.set(r.id, tick()); fireRequests.delete(r.id); }
+  riderCache.set(v.id, riders.map((r) => r.id));
+  if (v.typeId !== "war:boat") {
+    const loc0 = v.location;
+    let wet = false;
+    try { wet = !!v.dimension.getBlock({ x: loc0.x, y: loc0.y + (v.typeId === "war:tank" ? 1.0 : 0.3), z: loc0.z })?.typeId.includes("water"); } catch {}
+    if (wet) { // deep water: tanks flood, planes ditch
+      say(`§7A ${v.typeId === "war:plane" ? "war plane" : "tank"} went into the water ${placeName(v.dimension, loc0)}.`);
+      if (v.typeId === "war:plane") { crashPlane(v, riders); return; }
+      for (const r of riders) killReal(r);
+      const dim0 = v.dimension; vstate.delete(v.id); riderCache.delete(v.id);
+      try { v.remove(); } catch {}
+      explode(dim0, loc0, 3, { breaksBlocks: !!setting("blockdmg", true), causesFire: false });
+      return;
+    }
+  }
+  if (tick() % 20 === 0) {
+    const cf = riders.length ? factionOf(riders[0]) : 0;
+    for (let i = 1; i <= NF; i++) { const want = i === cf; if (want !== v.hasTag(`war_f${i}`)) want ? v.addTag(`war_f${i}`) : v.removeTag(`war_f${i}`); }
+  }
+  const players = riders.filter((r) => r.typeId === "minecraft:player");
+  const pilot = players[0];
+  const gunner = v.typeId === "war:tank" ? players[1] ?? pilot : pilot; // 2nd player in a tank aims and fires
+  const st = vstate.get(v.id) ?? { speed: 0, last: v.location, cd: 0, age: 0, dir: undefined };
+  st.age++;
+  const loc = v.location, vel = v.getVelocity();
+  const ground = solidAt(v.dimension, { x: loc.x, y: loc.y - 0.2, z: loc.z });
+  if (pilot && st.age % 5 === 0 && v.typeId !== "war:plane") {
+    const bar = reloadBar(v, st);
+    const role = v.typeId === "war:tank" && gunner !== pilot ? `§7Driver · gunner: ${gunner.name}` : HUD[v.typeId] ?? "";
+    try { pilot.onScreenDisplay.setActionBar(bar ? `${bar}\n${role}` : role); } catch {}
+    if (gunner && gunner !== pilot) { try { gunner.onScreenDisplay.setActionBar(`${bar}\n§7Gunner · aim with mouse · left-click fire`); } catch {} }
+    if (v.typeId === "war:tank" && gunner) { const a = aimPoint(v, gunner); if (a.hit) marker3(v.dimension, a.point, "minecraft:villager_happy"); }
+  }
+  const jump = gunner ? consumeFire(gunner) : false;
+  if (gunner && gunner !== pilot) consumeFire(pilot); // the driver's clicks don't fire
+
+  if (v.typeId === "war:plane") {
+    // ---- flight model: throttle, limited climb/turn, climbing costs speed, stall, ceiling, assists
+    const mv = pilot ? pilot.inputInfo.getMovementVector() : { x: 0, y: 0 };
+    if (st.throttle === undefined) { st.throttle = 0; st.pitch = 0; st.yaw = v.getRotation().y; }
+    if (pilot) st.throttle = Math.max(0, Math.min(1, st.throttle + mv.y * 0.02)); // W/S move the throttle; it holds when released
+    else st.throttle = Math.max(0, st.throttle - 0.02);
+    const RAD = Math.PI / 180;
+    const clearance = (() => { // blocks of air under the plane (up to 40)
+      for (let i = 1; i <= 40; i++) if (solidAt(v.dimension, { x: loc.x, y: loc.y - i, z: loc.z })) return i - 1;
+      return 40;
+    })();
+    let warn = "";
+    if (pilot) {
+      updateBombsight(pilot, v);
+      const look = pilot.getViewDirection();
+      const lookPitch = Math.asin(Math.max(-1, Math.min(1, look.y))) / RAD;
+      // turning: a few degrees per tick, wider when fast
+      const turnRate = 3.2 - Math.min(1.6, st.speed * 1.4);
+      st.yaw = turnToward(st.yaw, pilot.getRotation().y, ground && st.speed < 0.2 ? 2.5 : turnRate);
+      // pitch target: follows the mouse within limits; looking roughly level levels the plane (auto-level)
+      let tp = Math.abs(lookPitch) < 8 ? 0 : Math.max(-35, Math.min(25, lookPitch));
+      if (ground && st.speed < 0.5) tp = 0;                                  // take-off: need speed first
+      if (ground && st.speed >= 0.5) tp = Math.max(tp, lookPitch > 5 ? 10 : 0);
+      if (loc.y > 250) tp = Math.min(tp, -2);                                 // ceiling: thin air
+      if (!ground && st.speed < 0.4) tp = Math.min(tp, -20);                  // stall: the nose drops
+      // ground warning + gentle automatic pull-up (overridden by a deliberate steep dive)
+      const dirNow = { x: -Math.sin(st.yaw * RAD) * Math.cos(st.pitch * RAD), y: Math.sin(st.pitch * RAD), z: Math.cos(st.yaw * RAD) * Math.cos(st.pitch * RAD) };
+      if (!ground && st.speed > 0.45) {
+        let hit = false;
+        try { hit = !!v.dimension.getBlockFromRay({ x: loc.x, y: loc.y + 0.6, z: loc.z }, dirNow, { maxDistance: Math.max(6, st.speed * 40), includeLiquidBlocks: true, includePassableBlocks: false }); } catch {}
+        if (hit) {
+          warn = "§c§l! PULL UP !";
+          let close = false;
+          try { close = !!v.dimension.getBlockFromRay({ x: loc.x, y: loc.y + 0.6, z: loc.z }, dirNow, { maxDistance: Math.max(4, st.speed * 18), includeLiquidBlocks: true, includePassableBlocks: false }); } catch {}
+          if (close && lookPitch > -45) tp = Math.max(tp, 15);
+        }
+      }
+      st.pitch += Math.max(-1.6, Math.min(1.6, tp - st.pitch));
+      if (st.age % 5 === 0 && !ground) { const at = bombAim(v, { x: dirNow.x * st.speed, y: 0, z: dirNow.z * st.speed }); if (at) marker3(v.dimension, at, "minecraft:redstone_ore_dust_particle"); }
+      if (jump && st.cd <= tick() && !ground) {
+        st.cd = tick() + RELOAD["war:plane"];
+        fire("bomb", v, pilot, { x: loc.x, y: loc.y - 1.2, z: loc.z }, { x: dirNow.x * st.speed * 0.8, y: -0.1, z: dirNow.z * st.speed * 0.8 });
+      }
+    } else if (!ground) st.pitch = Math.max(-40, st.pitch - 1.5);           // nobody flying: the nose drops
+    // speed: throttle pulls toward its target; climbing bleeds speed, diving adds it
+    const targetSpeed = st.throttle * 1.1;
+    st.speed += (targetSpeed - st.speed) * 0.02 - Math.sin(st.pitch * RAD) * 0.012;
+    if (ground) st.speed = Math.min(st.speed, targetSpeed + 0.05);
+    st.speed = Math.max(0, Math.min(1.4, st.speed));
+    const dir = { x: -Math.sin(st.yaw * RAD) * Math.cos(st.pitch * RAD), y: Math.sin(st.pitch * RAD), z: Math.cos(st.yaw * RAD) * Math.cos(st.pitch * RAD) };
+    st.dir = dir;
+    let nv = { x: dir.x * st.speed, y: dir.y * st.speed, z: dir.z * st.speed };
+    if (!ground && st.speed < 0.4) nv.y = Math.min(nv.y, -0.15 - (0.4 - st.speed) * 0.5);  // below flying speed it sinks
+    // landing assist: low and slow over the ground settles gently
+    const landing = !ground && clearance < 4 && st.speed < 0.6 && st.pitch <= 2;
+    if (landing) nv.y = Math.max(nv.y, -0.08);
+    if (ground && nv.y < 0) nv.y = 0;
+    if (!pilot && ground) nv = { x: 0, y: 0, z: 0 };
+    v.setRotation({ x: 0, y: st.yaw });
+    v.clearVelocity(); v.applyImpulse(nv);
+    if (pilot && st.age % 5 === 0) {
+      const bar = reloadBar(v, st);
+      const info = `§7Throttle ${Math.round(st.throttle * 100)}% · Speed ${Math.round(st.speed * 20 * 3.6)} km/h · Alt ${Math.round(loc.y)}${loc.y > 245 ? " §e(ceiling)" : ""}${!ground && st.speed < 0.45 ? " §c(STALL)" : ""}`;
+      try { pilot.onScreenDisplay.setActionBar([warn, bar, info].filter(Boolean).join("\n")); } catch {}
+    }
+    // crash: flying fast into anything solid, or hitting the ground hard (a gentle landing is fine)
+    const fast = st.speed > 0.35 || nv.y < -0.25;
+    const moved = dist(st.last, loc);
+    if (st.age > 20 && fast && !landing && (blockedAhead(v, dir, 2.5, [0.3, 1.0, 1.8]) || moved < 0.1 || (ground && nv.y < -0.25))) {
+      crashPlane(v, riders); return;
+    }
+  } else {
+    const boat = v.typeId === "war:boat";
+    let target = { x: 0, z: 0 };
+    if (pilot) {
+      const mv = pilot.inputInfo.getMovementVector();
+      const yaw = turnToward(v.getRotation().y, pilot.getRotation().y, boat ? 5 : 3.5);
+      v.setRotation({ x: 0, y: yaw });
+      let inWater = false;
+      if (boat) { try { inWater = !!v.dimension.getBlock({ x: loc.x, y: loc.y - 0.1, z: loc.z })?.isLiquid || !!v.dimension.getBlock(loc)?.isLiquid; } catch {} }
+      const max = boat ? (inWater ? 0.45 : 0.04) : 0.22;
+      const f = fwdFromYaw(yaw);
+      const sp = mv.y * (mv.y < 0 ? max * 0.5 : max);
+      target = { x: f.x * sp, z: f.z * sp };
+      if (!boat && jump && st.cd <= tick()) {
+        st.cd = tick() + RELOAD["war:tank"];
+        fireShell(v, gunner);
+      }
+    }
+    v.applyImpulse({ x: (target.x - vel.x) * 0.5, y: 0, z: (target.z - vel.z) * 0.5 });
+    if (!boat && st.age % 20 === 0) {
+      for (const r of riders) { try { r.addEffect("invisibility", 45, { showParticles: false }); } catch {} } // crew is inside
+    }
+  }
+  st.last = { x: loc.x, y: loc.y, z: loc.z };
+  st.dim = v.dimension.id;
+  vstate.set(v.id, st);
+}
+function crashPlane(v, riders) {
+  const loc = v.location, dim = v.dimension;
+  stopEngine(v.id);
+  chronLog(`A war plane crashed ${placeName(dim, loc)}${riders.length ? `, killing ${riders.length} aboard` : ""}.`);
+  for (const r of riders) killReal(r);
+  vstate.delete(v.id);
+  riderCache.delete(v.id);
+  try { v.remove(); } catch {}
+  explode(dim, loc, 5, { breaksBlocks: !!setting("blockdmg", true), causesFire: true });
+}
+world.afterEvents.entityDie.subscribe((ev) => {
+  const v = ev.deadEntity;
+  if (v.typeId !== "war:plane" && v.typeId !== "war:tank") return;
+  let loc, dim;
+  try { loc = v.location; dim = v.dimension; } catch {
+    const st = vstate.get(v.id);
+    if (!st) return;
+    loc = st.last; dim = world.getDimension(st.dim ?? "overworld");
+  }
+  if (v.typeId === "war:plane") {
+    for (const id of riderCache.get(v.id) ?? []) { try { world.getEntity(id)?.kill(); } catch {} }
+  }
+  chronLog(`A ${v.typeId === "war:plane" ? "war plane was shot down" : "tank was destroyed"} ${placeName(dim, loc)}.`);
+  explode(dim, loc, v.typeId === "war:plane" ? 5 : 3, { breaksBlocks: !!setting("blockdmg", true), causesFire: v.typeId === "war:plane" });
+});
+
+// Players always get in: soldiers make room (and never keep the driver's seat).
+world.beforeEvents.playerInteractWithEntity.subscribe((ev) => {
+  try {
+    const n = ev.target;
+    if (n?.typeId === NEST) {
+      const r = (n.getComponent("minecraft:rideable")?.getRiders() ?? [])[0];
+      if (r?.typeId === SOLDIER && isFriendly(playerFaction(ev.player), Number(P(r, "war:faction")))) {
+        const p = ev.player;
+        system.run(() => { try { n.getComponent("minecraft:rideable")?.ejectRider(r); n.getComponent("minecraft:rideable")?.addRider(p); note(r, "handed over the gun"); } catch {} });
+        ev.cancel = true; return;
+      }
+    }
+  } catch {}
+  const v = ev.target, p = ev.player;
+  if (!v || !VEHICLES.includes(v.typeId)) return;
+  let riders, seatCount;
+  try { const r = v.getComponent("minecraft:rideable"); riders = r.getRiders(); seatCount = r.seatCount; } catch { return; }
+  if (riders.some((r) => r.id === p.id)) return;
+  const anyPlayer = riders.some((r) => r.typeId === "minecraft:player");
+  const soldiers = riders.filter((r) => r.typeId === SOLDIER);
+  const needDriver = !anyPlayer && soldiers.length > 0;
+  const full = riders.length >= seatCount;
+  if (!needDriver && !full) return; // normal boarding
+  ev.cancel = true;
+  system.run(() => {
+    try {
+      const rd = v.getComponent("minecraft:rideable");
+      const out = needDriver ? soldiers : soldiers.slice(-1);
+      for (const s of out) rd.ejectRider(s);
+      let ok = false;
+      try { ok = rd.addRider(p); } catch {}
+      if (!ok) p.onScreenDisplay.setActionBar("§eSeat cleared. Right-click again to get in.");
+      if (needDriver) system.runTimeout(() => { for (const s of out) { try { if (s.isValid && !isRiding(s)) rd.addRider(s); } catch {} } }, 10);
+    } catch {}
+  });
+});
+function myVehicle(player) {
+  try { const e = player.getComponent("minecraft:riding")?.entityRidingOn; return e && VEHICLES.includes(e.typeId) ? e : undefined; } catch { return undefined; }
+}
+async function vehicleMenu(player, v) {
+  const rideable = v.getComponent("minecraft:rideable");
+  const soldiers = () => rideable.getRiders().filter((x) => x.typeId === SOLDIER);
+  const free = Math.max(0, rideable.seatCount - rideable.getRiders().length);
+  const opts = [];
+  if (v.typeId !== "war:tank") opts.push(["board", `Units: get in  §8(${free} seats free)`], ["guards", "My guards: get in"], ["out", `Units: get out  §8(${soldiers().length} aboard)`]);
+  opts.push(["cam", chaseCam.has(player.id) ? "Camera: back to normal" : "Camera: chase view (pulled back)"]);
+  if (v.typeId === "war:plane") opts.push(["bomb", "Drop bomb"]);
+  if (v.typeId === "war:tank") opts.push(["shell", "Fire cannon"]);
+  opts.push(["army", "Army orders..."]);
+  const af = new ActionFormData().title(v.typeId === "war:plane" ? "War Plane" : v.typeId === "war:tank" ? "Tank" : "Troop Boat")
+    .body("Units within 24 blocks of the vehicle can board.");
+  for (const o of opts) af.button(o[1]);
+  const r = await show(af, player);
+  if (!r || r.canceled || r.selection === undefined) return true;
+  const pick = opts[r.selection][0];
+  if (pick === "army") return false;
+  if (pick === "cam") {
+    if (chaseCam.has(player.id)) { chaseCam.delete(player.id); try { player.camera.clear(); } catch {} }
+    else {
+      try { player.camera.setCamera("minecraft:fixed_boom", { entityOffset: { x: 0, y: 2.5, z: 0 }, viewOffset: { x: 0, y: 0 } }); chaseCam.add(player.id); }
+      catch { player.onScreenDisplay.setActionBar("§cChase camera isn't available in this game version."); }
+    }
+    return true;
+  }
+  const st = vstate.get(v.id);
+  if (pick === "bomb" || pick === "shell") {
+    if (st && st.cd > tick()) { player.onScreenDisplay.setActionBar("§cStill reloading."); return true; }
+    if (st) st.cd = tick() + RELOAD[v.typeId];
+    fireNow(v, player, pick);
+    return true;
+  }
+  if (pick === "out") {
+    const list = soldiers();
+    for (const s of list) {
+      rideable.ejectRider(s);
+      const sv = s;
+      system.runTimeout(() => {
+        if (!sv.isValid) return;
+        const d = sd(sv);
+        tpNear(sv, sv.location, sv.dimension);
+        if (!["follow", "escort"].includes(d.func)) giveFunction(sv, d.div === "garrison" ? "post" : d.div === "guard" ? "stand" : "hold", player);
+      }, 10);
+    }
+    player.onScreenDisplay.setActionBar(`§aUnits out: ${list.length}`);
+    return true;
+  }
+  if (!free) { player.onScreenDisplay.setActionBar("§cNo free seats."); return true; }
+  const pf = playerFaction(player);
+  const cands = v.dimension.getEntities({ type: SOLDIER, location: v.location, maxDistance: 24 }).filter((e) => {
+    const d = sd(e);
+    if (isRiding(e) || d.surr || d.div === "cavalier") return false;
+    return pick === "guards" ? d.div === "guard" && d.owner === player.id : d.div !== "guard" && (!pf || d.faction === pf);
+  }).sort((a, b) => dist(a.location, v.location) - dist(b.location, v.location)).slice(0, free);
+  let n = 0;
+  for (const e of cands) {
+    try { e.teleport({ x: v.location.x, y: v.location.y + 0.5, z: v.location.z }); if (rideable.addRider(e)) n++; } catch {}
+  }
+  player.onScreenDisplay.setActionBar(`§aUnits in: ${n}`);
+  return true;
+}
+function fireNow(v, player, kind) {
+  const loc = v.location, f = fwdFromYaw(v.getRotation().y);
+  if (kind === "bomb") fire("bomb", v, player, { x: loc.x, y: loc.y - 1.2, z: loc.z }, { x: f.x * 0.3, y: -0.1, z: f.z * 0.3 });
+  else fireShell(v, player);
+}
+async function placeVehicle(player, type) {
+  const spot = lookedSpot(player, 16);
+  if (!spot) { player.onScreenDisplay.setActionBar("§7Look at where to place it."); return; }
+  const v = player.dimension.spawnEntity(type, spot);
+  v.setRotation({ x: 0, y: player.getRotation().y });
+  player.onScreenDisplay.setActionBar("§aPlaced. Right-click to get in. Hit it with this item to pick it up.");
+}
+
+// ================================================================ tool dispatch
+const lastUse = new Map();
+function tool(player, typeId, target) {
+  if (!(player instanceof Player)) return;
+  if (tick() - (lastUse.get(player.id) ?? -100) < 6) return;
+  lastUse.set(player.id, tick());
+  const run = (fn) => system.run(() => fn().catch((err) => player.sendMessage(`§cWar Engine error: ${err}`)));
+  if (typeId?.startsWith("war:egg_")) return run(() => eggUse(player, typeId.slice(8)));
+  switch (typeId) {
+    case "war:command_baton": return run(() => batonUse(player));
+    case "war:chronicle": return run(() => chronicleUse(player));
+    case "war:flag": return run(() => placeFlag(player));
+    case "war:unit_wand": return run(() => unitWand(player, target ?? lookedAt(player, SOLDIER)));
+    case "war:boat_item": return run(() => placeVehicle(player, "war:boat"));
+    case "war:plane_item": return run(() => placeVehicle(player, "war:plane"));
+    case "war:tank_item": return run(() => placeVehicle(player, "war:tank"));
+    case "war:war_horn": return run(() => blowHorn(player));
+    case "war:mg_nest_item": return run(() => placeVehicle(player, NEST));
+  }
+}
+system.beforeEvents.startup.subscribe((ev) => {
+  ev.itemComponentRegistry.registerCustomComponent("war:tool", {
+    onUse: (e) => tool(e.source, e.itemStack?.typeId),
+    onUseOn: (e) => tool(e.source, e.itemStack?.typeId),
+  });
+  ev.blockComponentRegistry.registerCustomComponent("war:table", {
+    onPlayerInteract: (e) => { const p = e.player; if (p) system.run(() => warTable(p).catch(() => {})); },
+  });
+});
+world.afterEvents.itemUse.subscribe((ev) => tool(ev.source, ev.itemStack?.typeId));
+world.afterEvents.playerInteractWithEntity.subscribe((ev) => {
+  if (ev.target?.typeId !== SOLDIER) return;
+  tool(ev.player, (ev.beforeItemStack ?? ev.itemStack)?.typeId, ev.target);
+});
+function lookedAt(player, type) {
+  try { return player.getEntitiesFromViewDirection({ maxDistance: 16, type })[0]?.entity; } catch { return undefined; }
+}
+function lookedSpot(player, maxD = 64) {
+  const hit = player.getBlockFromViewDirection({ maxDistance: maxD });
+  if (!hit) return undefined;
+  const b = hit.block.location;
+  const off = { Up: [0, 1, 0], Down: [0, -1, 0], North: [0, 0, -1], South: [0, 0, 1], East: [1, 0, 0], West: [-1, 0, 0] }[hit.face] ?? [0, 1, 0];
+  return { x: b.x + 0.5 + off[0], y: b.y + off[1], z: b.z + 0.5 + off[2] };
+}
+function spawnPoints(player, count) {
+  const v = player.getViewDirection();
+  const base = lookedSpot(player, 48) ?? { x: player.location.x + v.x * 3, y: player.location.y, z: player.location.z + v.z * 3 };
+  const len = Math.hypot(v.x, v.z) || 1, fwd = { x: v.x / len, z: v.z / len }, right = { x: -fwd.z, z: fwd.x };
+  const perRow = Math.min(6, count), pts = [];
+  for (let i = 0; i < count; i++) {
+    const row = Math.floor(i / perRow), col = (i % perRow) - (perRow - 1) / 2;
+    pts.push({ x: base.x + right.x * col * 1.5 + fwd.x * row * 1.5, y: base.y, z: base.z + right.z * col * 1.5 + fwd.z * row * 1.5 });
+  }
+  return { base, pts };
+}
+function spawnArmy(player, s, count) {
+  const { base, pts } = spawnPoints(player, count);
+  const slot = ANCHORED.includes(s.func) ? makeWaypoint(player.dimension, base) : undefined;
+  let n = 0;
+  for (const p of pts) {
+    try {
+      const e = player.dimension.spawnEntity(SOLDIER, p, { spawnEvent: "war:init" });
+      const MIXG = ["rifle", "smg", "semi", "mg"], MIXM = ["sword", "crossbow"];
+      const w = s.weapon === "mixguns" ? MIXG[n % 4] : s.weapon === "mixmelee" ? MIXM[n % 2] : s.weapon;
+      const fin = setupSoldier(e, { ...s, weapon: w, ranged: w !== "sword", func: "__none", owner: player.id }, player);
+      giveFunction(fin, s.func, player, slot);
+      if (s.div === "houndmaster") {
+        for (let i = 0; i < 5; i++) {
+          const h = player.dimension.spawnEntity(HOUND, { x: p.x + (Math.random() - 0.5) * 2, y: p.y, z: p.z + (Math.random() - 0.5) * 2 });
+          h.setDynamicProperty("war:master", fin.id);
+          setP(h, "war:faction", s.faction);
+          applyRelations(h);
+        }
+      }
+      n++;
+    } catch {}
+  }
+  return n;
+}
+
+// ================================================================ eggs (always a form, prefilled)
+async function eggUse(player, div) {
+  if (!DIV[div]) return;
+  const key = `war:egg_${div}`;
+  const def = getJSON(player, key, { faction: playerFaction(player) || 1, squad: 0, func: 0, weapon: "sword", count: 1, radius: 8 });
+  const WL = div === "cavalier" ? WEAPONS.slice(0, 2) : [...WEAPONS, ["mixguns", "Mixed guns (rifle / SMG / semi-auto / MG)"], ["mixmelee", "Mixed melee (swords + crossbows)"]];
+  const wl = WL.map((w) => (w[0] === "sword" && div === "cavalier" ? "Spear" : w[1]));
+  const wIdx = Math.max(0, WL.findIndex((w) => w[0] === (def.weapon ?? (def.ranged ? "crossbow" : "sword"))));
+  const funcs = FUNCS[div];
+  const f = new ModalFormData().title(`Spawn: ${DIV[div].name}`)
+    .dropdown("Faction", factionList(), { defaultValueIndex: Math.max(0, def.faction - 1) })
+    .dropdown("Squad", squadList(def.faction, "No squad"), { defaultValueIndex: def.squad })
+    .dropdown("Function", funcs.map((x) => x[1]), { defaultValueIndex: Math.min(def.func, funcs.length - 1) })
+    .dropdown("Weapon", DIV[div].weapon ? wl : [div === "medic" ? "None (heals)" : "Snowballs, then Crossbow"], { defaultValueIndex: DIV[div].weapon ? wIdx : 0 })
+    .slider("How many", 1, 30, { valueStep: 1, defaultValue: def.count })
+    .slider("Patrol / sentry radius", 4, 150, { valueStep: 2, defaultValue: def.radius });
+  const r = await show(f, player);
+  if (!r || r.canceled || !r.formValues) return;
+  const v = r.formValues;
+  const cfg = { faction: Number(v[0]) + 1, squad: Number(v[1]), func: Number(v[2]), weapon: DIV[div].weapon ? WL[Number(v[3])][0] : "sword", count: Number(v[4]), radius: Number(v[5]) };
+  setJSON(player, key, cfg);
+  const n = spawnArmy(player, { faction: cfg.faction, squad: cfg.squad, weapon: cfg.weapon, ranged: cfg.weapon !== "sword", div, radius: cfg.radius, func: funcs[cfg.func][0] }, cfg.count);
+  player.onScreenDisplay.setActionBar(`§aSpawned ${n} ${factionLabel(cfg.faction)} §a${DIV[div].name}${n > 1 ? "s" : ""} §7(${funcs[cfg.func][1]}${cfg.squad ? ", " + squadName(cfg.faction, cfg.squad) : ""})`);
+}
+
+// ================================================================ Command Baton (army only)
+const ORDERS = [["charge", "Charge POS"], ["hold", "Hold here"], ["patrol", "Patrol here"], ["follow", "Follow me"], ["fallback", "Fall back"], ["board", "Board the vehicle I'm looking at"], ["mark", "Mark this spot (where I'm standing)"]];
+const mapFunc = (order, div) => (div === "garrison" ? { hold: "post", patrol: "patrol", follow: "follow", charge: "charge" } : { hold: "hold", patrol: "patrol", follow: "follow", charge: "charge" })[order];
+
+async function batonUse(player) {
+  const inGeneral = generals.has(player.id);
+  try { await batonUseInner(player); }
+  finally { if (inGeneral && generals.has(player.id)) { endGeneral(player); player.onScreenDisplay.setActionBar("§7General's view closed."); } }
+}
+async function batonUseInner(player) {
+  const veh = myVehicle(player);
+  if (veh && (await vehicleMenu(player, veh))) return;
+  let cfg = getJSON(player, "war:lastorder", undefined);
+  if (!cfg || !player.isSneaking) {
+    const def = cfg ?? { faction: playerFaction(player), order: 0, squad: 0, count: 0, radius: 200 };
+    const ff = new ActionFormData().title("Orders: which faction?");
+    const facOpts = [];
+    if (playerFaction(player)) { facOpts.push(playerFaction(player)); ff.button(`My faction: ${factionLabel(playerFaction(player))}`); }
+    facOpts.push(0); ff.button("All factions");
+    for (let i = 1; i <= NF; i++) if (i !== playerFaction(player)) { facOpts.push(i); ff.button(factionLabel(i)); }
+    const fr = await show(ff, player);
+    if (!fr || fr.canceled || fr.selection === undefined) return;
+    const fac = facOpts[fr.selection];
+    const of = new ModalFormData().title(`Orders: ${factionLabel(fac, true)}`)
+      .dropdown("Order", ORDERS.map((o) => o[1]), { defaultValueIndex: def.order })
+      .dropdown("Squad (Garrison only obeys when its squad is picked)", squadList(fac, "All squads"), { defaultValueIndex: fac === def.faction ? def.squad : 0 })
+      .slider("How many (0 = all)", 0, 100, { valueStep: 5, defaultValue: def.count })
+      .slider("Soldiers within (blocks)", 16, 200, { valueStep: 8, defaultValue: def.radius })
+      .dropdown("Stance", ["Aggressive (chase what they see)", "Defensive (hold and shoot what comes)", "Hold fire (only shoot back)"], { defaultValueIndex: Math.max(0, ["aggressive", "defensive", "holdfire"].indexOf(def.stance ?? "aggressive")) })
+      .slider("Area of operations (blocks)", 40, 200, { valueStep: 10, defaultValue: def.ao ?? 100 })
+      .dropdown("Freedom", ["Use judgment (fight anywhere in the area, help nearby friends)", "Exactly as ordered"], { defaultValueIndex: def.free === false ? 1 : 0 });
+    const or = await show(of, player);
+    if (!or || or.canceled || !or.formValues) return;
+    const v = or.formValues.map(Number);
+    cfg = { faction: fac, order: v[0], squad: v[1], count: v[2], radius: v[3], stance: ["aggressive", "defensive", "holdfire"][v[4]] ?? "aggressive", ao: Math.round(v[5] ?? 100), free: v[6] !== 1 };
+    if (ORDERS[cfg.order][0] === "mark") { await markSpot(player); return; }
+    if (ORDERS[cfg.order][0] === "charge") {
+      const tf = new ActionFormData().title("Charge POS: where?").button("Where I'm looking (any distance)").button("Nearest enemy war flag")
+        .button("Forward").button("Left").button("Right").button("Coordinates").button("Marked spot");
+      const tr = await show(tf, player);
+      if (!tr || tr.canceled || tr.selection === undefined) return;
+      cfg.target = tr.selection;
+      cfg.far = def.far ?? 100;
+      if (tr.selection === 6) {
+        const mk = await pickMark(player);
+        if (!mk) return;
+        cfg.target = 5; cfg.cx = mk.x; cfg.cz = mk.z; cfg.cy = mk.y;
+      }
+      const THEN = ["hold", "patrol"];
+      const df = new ModalFormData().title("Charge POS");
+      if (tr.selection >= 2 && tr.selection <= 4) df.slider("How far (blocks)", 25, 1000, { valueStep: 25, defaultValue: Math.min(1000, def.far ?? 100) });
+      if (tr.selection === 5) {
+        df.textField("X", "e.g. 1200", { defaultValue: String(Math.round(def.cx ?? player.location.x)) });
+        df.textField("Z", "e.g. -340", { defaultValue: String(Math.round(def.cz ?? player.location.z)) });
+      }
+      df.dropdown("When they arrive", ["Hold the area", "Patrol the area"], { defaultValueIndex: Math.max(0, THEN.indexOf(def.then ?? "hold")) });
+      const dr = await show(df, player);
+      if (!dr || dr.canceled || !dr.formValues) return;
+      const fv = dr.formValues;
+      if (tr.selection >= 2 && tr.selection <= 4) cfg.far = Number(fv[0]);
+      if (tr.selection === 5) {
+        cfg.cy = undefined;
+        cfg.cx = Number(String(fv[0]).trim()); cfg.cz = Number(String(fv[1]).trim());
+        if (!Number.isFinite(cfg.cx) || !Number.isFinite(cfg.cz)) { player.sendMessage("§cX and Z must be numbers."); return; }
+      }
+      cfg.then = THEN[Number(fv[fv.length - 1])] ?? "hold";
+    }
+    setJSON(player, "war:lastorder", cfg);
+  }
+  await giveOrder(player, cfg);
+}
+
+function chargePoint(player, cfg) {
+  if (cfg.target === 0) return generals.get(player.id)?.cursor ?? aimFar(player);
+  if (cfg.target === 5) return { x: cfg.cx + 0.5, y: cfg.cy, z: cfg.cz + 0.5 };
+  if (cfg.target === 1) {
+    const f = nearestFlag(player.dimension, player.location, (fl) => !P(fl, "war:rally") &&
+      (cfg.faction ? isHostile(cfg.faction, Number(P(fl, "war:faction"))) : Number(P(fl, "war:faction")) !== playerFaction(player)), 400);
+    return f ? { slot: slotOf(f) } : undefined;
+  }
+  const yaw = player.getRotation().y + (cfg.target === 3 ? -90 : cfg.target === 4 ? 90 : 0);
+  const f = fwdFromYaw(yaw);
+  // far points may be in unloaded land: the march finds the ground when it gets there
+  return { x: player.location.x + f.x * cfg.far, y: player.location.y, z: player.location.z + f.z * cfg.far };
+}
+
+async function giveOrder(player, cfg) {
+  try { await giveOrderInner(player, cfg); }
+  catch (err) { player.onScreenDisplay.setActionBar(`§cThat order couldn't be given here (${String(err).slice(0, 60)}).`); }
+}
+async function giveOrderInner(player, cfg) {
+  let order = ORDERS[cfg.order][0];
+  if (order === "mark") { await markSpot(player); return; }
+  const now = tick();
+  let pool = player.dimension.getEntities({ type: SOLDIER, location: player.location, maxDistance: cfg.radius }).filter((e) => {
+    const d = sd(e);
+    if (d.surr || d.div === "guard" || d.div === "medic" || isRiding(e)) return false;
+    if (cfg.faction && d.faction !== cfg.faction) return false;
+    if (cfg.squad && d.squad !== cfg.squad) return false;
+    if (d.div === "garrison" && !cfg.squad) return false; // garrison only answers to its own squad
+    return true;
+  });
+  // fresh soldiers first, then nearest
+  pool.sort((a, b) => {
+    const fa = now - Number(a.getDynamicProperty("war:ordt") ?? -99999) < 2400 ? 1 : 0;
+    const fb = now - Number(b.getDynamicProperty("war:ordt") ?? -99999) < 2400 ? 1 : 0;
+    return fa - fb || dist(a.location, player.location) - dist(b.location, player.location);
+  });
+  if (cfg.count) pool = pool.slice(0, cfg.count);
+  if (!pool.length) { player.onScreenDisplay.setActionBar("§7No soldiers matched that order."); return; }
+
+  if (order === "board") {
+    let veh;
+    try { veh = player.getEntitiesFromViewDirection({ maxDistance: 64 }).map((h) => h.entity).find((x) => VEHICLES.includes(x.typeId)); } catch {}
+    if (!veh) { player.onScreenDisplay.setActionBar("§cLook at a boat, plane or tank."); return; }
+    const rd = veh.getComponent("minecraft:rideable");
+    const free = Math.max(0, rd.seatCount - rd.getRiders().length);
+    let n = 0;
+    for (const e of pool.filter((x) => sd(x).div !== "cavalier").slice(0, free)) {
+      try { e.teleport({ x: veh.location.x, y: veh.location.y + 0.5, z: veh.location.z }); if (rd.addRider(e)) { n++; e.setDynamicProperty("war:ordt", now); } } catch {}
+    }
+    player.onScreenDisplay.setActionBar(`§eBoarded: §f${n} §7(${free - n} seats left)`);
+    return;
+  }
+  let slot, spotCenter, march;
+  if (order === "charge") {
+    const pt = chargePoint(player, cfg);
+    if (!pt) { player.onScreenDisplay.setActionBar("§cCouldn't find that position."); return; }
+    let dest = pt;
+    if ("slot" in pt) { const fl = marker(pt.slot); dest = fl ? { x: fl.location.x, y: fl.location.y, z: fl.location.z } : undefined; }
+    const cxz = pool.reduce((a, e) => ({ x: a.x + e.location.x / pool.length, y: a.y + e.location.y / pool.length, z: a.z + e.location.z / pool.length }), { x: 0, y: 0, z: 0 });
+    let near = false;
+    try { near = !!dest && dist(cxz, dest) <= 14 && Math.abs((dest.y ?? cxz.y) - cxz.y) <= 1 && !!player.dimension.getBlock(dest) && localReach(player.dimension, cxz, dest); } catch {}
+    if (near) { slot = makeWaypoint(player.dimension, dest); march = undefined; }       // close and on the same level: Minecraft walks them there
+    else { march = dest ? startMarch(player, pool, dest, cfg.then ?? "hold") : undefined; slot = march ? march.lanes[0] : 0; }
+  } else if (order === "hold" || order === "patrol") {
+    const spot = generals.get(player.id)?.cursor ?? aimFar(player);
+    if (!spot) { player.onScreenDisplay.setActionBar("§cLook at the ground where they should go."); return; }
+    let loaded = !spot.estimated;
+    try { if (loaded) loaded = !!player.dimension.getBlock(spot); } catch { loaded = false; }
+    if (!loaded || dist(spot, player.location) > 48) {
+      // far away: march there in formation first, then hold / patrol
+      march = startMarch(player, pool, spot, order);
+      if (!march) { spotCenter = spot; slot = makeWaypoint(player.dimension, spot); }
+      cfg = { ...cfg, then: order };
+      order = "charge";
+      slot = march.lanes[0];
+    } else {
+      spotCenter = spot;
+      slot = makeWaypoint(player.dimension, spot);
+    }
+  }
+  if ((order === "charge" || order === "hold" || order === "patrol") && !slot) { gcWaypoints(allOf(SOLDIER)); player.onScreenDisplay.setActionBar("§eMarkers were full and have been cleaned up. Give the order again."); return; }
+  let n = 0;
+  for (const e of pool) {
+    try {
+      freshMind(e);                                            // the newest order overrides everything
+      e.setDynamicProperty("war:ordt", now);
+      e.setDynamicProperty("war:ao", cfg.ao ?? 100);
+      e.setDynamicProperty("war:free", cfg.free !== false);
+      e.setDynamicProperty("war:cmdr", player.id);
+      if (order !== "fallback") e.setDynamicProperty("war:stance", cfg.stance ?? "aggressive");
+      if (order === "fallback") {
+        e.setDynamicProperty("war:retreat", true);
+        e.setDynamicProperty("war:retreatUntil", now + 600);
+        updateName(e); setJSON(e, "war:st", {}); think(e);
+      } else if (spotCenter) {
+        // each soldier gets its own spot around the target instead of one crowded point
+        giveFunction(e, mapFunc(order, sd(e).div), player, formationSlot(e.dimension, spotCenter, e, order === "patrol" ? 4 : 2.5) || slot);
+      } else if (march) {
+        e.setDynamicProperty("war:then", cfg.then ?? "hold");
+        giveFunction(e, mapFunc(order, sd(e).div), player, march.lanes[n % march.lanes.length]); // each soldier gets a lane
+      } else {
+        giveFunction(e, mapFunc(order, sd(e).div), player, slot);
+      }
+      n++;
+    } catch {}
+  }
+  player.onScreenDisplay.setActionBar(`§e${ORDERS[cfg.order][1]}: §f${n} soldier${n === 1 ? "" : "s"} §7(sneak + use repeats)`);
+}
+
+// ================================================================ Unit Wand
+const skinChoices = () => SKINS.map((name, i) => ({ name, slot: i + 1 })).filter((s) => s.name && s.name.trim());
+async function unitWand(player, e) {
+  if (e && (isDowned(e) || isPow(e))) { await captiveMenu(player, e); return; }
+  const tpl = getJSON(player, "war:template", undefined);
+  const opts = [];
+  const mine = e && sd(e).div === "guard" && sd(e).owner === player.id;
+  if (e) {
+    opts.push(["edit", "Edit this soldier"], ["copy", "Copy this soldier"]);
+    if (mine) opts.push(["guards", "Guard orders"]);
+    if (tpl) opts.push(["paste1", "Paste copy onto this soldier"]);
+    opts.push(["dismiss1", "§cDismiss this soldier"]);
+  } else {
+    opts.push(["guards", "My guards: orders"]);
+  }
+  if (tpl) opts.push(["spawn", "Spawn copies"], ["pasteN", "Paste copy onto nearby soldiers"]);
+  opts.push(["dismissN", "§cDismiss a faction nearby"]);
+  const af = new ActionFormData().title("Unit Wand")
+    .body((e ? e.nameTag + "\n" : "") + (tpl ? `§7Copied: ${factionLabel(tpl.faction)} §7${DIV[tpl.div]?.name}` : "§7Nothing copied."));
+  for (const o of opts) af.button(o[1]);
+  const r = await show(af, player);
+  if (!r || r.canceled || r.selection === undefined) return;
+  const pick = opts[r.selection][0];
+  if (e && !e.isValid) return;
+
+  if (pick === "edit") await editSoldier(player, e);
+  else if (pick === "copy") { setJSON(player, "war:template", snapshot(e)); player.onScreenDisplay.setActionBar("§aCopied."); }
+  else if (pick === "paste1") pasteOnto(e, tpl, player);
+  else if (pick === "dismiss1") {
+    for (const h of allOf(HOUND)) if (h.getDynamicProperty("war:master") === e.id) h.remove();
+    e.remove(); player.onScreenDisplay.setActionBar("§7Dismissed.");
+  }
+  else if (pick === "guards") await guardOrders(player, mine ? e : undefined);
+  else if (pick === "spawn") {
+    const mr = await show(new ModalFormData().title("Spawn copies").slider("How many", 1, 30, { valueStep: 1, defaultValue: 5 }), player);
+    if (!mr || mr.canceled || !mr.formValues) return;
+    const n = spawnArmy(player, tpl, Number(mr.formValues[0]));
+    player.onScreenDisplay.setActionBar(`§aSpawned ${n} copies.`);
+  } else if (pick === "pasteN") {
+    const mr = await show(new ModalFormData().title("Paste onto nearby soldiers")
+      .slider("Radius", 4, 64, { valueStep: 4, defaultValue: 16 })
+      .toggle("Only soldiers of the copied faction", { defaultValue: true })
+      .toggle("Skin only (keep everything else)", { defaultValue: true }), player);
+    if (!mr || mr.canceled || !mr.formValues) return;
+    const [rad, same, skinOnly] = mr.formValues;
+    let n = 0;
+    for (const s of player.dimension.getEntities({ type: SOLDIER, location: player.location, maxDistance: Number(rad) })) {
+      if (same && sd(s).faction !== tpl.faction) continue;
+      if (skinOnly) setP(s, "war:skin", tpl.skin); else pasteOnto(s, tpl, player);
+      n++;
+    }
+    player.onScreenDisplay.setActionBar(`§aPasted onto ${n} soldiers.`);
+  } else if (pick === "dismissN") {
+    const mr = await show(new ModalFormData().title("Dismiss soldiers")
+      .dropdown("Faction", ["All factions", ...factionList()], { defaultValueIndex: 0 })
+      .slider("Radius", 8, 200, { valueStep: 8, defaultValue: 48 }), player);
+    if (!mr || mr.canceled || !mr.formValues) return;
+    const fac = Number(mr.formValues[0]);
+    let n = 0;
+    for (const t of [SOLDIER, HOUND]) for (const s of player.dimension.getEntities({ type: t, location: player.location, maxDistance: Number(mr.formValues[1]) })) {
+      if (fac && Number(P(s, "war:faction")) !== fac) continue;
+      delete getRefs()[s.id];
+      s.remove(); n++;
+    }
+    player.onScreenDisplay.setActionBar(`§7Dismissed ${n}.`);
+  }
+}
+async function editSoldier(player, e) {
+  const d = sd(e);
+  const funcs = FUNCS[d.div];
+  const skins = skinChoices();
+  const f = new ModalFormData().title(`Edit ${DIV[d.div].name}`)
+    .dropdown("Faction", ["None", ...factionList()], { defaultValueIndex: d.faction })
+    .dropdown("Squad", squadList(d.faction, "No squad"), { defaultValueIndex: d.squad })
+    .dropdown("Function", funcs.map((x) => x[1]), { defaultValueIndex: Math.max(0, funcs.findIndex((x) => x[0] === d.func)) })
+    .dropdown("Weapon", DIV[d.div].weapon ? (d.div === "cavalier" ? WEAPONS.slice(0, 2) : WEAPONS).map((w) => (w[0] === "sword" && d.div === "cavalier" ? "Spear" : w[1])) : ["(fixed for this unit)"], { defaultValueIndex: DIV[d.div].weapon ? Math.max(0, (d.div === "cavalier" ? WEAPONS.slice(0, 2) : WEAPONS).findIndex((w) => w[0] === d.weapon)) : 0 })
+    .dropdown("Armor", ARMOR_LABEL, { defaultValueIndex: Math.max(0, ARMOR.indexOf(d.armor)) })
+    .dropdown("Skin", ["Faction uniform", ...skins.map((s) => s.name)], { defaultValueIndex: Math.max(0, skins.findIndex((s) => s.slot === d.skin) + 1) })
+    .slider("Patrol / sentry radius", 4, 150, { valueStep: 2, defaultValue: Math.min(150, Math.max(4, d.radius)) })
+    .textField("Name (blank = automatic)", "e.g. Sgt. Rossi", { defaultValue: d.custom })
+    .dropdown("Stance", ["Aggressive", "Defensive", "Hold fire"], { defaultValueIndex: Math.max(0, ["aggressive", "defensive", "holdfire"].indexOf(String(e.getDynamicProperty("war:stance") ?? "aggressive"))) });
+  const r = await show(f, player);
+  if (!r || r.canceled || !r.formValues || !e.isValid) return;
+  const v = r.formValues;
+  const skinIdx = Number(v[5]);
+  const wpn = DIV[d.div].weapon ? (d.div === "cavalier" ? WEAPONS.slice(0, 2) : WEAPONS)[Number(v[3])][0] : d.weapon;
+  const s = { ...snapshot(e), faction: Number(v[0]), squad: Number(v[1]), weapon: wpn, ranged: wpn !== "sword",
+    armor: ARMOR[Number(v[4])] ?? "none",
+    skin: skinIdx ? skins[skinIdx - 1].slot : 0, radius: Number(v[6]), custom: String(v[7]).trim(), owner: d.owner, func: "__none" };
+  const func = funcs[Number(v[2])][0];
+  e.setDynamicProperty("war:stance", ["aggressive", "defensive", "holdfire"][Number(v[8])] ?? "aggressive");
+  const ne = setupSoldier(e, s, player, { heal: false });
+  giveFunction(ne, func, player, ANCHORED.includes(func) && func === d.func ? d.goal || undefined : undefined);
+  player.onScreenDisplay.setActionBar("§aSoldier updated.");
+}
+function pasteOnto(e, tpl, player) {
+  if (!e.isValid) return;
+  const d = sd(e);
+  // division stays the soldier's own
+  const s = { ...tpl, div: d.div, custom: d.custom, owner: d.owner, func: FUNCS[d.div].some((x) => x[0] === tpl.func) ? tpl.func : d.func };
+  setupSoldier(e, s, player, { heal: false });
+}
+async function guardOrders(player, one) {
+  const f = new ModalFormData().title("Guard orders")
+    .dropdown("Order", ["Escort me", "Stand guard here", "Patrol here"], { defaultValueIndex: 0 })
+    .toggle("Apply to all my guards", { defaultValue: !one });
+  const r = await show(f, player);
+  if (!r || r.canceled || !r.formValues) return;
+  const func = ["escort", "stand", "patrol"][Number(r.formValues[0])];
+  const targets = r.formValues[1] || !one
+    ? allOf(SOLDIER).filter((g) => sd(g).div === "guard" && sd(g).owner === player.id)
+    : [one];
+  const spot = func === "escort" ? undefined : lookedSpot(player, 64) ?? player.location;
+  const slot = spot ? makeWaypoint(player.dimension, spot) : undefined;
+  for (const g of targets) { try { giveFunction(g, func, player, slot); } catch {} }
+  player.onScreenDisplay.setActionBar(`§aGuards: ${["Escort", "Stand guard", "Patrol"][Number(r.formValues[0])]} (${targets.length})`);
+}
+
+// ================================================================ Flags
+async function placeFlag(player) {
+  const spot = lookedSpot(player, 32);
+  if (!spot) { player.onScreenDisplay.setActionBar("§7Look at the ground to place a flag."); return; }
+  const f = new ModalFormData().title("Place a flag")
+    .dropdown("Faction", factionList(), { defaultValueIndex: Math.max(0, playerFaction(player) - 1) })
+    .dropdown("Type", ["War flag (heart of the battle)", "Rally flag (wounded fall back here)"], { defaultValueIndex: 0 });
+  const r = await show(f, player);
+  if (!r || r.canceled || !r.formValues) return;
+  const fac = Number(r.formValues[0]) + 1, rally = r.formValues[1] === 1;
+  const fl = player.dimension.spawnEntity(FLAG, spot);
+  setP(fl, "war:faction", fac);
+  setP(fl, "war:rally", rally);
+  if (!claimSlot(fl)) { fl.remove(); player.sendMessage("§cToo many flags/markers in the world."); return; }
+  if (!rally) warFlagPlaced(fac);
+  chronLog(`${player.name} raised a ${rally ? "rally" : "war"} flag for ${factionLabel(fac, true)} ${placeName(player.dimension, spot)}.`);
+  player.onScreenDisplay.setActionBar(`§a${rally ? "Rally" : "War"} flag placed for ${factionLabel(fac)}§a.`);
+}
+
+// ================================================================ War Table
+async function warTable(player, pre) {
+  const af = new ActionFormData().title("War Table").body(`Your faction: ${factionLabel(playerFaction(player))}`)
+    .button("Join a faction").button("Leave my faction").button("Diplomacy").button("Name factions").button("Name squads").button("Settings").button("Coalitions").button("War archive").button("Test battle");
+  const r = pre !== undefined ? { selection: pre, canceled: false } : await show(af, player);
+  if (!r || r.canceled || r.selection === undefined) return;
+  if (r.selection === 8) { await testBattle(player); return; }
+  const pickFaction = async (title) => {
+    const jf = new ActionFormData().title(title);
+    for (const l of factionList()) jf.button(l);
+    const jr = await show(jf, player);
+    return jr && !jr.canceled && jr.selection !== undefined ? jr.selection + 1 : 0;
+  };
+  if (r.selection === 0) {
+    const f = await pickFaction("Join a faction");
+    if (!f) return;
+    setPlayerFaction(player, f);
+    say(`§e${player.name} §rjoined ${factionLabel(f)}`);
+  } else if (r.selection === 1) {
+    setPlayerFaction(player, 0);
+    player.sendMessage("§7You left your faction. Soldiers will ignore you.");
+  } else if (r.selection === 2) {
+    const a = await pickFaction("Diplomacy: pick a faction");
+    if (!a) return;
+    while (true) {
+      const others = Array.from({ length: NF }, (_, i) => i + 1).filter((b) => b !== a);
+      const mf = new ActionFormData().title(`Relations: ${factionLabel(a, true)}`).body("Tap a faction to set its relation. Applies to both sides instantly.");
+      for (const b of others) mf.button(`${factionLabel(b)}\n${REL_TXT[relAt(a, b)]}`);
+      const mr = await show(mf, player);
+      if (!mr || mr.canceled || mr.selection === undefined) return;
+      const b = others[mr.selection];
+      const cur = relAt(a, b);
+      const vals = ["1", "0", "2"];
+      const cf = new ActionFormData().title(`${factionLabel(a, true)} and ${factionLabel(b, true)}`).body(`Currently: ${REL_TXT[cur]}`);
+      for (const val of vals) cf.button(`${REL_TXT[val]}${val === cur ? "  §8(current)" : ""}`);
+      const cr = await show(cf, player);
+      if (!cr || cr.canceled || cr.selection === undefined) continue;
+      setRelPair(a, b, vals[cr.selection]);
+      for (const e of [...allOf(SOLDIER), ...allOf(HOUND)]) { try { applyRelations(e); } catch {} }
+    }
+  } else if (r.selection === 3) {
+    const names = getNames();
+    const nf = new ModalFormData().title("Name factions");
+    COLORS.forEach(([c, code], i) => nf.textField(`${code}${c}`, "country name (optional)", { defaultValue: names[i] ?? "" }));
+    const nr = await show(nf, player);
+    if (!nr || nr.canceled || !nr.formValues) return;
+    namesCache = nr.formValues.map((x) => String(x).trim().slice(0, 24));
+    world.setDynamicProperty("war:names", JSON.stringify(namesCache));
+    world.setDynamicProperty("war:relv", relVersion() + 1);
+    player.sendMessage("§aFaction names saved.");
+  } else if (r.selection === 4) {
+    const f = await pickFaction("Name squads: pick a faction");
+    if (!f) return;
+    const cur = getSquads()[f] ?? [];
+    const nf = new ModalFormData().title(`Squads of ${factionLabel(f, true)}`);
+    for (let i = 1; i <= 9; i++) nf.textField(`Squad ${i}`, "e.g. Castle", { defaultValue: cur[i - 1] ?? "" });
+    const nr = await show(nf, player);
+    if (!nr || nr.canceled || !nr.formValues) return;
+    const all = getSquads();
+    all[f] = nr.formValues.map((x) => String(x).trim().slice(0, 20));
+    squadsCache = all;
+    world.setDynamicProperty("war:squads", JSON.stringify(all));
+    world.setDynamicProperty("war:relv", relVersion() + 1);
+    player.sendMessage("§aSquad names saved.");
+  } else if (r.selection === 6) {
+    await coalitions(player);
+  } else if (r.selection === 7) {
+    await warArchive(player);
+  } else if (r.selection === 5) {
+    const which = await show(new ActionFormData().title("Settings").button("General").button("Gun loadouts (per faction)").button("Realism (battle tuning)").button("Faction skins").button("« Back"), player);
+    if (!which || which.canceled || which.selection === undefined) return;
+    if (which.selection === 4) return warTable(player);
+    if (which.selection === 1) { await loadoutMenu(player); return warTable(player, 5); }
+    if (which.selection === 3) { await factionSkinMenu(player); return warTable(player, 5); }
+    if (which.selection === 2) {
+      const cur = (k) => Math.round(Number(setting(k, 100)));
+      const rf = new ModalFormData().title("Realism")
+        .slider("Damage (% of normal)", 25, 200, { valueStep: 25, defaultValue: cur("r_dmg") })
+        .slider("Reaction speed (% of normal)", 50, 200, { valueStep: 25, defaultValue: cur("r_react") });
+      const rr = await show(rf, player);
+      if (!rr || rr.canceled || !rr.formValues) return;
+      world.setDynamicProperty("war:set_r_dmg", Math.round(Number(rr.formValues[0])));
+      world.setDynamicProperty("war:set_r_react", Math.round(Number(rr.formValues[1])));
+      player.sendMessage(`§aRealism saved: damage ${rr.formValues[0]}%, reaction speed ${rr.formValues[1]}%.`);
+      return warTable(player, 5);
+    }
+    const sf = new ModalFormData().title("Settings")
+      .dropdown("When a war flag is captured", ["The two factions become Neutral", "Nearby losers surrender (war continues)"], { defaultValueIndex: setting("capture", "neutral") === "neutral" ? 0 : 1 })
+      .toggle("Explosions break blocks (bombs, crashes)", { defaultValue: !!setting("blockdmg", true) })
+      .dropdown("Spacing between moving soldiers", ["1 block", "1.5 blocks", "2 blocks"], { defaultValueIndex: Math.max(0, [1, 1.5, 2].indexOf(Number(setting("spacing", 1.5)))) })
+      .toggle("Show soldier decisions (for testing)", { defaultValue: !!setting("readout", false) })
+      .toggle("Soldiers spare villagers and traders", { defaultValue: !!setting("civil", true) })
+      .toggle("Soldiers may place / break blocks when stuck (restored after ~1 min)", { defaultValue: !!setting("build", true) })
+      .toggle("Close-combat drills (cover-and-move, shoot-and-scoot, flinch)", { defaultValue: !!setting("drills", true) })
+      .toggle("Kneel / go prone in firefights (new animations)", { defaultValue: !!setting("poses", true) })
+      .toggle("Soldiers cut off and outnumbered may surrender", { defaultValue: !!setting("isosurr", true) });
+    const sr = await show(sf, player);
+    if (!sr || sr.canceled || !sr.formValues) return;
+    world.setDynamicProperty("war:set_capture", sr.formValues[0] === 0 ? "neutral" : "surrender");
+    world.setDynamicProperty("war:set_blockdmg", !!sr.formValues[1]);
+    world.setDynamicProperty("war:set_spacing", [1, 1.5, 2][Number(sr.formValues[2])] ?? 1.5);
+    world.setDynamicProperty("war:set_readout", !!sr.formValues[3]);
+    world.setDynamicProperty("war:set_civil", !!sr.formValues[4]);
+    world.setDynamicProperty("war:set_build", !!sr.formValues[5]);
+    world.setDynamicProperty("war:set_drills", !!sr.formValues[6]);
+    world.setDynamicProperty("war:set_poses", !!sr.formValues[7]);
+    world.setDynamicProperty("war:set_isosurr", !!sr.formValues[8]);
+    player.sendMessage("§aSettings saved.");
+    return warTable(player, 5);
+    player.sendMessage("§aSettings saved.");
+  }
+}
+
+// ================================================================ Coalitions
+// A named bloc of factions. Members are allied; one tap sets relations for every member.
+const getCoals = () => getJSON(world, "war:coal", []);
+const saveCoals = (c) => setJSON(world, "war:coal", c);
+const coalOf = (f) => getCoals().findIndex((c) => c.members.includes(f));
+function refreshAll() { for (const e of [...allOf(SOLDIER), ...allOf(HOUND)]) { try { applyRelations(e); } catch {} } }
+
+async function coalitions(player) {
+  while (true) {
+    const coals = getCoals();
+    const af = new ActionFormData().title("Coalitions").body(coals.length ? "Pick a coalition, or create one." : "No coalitions yet.");
+    for (const c of coals) af.button(`§l${c.name}§r\n${c.members.map((m) => factionLabel(m)).join(" ") || "§7(empty)"}`);
+    af.button("§a+ Create coalition");
+    const r = await show(af, player);
+    if (!r || r.canceled || r.selection === undefined) return;
+    if (r.selection === coals.length) {
+      const nr = await show(new ModalFormData().title("Create coalition").textField("Name", "e.g. Northern Pact"), player);
+      if (!nr || nr.canceled || !nr.formValues) continue;
+      const name = String(nr.formValues[0]).trim().slice(0, 24) || `Coalition ${coals.length + 1}`;
+      coals.push({ name, members: [] }); saveCoals(coals);
+      say(`§eNew coalition: §l${name}`);
+      continue;
+    }
+    await coalitionMenu(player, r.selection);
+  }
+}
+
+async function coalitionMenu(player, idx) {
+  while (true) {
+    const coals = getCoals();
+    const c = coals[idx];
+    if (!c) return;
+    const af = new ActionFormData().title(c.name).body(`Members: ${c.members.map((m) => factionLabel(m)).join(", ") || "none"}`)
+      .button("Add a faction").button("Remove a faction").button("Set relation with...").button("§cDelete coalition");
+    const r = await show(af, player);
+    if (!r || r.canceled || r.selection === undefined) return;
+    if (r.selection === 0) {
+      const free = Array.from({ length: NF }, (_, i) => i + 1).filter((f) => coalOf(f) === -1);
+      if (!free.length) { player.sendMessage("§7Every faction is already in a coalition."); continue; }
+      const pf = new ActionFormData().title(`Add to ${c.name}`).body("A faction can be in one coalition at a time.");
+      for (const f of free) pf.button(factionLabel(f));
+      const pr = await show(pf, player);
+      if (!pr || pr.canceled || pr.selection === undefined) continue;
+      const f = free[pr.selection];
+      for (const m of c.members) setRelPair(f, m, "2", false); // members are allies
+      c.members.push(f); saveCoals(coals); refreshAll();
+      say(`${factionLabel(f)} §fjoined §l${c.name}§r§f.`);
+    } else if (r.selection === 1) {
+      if (!c.members.length) continue;
+      const pf = new ActionFormData().title(`Remove from ${c.name}`).body("Relations stay as they are; change them in Diplomacy if needed.");
+      for (const f of c.members) pf.button(factionLabel(f));
+      const pr = await show(pf, player);
+      if (pr === undefined || pr.canceled || pr.selection === undefined) continue;
+      const f = c.members[pr.selection];
+      c.members.splice(pr.selection, 1); saveCoals(coals);
+      say(`${factionLabel(f)} §fleft §l${c.name}§r§f.`);
+    } else if (r.selection === 2) {
+      // targets: other coalitions, then factions outside this coalition
+      const targets = [];
+      const tf = new ActionFormData().title(`${c.name}: relation with...`);
+      coals.forEach((o, i) => { if (i !== idx) { targets.push({ name: `§l${o.name}§r`, members: o.members }); tf.button(`§l${o.name}§r (coalition)`); } });
+      for (let f = 1; f <= NF; f++) if (!c.members.includes(f)) { targets.push({ name: factionLabel(f), members: [f] }); tf.button(factionLabel(f)); }
+      const tr = await show(tf, player);
+      if (!tr || tr.canceled || tr.selection === undefined) continue;
+      const t = targets[tr.selection];
+      const vals = ["1", "0", "2"];
+      const cf = new ActionFormData().title(`${c.name} and ${t.name}`);
+      for (const val of vals) cf.button(REL_TXT[val]);
+      const cr = await show(cf, player);
+      if (!cr || cr.canceled || cr.selection === undefined) continue;
+      const v = vals[cr.selection];
+      for (const a of c.members) for (const b of t.members) setRelPair(a, b, v, false);
+      refreshAll();
+      say(`§l${c.name}§r §fis now ${REL_TXT[v]}§r§f with ${t.name}`);
+    } else {
+      coals.splice(idx, 1); saveCoals(coals);
+      say(`§7Coalition §l${c.name}§r§7 was dissolved. Relations stay as they are.`);
+      return;
+    }
+  }
+}
+
+// ================================================================ War Chronicle
+// One war is recorded at a time. Everything the mod does, plus player deaths, is logged
+// until the war is ended; then the record becomes an editable book.
+let chron = null;          // { name, startDay, startDate, deaths:{f:n}, pdeaths, battles, flags, by }
+let chronEvents = [];      // [{ d: day, t: text }]
+let chronDirty = false;
+const battles = [];        // active battles: { x, y, z, dim, start, last, factions:Set, cas:{f:n}, named:[], flag }
+const strip = (t) => String(t).replace(/§./g, "");
+const day = () => { try { return world.getDay(); } catch { return 0; } };
+function saveChunks(prefix, str) {
+  const n = Math.ceil(str.length / 30000) || 1;
+  for (let i = 0; i < n; i++) world.setDynamicProperty(`${prefix}${i}`, str.slice(i * 30000, (i + 1) * 30000));
+  world.setDynamicProperty(`${prefix}n`, n);
+}
+function loadChunks(prefix) {
+  const n = Number(world.getDynamicProperty(`${prefix}n`) ?? 0);
+  let out = "";
+  for (let i = 0; i < n; i++) out += String(world.getDynamicProperty(`${prefix}${i}`) ?? "");
+  return out;
+}
+function chronLoad() {
+  try { chron = JSON.parse(String(world.getDynamicProperty("war:chron") ?? "null")); } catch { chron = null; }
+  try { chronEvents = chron ? JSON.parse(loadChunks("war:chronE") || "[]") : []; } catch { chronEvents = []; }
+}
+function chronSave() {
+  world.setDynamicProperty("war:chron", JSON.stringify(chron));
+  saveChunks("war:chronE", JSON.stringify(chronEvents));
+  chronDirty = false;
+}
+function chronLog(text) {
+  if (!chron) return;
+  chronEvents.push({ d: day(), t: strip(text) });
+  chronDirty = true;
+}
+function say(msg) { world.sendMessage(msg); chronLog(msg); }
+system.run(() => chronLoad());
+system.runInterval(() => { if (chronDirty) { try { chronSave(); } catch {} } }, 100);
+
+// ---- battles: hostile hits within 64 blocks of each other form one battle; 2 quiet minutes closes it
+function placeName(dim, loc) {
+  const f = nearestFlag(dim, loc, () => true, 96);
+  const xyz = `${Math.round(loc.x)}, ${Math.round(loc.y)}, ${Math.round(loc.z)}`;
+  return f ? `near ${strip(factionLabel(Number(P(f, "war:faction")), true))}'s flag (${xyz})` : `at ${xyz}`;
+}
+function battleAt(dim, loc) {
+  let b = battles.find((x) => x.dim === dim.id && Math.hypot(x.x - loc.x, x.z - loc.z) < 64);
+  if (!b) {
+    b = { x: loc.x, y: loc.y, z: loc.z, dim: dim.id, start: tick(), last: tick(), factions: new Set(), cas: {}, named: [], flag: "" };
+    battles.push(b);
+  }
+  return b;
+}
+function chronHit(a, v) {
+  if (!chron || !a || !v) return;
+  const fa = factionOf(a), fv = factionOf(v);
+  if (!isHostile(fa, fv)) return;
+  const b = battleAt(v.dimension, v.location);
+  b.last = tick(); b.factions.add(fa); b.factions.add(fv);
+}
+system.runInterval(() => {
+  for (let i = battles.length - 1; i >= 0; i--) {
+    const b = battles[i];
+    if (tick() - b.last < 2400) continue;
+    battles.splice(i, 1);
+    if (!chron) continue;
+    chron.battles++;
+    const dim = world.getDimension(b.dim);
+    const sides = [...b.factions].map((f) => `${strip(factionLabel(f, true))} lost ${b.cas[f] ?? 0}`).join(", ");
+    const named = b.named.length ? ` Fallen: ${b.named.slice(0, 6).join(", ")}${b.named.length > 6 ? "..." : ""}.` : "";
+    const outcome = b.flag ? ` ${b.flag}` : " Inconclusive.";
+    chronLog(`BATTLE #${chron.battles} ${placeName(dim, b)}, ${Math.max(1, Math.round((b.last - b.start) / 1200))} min. ${sides}.${outcome}${named}`);
+  }
+}, 100);
+
+// ---- deaths
+world.afterEvents.entityDie.subscribe((ev) => {
+  if (!chron) return;
+  const e = ev.deadEntity, src = ev.damageSource?.damagingEntity;
+  let f = 0, name = "", loc, dim;
+  try { loc = e.location; dim = e.dimension; } catch {}
+  if (e instanceof Player) {
+    chron.pdeaths++;
+    f = playerFaction(e);
+    let by = ev.damageSource?.cause ?? "unknown causes";
+    try { if (src) by = src instanceof Player ? src.name : strip(src.nameTag || src.typeId.replace("minecraft:", "")); } catch {}
+    chronLog(`${e.name}${f ? ` (${strip(factionLabel(f, true))})` : ""} was killed by ${by}.`);
+    name = e.name;
+  } else if (e.typeId === SOLDIER) {
+    try { f = Number(P(e, "war:faction")); } catch {}
+    if (f) chron.deaths[f] = (chron.deaths[f] ?? 0) + 1;
+    let d;
+    try { d = sd(e); } catch {}
+    if (d && (d.custom || d.div === "guard")) {
+      name = strip(e.nameTag);
+      say(`§7☠ ${e.nameTag} §7has fallen.`);
+    }
+  } else return;
+  chronDirty = true;
+  if (loc && dim && f) {
+    const b = battles.find((x) => x.dim === dim.id && Math.hypot(x.x - loc.x, x.z - loc.z) < 64);
+    if (b) { b.cas[f] = (b.cas[f] ?? 0) + 1; if (name) b.named.push(name); }
+  }
+});
+function chronFlagCaptured(dim, loc, text) {
+  if (!chron) return;
+  chron.flags++;
+  const b = battles.find((x) => x.dim === dim.id && Math.hypot(x.x - loc.x, x.z - loc.z) < 64);
+  if (b) b.flag = strip(text);
+}
+
+// ---- live display while holding the Chronicle
+system.runInterval(() => {
+  for (const p of world.getAllPlayers()) {
+    if (mainhand(p) !== "war:chronicle") continue;
+    if (!chron) { p.onScreenDisplay.setActionBar("§7No war is being recorded. Use the Chronicle to start one."); continue; }
+    const losses = Object.entries(chron.deaths).sort((a, b) => b[1] - a[1]).slice(0, 4)
+      .map(([f, n]) => `${COLORS[Number(f) - 1][1]}${COLORS[Number(f) - 1][0]} ${n} lost`).join(" §7· ");
+    p.onScreenDisplay.setActionBar(`§l§e${chron.name}§r §7· Day ${day() - chron.startDay + 1} · ${chron.battles} battles · ${chron.flags} flags taken${losses ? "\n" + losses : ""}`);
+  }
+}, 10);
+
+// ---- the item
+async function chronicleUse(player) {
+  if (!chron) {
+    const r = await show(new ModalFormData().title("Start a war").textField("Name of the war", "e.g. WW1"), player);
+    if (!r || r.canceled || !r.formValues) return;
+    const name = String(r.formValues[0]).trim().slice(0, 32) || "The War";
+    chron = { name, startDay: day(), startDate: new Date().toISOString().slice(0, 10), deaths: {}, pdeaths: 0, battles: 0, flags: 0, by: player.name };
+    chronEvents = [];
+    chronLog(`${name} begins. Recording started by ${player.name}.`);
+    chronSave();
+    world.sendMessage(`§l§c${name}§r §fhas begun. §7Everything is now being recorded.`);
+    return;
+  }
+  const af = new ActionFormData().title(chron.name).body(`Day ${day() - chron.startDay + 1} · ${chron.battles} battles · ${chron.flags} flags taken · ${chron.pdeaths} player deaths`)
+    .button("Add an entry").button("Recent events").button("§cEnd the war");
+  const r = await show(af, player);
+  if (!r || r.canceled || r.selection === undefined || !chron) return;
+  if (r.selection === 0) {
+    const er = await show(new ModalFormData().title("Add an entry").textField("Your entry", "e.g. The treaty of the bridge was signed."), player);
+    if (!er || er.canceled || !er.formValues) return;
+    const txt = String(er.formValues[0]).trim().slice(0, 600);
+    if (txt) { chronEvents.push({ d: day(), t: `[${player.name}] ${txt}`, entry: true }); chronDirty = true; player.onScreenDisplay.setActionBar("§aEntry added."); }
+  } else if (r.selection === 1) {
+    const last = chronEvents.slice(-15).map((ev) => `§7Day ${ev.d - chron.startDay + 1}:§r ${ev.t}`).join("\n\n");
+    await show(new ActionFormData().title(`${chron.name}: recent`).body(last || "Nothing recorded yet.").button("Close"), player);
+  } else {
+    const cr = await show(new ActionFormData().title(`End ${chron.name}?`).body("Recording stops and you receive the finished book.").button("§cYes, end it").button("Not yet"), player);
+    if (!cr || cr.canceled || cr.selection !== 0 || !chron) return;
+    for (const b of battles) b.last = -99999;            // close open battles into the record
+    system.runTimeout(() => finishWar(player), 120);
+    player.onScreenDisplay.setActionBar("§7Closing the record...");
+  }
+}
+
+function buildPages(c, events) {
+  const pages = [];
+  const days = day() - c.startDay + 1;
+  const losses = Object.entries(c.deaths).sort((a, b) => b[1] - a[1]).map(([f, n]) => `${strip(factionLabel(Number(f), true))}: ${n}`);
+  pages.push(strip(`${c.name}\n(Over)\n\nStarted ${c.startDate}\nLasted ${days} day${days === 1 ? "" : "s"}\nBattles: ${c.battles}\nFlags taken: ${c.flags}\nPlayer deaths: ${c.pdeaths}\n\nSoldiers lost:\n${losses.join("\n") || "none"}`));
+  const log = events.filter((e) => !e.entry), entries = events.filter((e) => e.entry);
+  const toPages = (list, title) => {
+    let page = title ? `${title}\n\n` : "";
+    for (const ev of list) {
+      const line = `Day ${ev.d - c.startDay + 1}: ${ev.t}\n\n`;
+      if ((page + line).length > 240) { if (page.trim()) pages.push(page.trim()); page = line.slice(0, 240); }
+      else page += line;
+    }
+    if (page.trim()) pages.push(page.trim());
+  };
+  // keep the book within 50 pages: condense the middle of very long logs
+  let shown = log;
+  if (log.length > 120) {
+    const keep = 50;
+    shown = [...log.slice(0, keep), { d: log[keep].d, t: `... ${log.length - keep * 2} events condensed (full record in the War Table archive) ...` }, ...log.slice(-keep)];
+  }
+  toPages(shown, "THE RECORD");
+  if (entries.length) toPages(entries, "ENTRIES");
+  return pages.slice(0, 50);
+}
+function makeBook(name, pages) {
+  const it = new ItemStack("minecraft:writable_book", 1);
+  try { it.nameTag = `${name} (Over)`; } catch {}
+  try { it.getComponent("minecraft:book")?.setContents(pages); } catch {}
+  return it;
+}
+function finishWar(player) {
+  if (!chron) return;
+  chronLog(`${chron.name} is over. Recording ended by ${player.name}.`);
+  const pages = buildPages(chron, chronEvents);
+  // archive (full log + book pages) so anyone can print it again
+  const arch = getJSON(world, "war:arch", []);
+  const id = arch.length;
+  arch.push({ name: chron.name, start: chron.startDate, battles: chron.battles });
+  setJSON(world, "war:arch", arch);
+  saveChunks(`war:archP${id}_`, JSON.stringify(pages));
+  saveChunks(`war:archE${id}_`, JSON.stringify(chronEvents));
+  try { player.getComponent("minecraft:inventory").container.addItem(makeBook(chron.name, pages)); } catch {}
+  world.sendMessage(`§l§e${chron.name}§r §fis over. §7The chronicle has been written.`);
+  chron = null; chronEvents = [];
+  world.setDynamicProperty("war:chron", "null");
+  saveChunks("war:chronE", "[]");
+}
+async function warArchive(player) {
+  const arch = getJSON(world, "war:arch", []);
+  if (!arch.length) { player.sendMessage("§7No finished wars yet."); return; }
+  const af = new ActionFormData().title("War archive").body("Print a copy of a finished war's chronicle.");
+  for (const w of arch) af.button(`${w.name}\n§8${w.start} · ${w.battles} battles`);
+  const r = await show(af, player);
+  if (!r || r.canceled || r.selection === undefined) return;
+  let pages = [];
+  try { pages = JSON.parse(loadChunks(`war:archP${r.selection}_`) || "[]"); } catch {}
+  try { player.getComponent("minecraft:inventory").container.addItem(makeBook(arch[r.selection].name, pages)); } catch {}
+  player.onScreenDisplay.setActionBar("§aCopy printed.");
+}
+
+// ================================================================ Gun loadouts
+async function loadoutMenu(player) {
+  const all = getJSON(world, "war:loadouts", {});
+  const f = new ModalFormData().title("Gun loadouts");
+  COLORS.forEach((_, i) => f.dropdown(factionLabel(i + 1), LOADOUT_KEYS.map((k) => LOADOUTS[k].name), { defaultValueIndex: Math.max(0, LOADOUT_KEYS.indexOf(loadoutOf(i + 1))) }));
+  const r = await show(f, player);
+  if (!r || r.canceled || !r.formValues) return;
+  const changed = [];
+  r.formValues.forEach((v, i) => {
+    const k = LOADOUT_KEYS[Number(v)];
+    if (k !== loadoutOf(i + 1)) changed.push(i + 1);
+    all[i + 1] = k;
+  });
+  setJSON(world, "war:loadouts", all);
+  // re-arm soldiers of factions whose loadout changed
+  for (const e of allOf(SOLDIER)) {
+    try { const d = sd(e); if (changed.includes(d.faction) && GUNS.includes(d.weapon)) equip(e, weaponItem(e)); } catch {}
+  }
+  player.sendMessage(`§aLoadouts saved${changed.length ? ` (${changed.length} faction${changed.length > 1 ? "s" : ""} re-armed)` : ""}.`);
+}
+
+// ================================================================ Shared awareness scan
+// One scan per dimension every half second, shared by every soldier (keeps big armies cheap).
+let combatants = new Map(); // dim id -> [{ e, x, y, z }]
+function refreshCombatants() {
+  const next = new Map();
+  for (const did of DIMS) {
+    let dim;
+    try { dim = world.getDimension(did); } catch { continue; }
+    const list = [];
+    const add = (arr) => { for (const o of arr) { try { const l = o.location; list.push({ e: o, x: l.x, y: l.y, z: l.z }); } catch {} } };
+    try { add(dim.getEntities({ type: SOLDIER })); } catch {}
+    try { add(dim.getEntities({ type: HOUND })); } catch {}
+    try { add(dim.getPlayers()); } catch {}
+    for (const t of VEHICLES) { try { add(dim.getEntities({ type: t })); } catch {} }
+    try { add(dim.getEntities({ families: ["monster"] })); } catch {}
+    next.set(`minecraft:${did}`, list); next.set(did, list);
+  }
+  combatants = next;
+}
+system.runInterval(refreshCombatants, 10);
+function nearbyCombatants(dimId, loc, r) {
+  const out = [];
+  for (const c of combatants.get(dimId) ?? []) {
+    const dx = c.x - loc.x, dy = c.y - loc.y, dz = c.z - loc.z;
+    if (dx * dx + dy * dy + dz * dz <= r * r && c.e.isValid) out.push(c.e);
+  }
+  return out;
+}
+
+// ================================================================ Hearing
+// Gunfire and explosions alert soldiers within ~64 blocks who are hostile to whoever made the noise.
+function noise(dim, loc, maker) {
+  try { hearNoise(dim, loc, maker); } catch {}
+  const mf = maker ? factionOf(maker) : 0;
+  const now = tick();
+  for (const o of nearbyCombatants(dim.id, loc, 64)) {
+    if (o.typeId !== SOLDIER) continue;
+    try {
+      const of = Number(P(o, "war:faction"));
+      if (!mf || isHostile(of, mf)) o.setDynamicProperty("war:alert", now + 200);
+    } catch {}
+  }
+}
+world.afterEvents.entitySpawn.subscribe((ev) => {
+  const b = ev.entity;
+  let id;
+  try { id = b.typeId; } catch { return; }
+  if (!id.startsWith("ww:") || !id.includes("projectile")) return;
+  system.run(() => {
+    try { const owner = b.getComponent("minecraft:projectile")?.owner; if (owner) noise(owner.dimension, owner.location, owner); } catch {}
+  });
+});
+
+// ================================================================ Explosions that always go off
+// If crediting the blast to someone is refused by the game, explode anyway without credit.
+function explode(dim, loc, power, opts) {
+  try { dim.createExplosion(loc, power, opts); }
+  catch { const o = { ...opts }; delete o.source; try { dim.createExplosion(loc, power, o); } catch {} }
+  try { blastDamage(dim, loc, power, opts?.source); } catch {}
+  try { noise(dim, loc, opts?.source); } catch {}
+}
+function hurt(ent, amount, src) {
+  try { ent.applyDamage(amount, { cause: "entityExplosion", damagingEntity: src?.isValid ? src : undefined }); }
+  catch { try { ent.applyDamage(amount); } catch {} }
+}
+
+// ================================================================ Gunfire (script-driven)
+// sight: how far a gunner notices enemies; fire: the gun's effective range (it closes in to fire).
+// spread is an aiming error angle (radians). Because a target looks smaller the farther it is, a
+// fixed error gives: 0-20 very likely, 20-50 likely, 50-100 more misses, 100-200 possible but rare.
+// Weapons differ: rifles/MGs keep accuracy at range; pistols, SMGs and shotguns fall off fast.
+const GUN_SPEC = {
+  rifle:   { bullet: "ww:nrifle_projectile",   sight: 200, fire: 200, mag: 1,  gap: 0, reload: 30,  speed: 5.0, spread: 0.007 },
+  semi:    { bullet: "ww:nsemi_projectile",    sight: 200, fire: 200, mag: 3,  gap: 8, reload: 25,  speed: 5.0, spread: 0.009 },
+  smg:     { bullet: "ww:nsmg_projectile",     sight: 200, fire: 120, mag: 20, gap: 2, reload: 35,  speed: 4.5, spread: 0.018 },
+  mg:      { bullet: "ww:nlmg_projectile",     sight: 200, fire: 200, mag: 30, gap: 2, reload: 50, speed: 5.0, spread: 0.010 },
+  shotgun: { bullet: "ww:nshotgun_projectile", sight: 200, fire: 40,  mag: 1,  gap: 0, reload: 15,  speed: 3.5, spread: 0.035 },
+  at:      { bullet: "ww:nbazooka_projectile", sight: 200, fire: 120, mag: 1,  gap: 0, reload: 70, speed: 2.3, spread: 0.010 },
+  pistol:  { bullet: "ww:nsemi_projectile",    sight: 200, fire: 200, mag: 2,  gap: 8, reload: 20,  speed: 4.5, spread: 0.015 },
+  sniper:  { bullet: "ww:nrifle_projectile",   sight: 250, fire: 250, mag: 1,  gap: 0, reload: 45,  speed: 6.0, spread: 0.0025 },
+};
+const gunState = new Map(); // soldier id -> { target, ammo, next, seen, check, step }
+function chest(o) { const l = o.location; const ps = o.typeId === SOLDIER ? (poseOf.get(o.id) ?? 0) : 0; return { x: l.x, y: l.y + (o.typeId === "war:tank" ? 1.0 : o.typeId === HOUND ? 0.5 : ps === 2 ? 0.35 : ps === 1 ? 0.85 : 1.2), z: l.z }; }
+const LOS = new Map(); let losThisTick = 0;
+system.runInterval(() => { losThisTick = 0; if (LOS.size > 20000) LOS.clear(); }, 1);
+function clearShot(dim, from, to) {
+  const dx = to.x - from.x, dy = to.y - from.y, dz = to.z - from.z, l = Math.hypot(dx, dy, dz);
+  if (l < 0.5) return true;
+  const k = `${Math.round(from.x)},${Math.round(from.y * 2)},${Math.round(from.z)}>${Math.round(to.x)},${Math.round(to.y * 2)},${Math.round(to.z)}`;
+  const c = LOS.get(k), now = tick();
+  if (c && now - c.t < 10) return c.v;
+  if (losThisTick > 350) return c ? c.v : false;                      // over the per-tick cap: reuse what we knew
+  losThisTick++;
+  let v = false;
+  try { v = !dim.getBlockFromRay(from, { x: dx / l, y: dy / l, z: dz / l }, { maxDistance: l - 0.3, includeLiquidBlocks: false, includePassableBlocks: false }); } catch {}
+  LOS.set(k, { v, t: now });
+  return v;
+}
+function vehicleFaction(v) { for (let i = 1; i <= NF; i++) if (v.hasTag(`war_f${i}`)) return i; return 0; }
+function isTargetFor(e, d, o) {
+  if (o.id === e.id) return false;
+  if (o.typeId === SOLDIER && (downed.has(o.id) || pows.has(o.id))) return false;   // nobody shoots the downed or prisoners
+  if (d.weapon === "at") return VEHICLES.includes(o.typeId) && isHostile(d.faction, vehicleFaction(o));
+  if (VEHICLES.includes(o.typeId)) return false;
+  if (o.typeId === SOLDIER || o.typeId === HOUND) return isHostile(d.faction, factionOf(o)) || isProvoker(d.faction, o, tick());
+  if (o.typeId === "minecraft:player") { try { return o.getGameMode() !== GameMode.Creative && o.getGameMode() !== GameMode.Spectator && (isHostile(d.faction, factionOf(o)) || isProvoker(d.faction, o, tick())); } catch { return false; } }
+  // vanilla mobs: only once one of them has attacked one of ours, and only when it's close
+  const as = assist.get(e.id);
+  if ((as && as.id === o.id && tick() - as.t < 200) || attackedRecently(e, o, tick())) return true;
+  const dd = dist(o.location, e.location), id = o.typeId;
+  if (id.includes("creeper")) return dd <= 10;                                        // shoot it before it gets here
+  if (["skeleton", "stray", "pillager", "witch", "blaze", "bogged"].some((k) => id.includes(k))) return dd <= 20;   // shooting at us
+  return dd <= 9;                                                                      // anything hostile this close is a danger
+}
+function pickTarget(e, d, spec) {
+  const eye = e.getHeadLocation();
+  let best, bd = spec.sight + 0.01;
+  for (const o of nearbyCombatants(e.dimension.id, e.location, spec.sight)) {
+    if (!isTargetFor(e, d, o)) continue;
+    const dd = dist(o.location, e.location);
+    if (dd < bd && clearShot(e.dimension, eye, chest(o))) { bd = dd; best = o; }
+  }
+  return best;
+}
+// Is a friendly (or ally) in or near the line of fire?
+function friendlyInLine(e, d, from, to, target) {
+  const dx = to.x - from.x, dy = to.y - from.y, dz = to.z - from.z, L = Math.hypot(dx, dy, dz) || 1;
+  const ux = dx / L, uy = dy / L, uz = dz / L;
+  for (const o of nearbyCombatants(e.dimension.id, from, L + 2)) {
+    if (o.id === e.id || o.id === target.id || VEHICLES.includes(o.typeId)) continue;
+    if (!(o.typeId === SOLDIER || o.typeId === HOUND || o.typeId === "minecraft:player")) continue;
+    if (!isFriendly(d.faction, factionOf(o))) continue;
+    const c = chest(o);
+    const px = c.x - from.x, py = c.y - from.y, pz = c.z - from.z;
+    const along = px * ux + py * uy + pz * uz;
+    if (along < 0.5 || along > L - 0.5) continue;
+    const off = Math.hypot(px - ux * along, py - uy * along, pz - uz * along);
+    if (off < 1.1) return true;
+  }
+  return false;
+}
+// How far a soldier may step aside for a clean shot, by order.
+function stepLeash(d) {
+  if (d.func === "post") return 1;
+  if (d.func === "hold" || d.func === "stand") return 2;
+  if (d.func === "sentry") return d.radius;
+  return 3;
+}
+function nudge(e, toward, strength = 0.45, p = 3) {
+  const dx = toward.x - e.location.x, dz = toward.z - e.location.z, l = Math.hypot(dx, dz) || 1;
+  push(e, { x: (dx / l) * strength, y: 0.12, z: (dz / l) * strength }, p);
+}
+// Find a sidestep spot (perpendicular to the line of fire) with a clean line, within the order's leash.
+function sidestep(e, d, target) {
+  const leash = stepLeash(d);
+  const anchor = ["hold", "post", "sentry", "stand"].includes(d.func) ? marker(d.goal) : undefined;
+  const h = e.getHeadLocation(), c = chest(target);
+  const dx = c.x - h.x, dz = c.z - h.z, l = Math.hypot(dx, dz) || 1;
+  const px = -dz / l, pz = dx / l;
+  for (const k of [1, -1, 2, -2, 3, -3]) {
+    if (Math.abs(k) > Math.min(3, leash)) continue;
+    const spot = { x: e.location.x + px * k, y: e.location.y, z: e.location.z + pz * k };
+    if (anchor && flat(spot, anchor.location) > leash + 1) continue;
+    if (!standable(e.dimension, { x: Math.floor(spot.x) + 0.5, y: Math.floor(spot.y), z: Math.floor(spot.z) + 0.5 })) continue;
+    const eye = { x: spot.x, y: h.y, z: spot.z };
+    if (clearShot(e.dimension, eye, c) && !friendlyInLine(e, d, eye, c, target)) { nudge(e, spot, 0.35 + 0.1 * Math.abs(k)); return true; }
+  }
+  return false;
+}
+// being fired on (hits or misses): the target and anyone right beside him know where it's coming from
+const firedAt = new Map(); // id -> { by, t }
+function firedOn(t, shooter, now) {
+  try {
+    for (const o of nearbyCombatants(t.dimension.id, t.location, 3)) if (o.typeId === SOLDIER) firedAt.set(o.id, { by: shooter.id, t: now });
+  } catch {}
+}
+// can the bullet actually get there? checked from the muzzle, at the chest and a bit above it
+function muzzleOf(e, t) {
+  const h = e.getHeadLocation(), c = chest(t);
+  const dx = c.x - h.x, dy = c.y - h.y, dz = c.z - h.z, l = Math.hypot(dx, dy, dz) || 1;
+  return { x: h.x + (dx / l) * 0.9, y: h.y - 0.2 + (dy / l) * 0.9, z: h.z + (dz / l) * 0.9 };
+}
+function canHit(e, t) {
+  try {
+    const m = muzzleOf(e, t), c = chest(t);
+    return clearShot(e.dimension, m, c) && clearShot(e.dimension, m, { x: c.x, y: c.y + 0.35, z: c.z });
+  } catch { return false; }
+}
+function fireGun(e, spec, t) {
+  const h = e.getHeadLocation(), c0 = chest(t);
+  let c = c0;
+  try { const v = t.getVelocity(); const tt = Math.hypot(c0.x - h.x, c0.y - h.y, c0.z - h.z) / spec.speed; c = { x: c0.x + v.x * tt, y: c0.y, z: c0.z + v.z * tt }; } catch {}  // lead the target
+  let dx = c.x - h.x, dy = c.y - h.y, dz = c.z - h.z;
+  const l = Math.hypot(dx, dy, dz) || 1;
+  if (spec.bullet === "ww:nbazooka_projectile") dy += (l * 0.03 * l) / (spec.speed * 2); // lift for the rocket's drop
+  const n = Math.hypot(dx, dy, dz) || 1;
+  const r = () => (Math.random() + Math.random() - 1) * spec.spread * 1.6;
+  const dir = { x: dx / n + r(), y: dy / n + r(), z: dz / n + r() };
+  const from = { x: h.x + dir.x * 0.9, y: h.y - 0.2 + dir.y * 0.9, z: h.z + dir.z * 0.9 };
+  try {
+    const b = e.dimension.spawnEntity(spec.bullet, from);
+    const pc = b.getComponent("minecraft:projectile");
+    if (pc) { pc.owner = e; pc.shoot({ x: dir.x * spec.speed, y: dir.y * spec.speed, z: dir.z * spec.speed }); }
+  } catch {}
+}
+function gunTick(e, now) {
+  if (downed.has(e.id)) return;
+  const d = sd(e);
+  const onNest = ridingNest(e);
+  const spec = onNest ? NEST_SPEC : GUN_SPEC[d.weapon];
+  if (pows.has(e.id)) return;
+  if (!spec || d.surr || d.retreat || d.div === "medic" || (!onNest && !P(e, "war:gun"))) { if (P(e, "war:aiming")) setP(e, "war:aiming", false); return; }
+  let st = gunState.get(e.id);
+  if (!st) { st = { target: undefined, ammo: spec.mag, next: 0, seen: -999, check: 0, step: 0, back: 0 }; gunState.set(e.id, st); }
+  if (now >= st.check) {
+    st.check = now + 5;
+    const ps = perc.get(e.id);
+    const prev = st.target;
+    const t = ps?.threat;
+    st.target = t && t.isValid && canHit(e, t) ? t : undefined;         // only targets the bullet can actually reach
+    if (st.target && (!prev || prev.id !== st.target.id)) {
+      const ang = facingAngle(e, st.target.location);          // new target: the aim needs to settle
+      st.next = Math.max(st.next, now + (ang < 60 ? 6 : ang < 120 ? 12 : 20));
+      st.wild = ang >= 120 ? 2 : 0;                             // first shots after a big turn are less accurate
+    }
+    const stance = String(e.getDynamicProperty("war:stance") ?? "aggressive");
+    if (st.target && stance === "holdfire" && !isProvoker(d.faction, st.target, now)) st.target = undefined;
+    if (st.target) st.seen = now;
+    // rushed: back off and sidestep instead of standing still (not when pinned to a post)
+    if (st.target && !isMob(st.target) && now >= st.back && d.func !== "post" && !isRiding(e)) {
+      const td = dist(st.target.location, e.location);
+      if (td < 4 && td > 2.5) {
+        st.back = now + 20;
+        const a = e.location, b = st.target.location, l = Math.hypot(a.x - b.x, a.z - b.z) || 1;
+        const side = Math.random() < 0.5 ? 1 : -1;
+        nudge(e, { x: a.x + ((a.x - b.x) / l) * 3 + (-(a.z - b.z) / l) * side, y: a.y, z: a.z + ((a.z - b.z) / l) * 3 + ((a.x - b.x) / l) * side }, 0.5);
+      }
+    }
+  }
+  const aiming = now - st.seen < 40;
+  if (!!P(e, "war:aiming") !== aiming) setP(e, "war:aiming", aiming);
+  if (!st.target || now < st.next) return;
+  const t = st.target;
+  if (!t.isValid) { st.target = undefined; return; }
+  if (dist(t.location, e.location) > spec.fire) return;                // seen but out of range: keep closing in
+  if (closeEnemy(e, d, 2.5)) return;                                    // hand-to-hand right now
+  const from = e.getHeadLocation();
+  if (friendlyInLine(e, d, from, chest(t), t)) {                        // never shoot through a friendly
+    if (now >= st.step && !isRiding(e)) { st.step = now + 25; sidestep(e, d, t); }
+    st.next = now + 6;
+    return;
+  }
+  if (turnTo(e, t.location, 20) > 25) { st.next = now + 2; return; } // still turning toward him
+  if (!canHit(e, t)) { st.next = now + 6; st.target = undefined; return; } // the shot would hit the terrain: don't waste it
+  const shaky = ((suppB.get(e.id) ?? 0) > 8 ? 1.8 : 1) * woundK(e);  // pinned down / badly wounded: shaky aim
+  if (st.wild > 0) { st.wild--; fireGun(e, { ...spec, spread: spec.spread * 3 * shaky }, t); }
+  else fireGun(e, shaky === 1 ? spec : { ...spec, spread: spec.spread * shaky }, t);
+  firedOn(t, e, now);
+  if (t.typeId === "minecraft:player") shotAtPlayer.set(t.id, now);
+  if (d.weapon === "mg" && st.ammo === spec.mag) callout(e, "Suppressing!");
+  st.lastShot = now;
+  suppressNear(t, d.weapon);
+  st.ammo--;
+  if (st.ammo > 0) st.next = now + Math.max(1, spec.gap);
+  else {
+    st.ammo = spec.mag; st.next = now + spec.reload + Math.floor(Math.random() * 8);
+    try { e.dimension.playSound("random.click", e.location, { volume: 0.35, pitch: 0.7 }); } catch {}   // a quiet reload
+    callout(e, "Reloading!");
+  }
+}
+system.runInterval(() => {
+  const now = tick();
+  for (const e of allOf(SOLDIER)) {
+    try { if (GUNS.includes(String(e.getDynamicProperty("war:weapon") ?? "")) || ridingNest(e)) gunTick(e, now); } catch {}
+  }
+  if (now % 200 === 0) for (const id of [...gunState.keys()]) if (!world.getEntity(id)) gunState.delete(id);
+}, 1);
+world.afterEvents.entitySpawn.subscribe((ev) => { try { if (ev.entity.typeId === "war:blank") ev.entity.remove(); } catch {} });
+
+// ================================================================ Taking cover (experimental)
+const coverClaim = new Map(); // id -> { x, z, t } : cover spots already taken
+// A gunner hit from range looks within ~3 blocks for a spot with a block between him and the shooter.
+world.afterEvents.entityHurt.subscribe((ev) => {
+  const e = ev.hurtEntity, a = ev.damageSource.damagingEntity;
+  if (!e?.isValid || e.typeId !== SOLDIER || !a?.isValid) return;
+  system.run(() => {
+    try {
+      const d = sd(e);
+      if (!GUNS.includes(d.weapon) || d.surr || isRiding(e) || d.func === "post") return;
+      if (a.typeId !== SOLDIER && a.typeId !== "minecraft:player") return;   // mobs don't send anyone to cover
+      if (dist(a.location, e.location) < 8) return;
+      const now = tick();
+      if (Number(e.getDynamicProperty("war:covert") ?? 0) > now) return;
+      e.setDynamicProperty("war:covert", now + 200);
+      const anchor = ["hold", "sentry", "stand"].includes(d.func) ? marker(d.goal) : undefined;
+      const leash = stepLeash(d) + 1;
+      const shooter = a.getHeadLocation ? a.getHeadLocation() : a.location;
+      for (const [id, c] of [...coverClaim]) if (now - c.t > 300 || id === e.id) coverClaim.delete(id);
+      for (const r of [1.5, 3, 4.5]) for (let i = 0; i < 12; i++) {
+        const ang = (i / 12) * Math.PI * 2;
+        const spot = { x: Math.floor(e.location.x + Math.cos(ang) * r) + 0.5, y: Math.floor(e.location.y), z: Math.floor(e.location.z + Math.sin(ang) * r) + 0.5 };
+        if (anchor && flat(spot, anchor.location) > leash) continue;
+        if (!standable(e.dimension, spot)) continue;
+        if ([...coverClaim.values()].some((c) => Math.hypot(c.x - spot.x, c.z - spot.z) < 1.8)) continue;               // someone else's spot
+        if (nearbyCombatants(e.dimension.id, spot, 1.2).some((o) => o.typeId === SOLDIER && o.id !== e.id)) continue;  // someone standing there
+        const head = { x: spot.x, y: spot.y + 1.5, z: spot.z };
+        if (!clearShot(e.dimension, head, shooter)) { coverClaim.set(e.id, { x: spot.x, z: spot.z, t: now }); nudge(e, spot, 0.3 + r * 0.12); return; } // blocked from the shooter: cover
+      }
+    } catch {}
+  });
+});
+
+// ================================================================ Flee explosives
+system.runInterval(() => {
+  const threats = [];
+  for (const [b] of projectiles) { try { if (b.isValid) threats.push(b); } catch {} }
+  for (const did of DIMS) { try { threats.push(...world.getDimension(did).getEntities({ type: "minecraft:tnt" })); } catch {} }
+  for (const t of threats) {
+    for (const o of nearbyCombatants(t.dimension.id, t.location, 7)) {
+      if (o.typeId !== SOLDIER || isRiding(o)) continue;
+      const a = o.location, b = t.location, l = Math.hypot(a.x - b.x, a.z - b.z) || 1;
+      push(o, { x: ((a.x - b.x) / l) * 0.6, y: 0.15, z: ((a.z - b.z) / l) * 0.6 }, 4); // escape beats everything
+    }
+  }
+}, 4);
+
+// ================================================================ Engine sounds
+// Short sounds repeated while moving, so nothing lingers; the plane's engine is stopped when it stops.
+const engineOn = new Map(); // plane id -> {dim, loc}
+function stopEngine(id) {
+  const info = engineOn.get(id);
+  if (!info) return;
+  engineOn.delete(id);
+  try { world.getDimension(info.dim).runCommand(`stopsound @a[x=${Math.floor(info.loc.x)},y=${Math.floor(info.loc.y)},z=${Math.floor(info.loc.z)},r=160] plane.fly`); } catch {}
+}
+system.runInterval(() => {
+  const alive = new Set();
+  for (const v of vehicleList) {
+    try {
+      if (!v.isValid || v.typeId === "war:boat") continue;
+      const vel = v.getVelocity(), sp = Math.hypot(vel.x, vel.y, vel.z);
+      if (v.typeId === "war:plane") {
+        const st = vstate.get(v.id);
+        if (st && st.speed > 0.08) {
+          alive.add(v.id);
+          if (!engineOn.has(v.id) || tick() % 30 < 6) v.dimension.playSound("plane.fly", v.location, { volume: 2 + st.speed * 4, pitch: 0.8 + st.speed * 0.4 });
+          engineOn.set(v.id, { dim: v.dimension.id, loc: v.location });
+        }
+      } else if (sp > 0.03) {
+        v.dimension.playSound("mob.ravager.step", v.location, { volume: 1.2, pitch: 0.5 + Math.min(0.3, sp) });
+      }
+    } catch {}
+  }
+  for (const id of [...engineOn.keys()]) if (!alive.has(id)) stopEngine(id); // stopped, landed or destroyed
+}, 6);
+
+// ================================================================ Perception & decisions (Phase 1)
+// Every soldier perceives all around him with human limits: reaction time depends on where the
+// enemy is relative to his facing, sight shrinks in darkness, sneaking/still targets are harder to
+// spot, gunfire gives a position away. Threats are scored; a squad shares its target (focus fire).
+// Internal alert levels: calm -> suspicious (heard something) -> combat (sees an enemy).
+const perc = new Map();        // soldier id -> { seen: Map(id -> since), threat, threatT, lastSeen, lostT, noise, noiseT, alert, searchUntil, prevPos }
+const hurtBy = new Map();      // entity id -> { id, t }   (who last attacked it)
+const squadTarget = new Map(); // "faction:squad" -> { id, t }
+const lastPos = new Map();     // combatant id -> {x,y,z,t}  (to tell moving from still)
+const P1 = () => perc;         // (debug handle)
+function pstate(e) {
+  let s = perc.get(e.id);
+  if (!s) { s = { seen: new Map(), threat: undefined, threatT: 0, lastSeen: undefined, lostT: 0, noise: undefined, noiseT: -999, alert: "calm", searchUntil: 0, pursue: 0 }; perc.set(e.id, s); }
+  return s;
+}
+function sightOf(d) { return d.weapon === "sniper" ? 250 : GUNS.includes(d.weapon) ? 200 : 60; } // melee soldiers watch the near area
+function lightAt(dim, loc) {
+  try {
+    const block = dim.getLightLevel(loc), sky = dim.getSkyLightLevel(loc);
+    const t = world.getTimeOfDay(); // 0..24000, night roughly 13000..23000
+    const day = t < 12500 || t > 23200 ? 1 : t < 13500 ? 1 - (t - 12500) / 1000 * 0.7 : t > 22200 ? 0.3 + (t - 22200) / 1000 * 0.7 : 0.3;
+    return Math.max(block, sky * day);
+  } catch { return 15; }
+}
+function visibility(o, now) {
+  let v = 1;
+  try { if (o.typeId === "minecraft:player" && o.isSneaking) v *= 0.5; } catch {}
+  const lp = lastPos.get(o.id), l = o.location;
+  if (lp && now - lp.t <= 20 && Math.hypot(l.x - lp.x, l.z - lp.z) < 0.15) v *= 0.8;   // standing still
+  lastPos.set(o.id, { x: l.x, y: l.y, z: l.z, t: now });
+  if (now - Number(noiseFrom.get(o.id) ?? -999) < 60) v *= 1.6;                          // just fired: gives himself away
+  const ps = poseOf.get(o.id) ?? 0; if (ps === 1) v *= 0.75; else if (ps === 2) v *= 0.5;  // kneeling / prone: a smaller shape
+  return v;
+}
+const noiseFrom = new Map(); // entity id -> tick it last made combat noise
+// Provocation: whoever attacks a faction's soldier or player becomes fair game for that faction
+// (within ~48 blocks) for a while, even through Hold fire and even if his faction is neutral.
+const provoked = new Map();  // "faction:attackerId" -> until tick
+const assist = new Map();    // soldier id -> { id, t } : an attacker hurting a comrade nearby
+function isProvoker(f, o, now) { return (provoked.get(`${f}:${o.id}`) ?? 0) > now; }
+function facingAngle(e, to) {
+  const yaw = e.getRotation().y * Math.PI / 180;
+  const fx = -Math.sin(yaw), fz = Math.cos(yaw);
+  const dx = to.x - e.location.x, dz = to.z - e.location.z, l = Math.hypot(dx, dz) || 1;
+  return Math.acos(Math.max(-1, Math.min(1, (fx * dx + fz * dz) / l))) * 180 / Math.PI; // 0 = straight ahead
+}
+function reactionDelay(e, o, dd, now) {
+  const ang = facingAngle(e, o.location);
+  let t = ang < 60 ? 10 : ang < 120 ? 20 : 34;                 // front ~0.5 s, side ~1 s, behind ~1.7 s
+  if (dd > 60) t += 10; if (dd > 120) t += 15;                   // far figures take longer to pick out
+  t /= Math.max(0.25, realism().react);
+  if (dd < 6) t *= 0.5;
+  if (now - Number(noiseFrom.get(o.id) ?? -999) < 40) t *= 0.6;
+  return t;
+}
+function attackedRecently(e, by, now, window = 100) { const h = hurtBy.get(e.id); return !!h && h.id === by.id && now - h.t < window; }
+const isMob = (o) => o.typeId !== SOLDIER && o.typeId !== HOUND && o.typeId !== "minecraft:player" && !VEHICLES.includes(o.typeId);
+function threatScore(e, d, o, dd, now) {
+  let s = 100 - dd;                                              // closer = more dangerous
+  if (isMob(o)) s -= 90;                                         // zombies are a nuisance, soldiers are the threat
+  else s += 40;
+  if (isProvoker(d.faction, o, now)) s += 50;
+  if (d.weapon === "sniper" && o.typeId === "minecraft:player") s += 25;           // snipers hunt the leaders
+  if (inHornCone(e, o, now)) s += 40;                                              // the War Horn's direction
+  if (attackedRecently(e, o, now, 60) && dd < 6) s += 200;                         // self-defense comes first, always
+  const as = assist.get(e.id);
+  if (as && as.id === o.id && now - as.t < 200) s += 100;        // he's shooting at my comrades
+  if (attackedRecently(e, o, now)) s += 120;                     // attacking me
+  if (d.squad) {
+    const st = squadTarget.get(`${d.faction}:${d.squad}`);
+    if (st && st.id === o.id && now - st.t < 100) s += 40;       // focus fire: the squad's target
+  }
+  if (o.typeId === SOLDIER) {
+    try {
+      const od = sd(o);
+      if (od.div === "medic") s -= 30;
+      if (od.retreat) s -= 40;                                   // fleeing enemies last
+      if (GUNS.includes(od.weapon) || od.ranged) s += 10;
+      if (od.weapon === "mg") s += 12;                             // machine gunners first
+      if (d.weapon === "sniper" && (od.weapon === "mg" || od.weapon === "at")) s += 20;
+      const egs = gunState.get(o.id);
+      if (egs && egs.ammo === (GUN_SPEC[od.weapon]?.mag ?? 1) && egs.next - now > 20) s += 8;  // caught reloading
+      const h = o.getComponent("minecraft:health");
+      if (h && h.currentValue / h.effectiveMax < 0.35) s += 15;  // finish off the wounded
+    } catch {}
+  }
+  if (dd < 4) s += 60;                                           // something right on top of him overrides focus fire
+  return s;
+}
+function perceive(e, now) {
+  const d = sd(e);
+  const s = pstate(e);
+  if (d.surr || d.div === "medic") { s.threat = undefined; s.alert = "calm"; return; }
+  const base = sightOf(d);
+  const eye = e.getHeadLocation();
+  const all = nearbyCombatants(e.dimension.id, e.location, base)
+    .filter((o) => isTargetFor(e, d, o))
+    .map((o) => ({ o, dd: dist(o.location, e.location) }));
+  const soldiersAround = all.some((c) => !isMob(c.o));
+  const cands = all
+    // mid-battle, distant mobs are ignored unless they're on top of him or attacking
+    .filter((c) => !isMob(c.o) || !soldiersAround || c.dd < 6 || attackedRecently(e, c.o, now))
+    .sort((a, b) => (Number(isMob(a.o)) - Number(isMob(b.o))) || a.dd - b.dd)
+    .slice(0, 5);                                                // nearest few only (keeps raycasts cheap)
+  const visible = new Set();
+  let best, bestScore = -1e9;
+  for (const { o, dd } of cands) {
+    const reach = base * (0.35 + 0.65 * lightAt(e.dimension, o.location) / 15) * visibility(o, now);
+    const asg = assist.get(e.id);
+    const fa = firedAt.get(e.id);
+    const attacking = attackedRecently(e, o, now) || (!!asg && asg.id === o.id && now - asg.t < 200) || (!!fa && fa.by === o.id && now - fa.t < 100);
+    if (dd > reach && !attacking) continue;
+    if (!clearShot(e.dimension, eye, chest(o)) && !attacking) continue;
+    visible.add(o.id);
+    if (!s.seen.has(o.id)) s.seen.set(o.id, now);
+    const shared = d.squad && squadTarget.get(`${d.faction}:${d.squad}`)?.id === o.id;
+    if (!attacking && !shared && now - s.seen.get(o.id) < reactionDelay(e, o, dd, now)) continue; // not noticed yet
+    const sc = threatScore(e, d, o, dd, now);
+    if (sc > bestScore) { bestScore = sc; best = o; }
+  }
+  for (const id of [...s.seen.keys()]) if (!visible.has(id)) s.seen.delete(id);
+  if (best) {
+    if (!s.threat || s.threat.id !== best.id) { s.threatT = now; if (!s.threat && Math.random() < 0.4) callout(e, "Enemy spotted!"); }
+    s.threat = best; s.lastSeen = { ...best.location }; s.lostT = 0; s.alert = "combat";
+    if (d.squad) squadTarget.set(`${d.faction}:${d.squad}`, { id: best.id, t: now });
+  } else if (s.threat) {
+    if (!s.lostT) s.lostT = now;
+    if (!s.threat.isValid || now - s.lostT > 40) { s.threat = undefined; s.searchUntil = s.lastSeen ? now + 200 : 0; } // lost him: search ~10 s
+  }
+  if (!s.threat) {
+    if (s.searchUntil > now) s.alert = "combat";
+    else if (now - s.noiseT < 160) s.alert = "suspicious";
+    else s.alert = "calm";
+  }
+}
+// combat noise: gunfire / explosions / hits make nearby soldiers suspicious and point them at the source
+function hearNoise(dim, loc, maker) {
+  const now = tick();
+  if (maker) noiseFrom.set(maker.id, now);
+  const mf = maker ? factionOf(maker) : 0;
+  for (const o of nearbyCombatants(dim.id, loc, 64)) {
+    if (o.typeId !== SOLDIER) continue;
+    try { if (!mf || isHostile(Number(P(o, "war:faction")), mf)) { const s = pstate(o); s.noise = { x: loc.x, y: loc.y, z: loc.z }; s.noiseT = now; } } catch {}
+  }
+}
+world.afterEvents.entityHurt.subscribe((ev) => {
+  const v = ev.hurtEntity, a = ev.damageSource.damagingEntity;
+  if (!v?.isValid || !a) return;
+  const now = tick();
+  hurtBy.set(v.id, { id: a.id, t: now });
+  try {
+    const fv = v.typeId === SOLDIER || v.typeId === "minecraft:player" || v.typeId === HOUND ? factionOf(v) : 0;
+    const fa = factionOf(a);
+    if (fv && a.id !== v.id && !isFriendly(fv, fa)) {
+      provoked.set(`${fv}:${a.id}`, now + 1200);                       // ~1 minute
+      if (!isMob(a)) { try { helpInArea(v, a, fv, now); } catch {} }
+      if (isMob(a)) {
+        // a mob: the closest few soldiers help (if nothing more dangerous is around)
+        const near = nearbyCombatants(v.dimension.id, v.location, 16)
+          .filter((o) => o.typeId === SOLDIER && o.id !== v.id && isFriendly(Number(P(o, "war:faction")), fv) && !perc.get(o.id)?.threat)
+          .sort((x, y) => dist(x.location, v.location) - dist(y.location, v.location)).slice(0, 4);
+        for (const o of near) assist.set(o.id, { id: a.id, t: now });
+      } else {
+        for (const o of nearbyCombatants(v.dimension.id, v.location, 48)) {
+          if (o.typeId !== SOLDIER || o.id === v.id) continue;
+          if (!isFriendly(Number(P(o, "war:faction")), fv)) continue;
+          if (dist(o.location, v.location) <= 24 || Number(P(o, "war:faction")) === fv) assist.set(o.id, { id: a.id, t: now }); // defend comrades
+        }
+      }
+    }
+  } catch {}
+  try {
+    if (v.typeId === SOLDIER) {                                   // the squad learns who is shooting at them
+      const d = sd(v);
+      if (d.squad && isHostile(d.faction, factionOf(a))) squadTarget.set(`${d.faction}:${d.squad}`, { id: a.id, t: now });
+    }
+  } catch {}
+});
+let percPhase = 0;
+system.runInterval(() => {
+  const now = tick();
+  percPhase ^= 1;
+  for (const e of allOf(SOLDIER)) {
+    if ((e.id.charCodeAt(e.id.length - 1) & 1) !== percPhase) continue; // each soldier ~every 10 ticks
+    if (!perc.get(e.id)?.threat && (now / 5) % 4 >= 2 && !squads.get(squadKey(e, sd(e)))?.known?.size) continue; // quiet: half as often
+    try { perceive(e, now); } catch {}
+  }
+  if (now % 400 === 0) {
+    for (const id of [...perc.keys()]) if (!world.getEntity(id)) perc.delete(id);
+    for (const [id, h] of [...hurtBy]) if (now - h.t > 400) hurtBy.delete(id);
+    for (const [k, t] of [...squadTarget]) if (now - t.t > 400) squadTarget.delete(k);
+  }
+}, 5);
+
+// ---- turning at a human speed (no instant spin)
+function turnTo(e, at, maxStep = 18) {
+  try {
+    const want = (Math.atan2(-(at.x - e.location.x), at.z - e.location.z) * 180) / Math.PI;
+    const cur = e.getRotation().y;
+    e.setRotation({ x: 0, y: turnToward(cur, want, maxStep) });
+    return Math.abs(((want - cur + 540) % 360) - 180);
+  } catch { return 0; }
+}
+
+// ---- threat slots: a hunted enemy carries a waypoint tag so pursuers path straight to him
+const threatSlot = new Map(); // entity id -> slot
+function slotForThreat(t) {
+  if (threatSlot.has(t.id)) return threatSlot.get(t.id);
+  const used = new Set([...markers().map(slotOf), ...threatSlot.values()]);
+  for (let i = 1; i <= NSLOT; i++) if (!used.has(i)) { try { tagMarker(t, i); } catch { return 0; } threatSlot.set(t.id, i); return i; }
+  return 0;
+}
+system.runInterval(() => {
+  const goals = new Set(allOf(SOLDIER).map((s) => Number(s.getDynamicProperty("war:goal") ?? 0)));
+  for (const [id, slot] of [...threatSlot]) {
+    if (goals.has(slot)) continue;
+    const t = world.getEntity(id);
+    try { if (t) untagMarker(t); } catch {}
+    threatSlot.delete(id);
+  }
+}, 40);
+
+// ---- the decision: what this soldier does about what he perceives, by stance and order
+const ANCHOR_LEASH = (d, melee) => d.func === "post" ? (melee ? 4 : 2) : d.func === "sentry" ? d.radius + 4 : d.func === "hold" ? 18 : d.func === "stand" ? 4 : Infinity;
+function engagement(e, d, now, orderGoal, melee) {
+  const s = perc.get(e.id);
+  if (!s || d.retreat || d.surr || d.div === "medic" || d.func === "escort" || d.func === "squad") return undefined;
+  const stance = String(e.getDynamicProperty("war:stance") ?? "aggressive");
+  const anchor = ["hold", "post", "sentry", "stand"].includes(d.func) ? marker(orderGoal) : undefined;
+  let leash = ANCHOR_LEASH(d, melee);
+  if (freeOf(e) && d.func === "hold") leash = aoOf(e);                        // the whole area of operations is theirs
+  const gun = GUNS.includes(d.weapon);
+  const t = s.threat;
+  if (t && t.isValid) {
+    if (stance === "holdfire" && !isProvoker(d.faction, t, now)) return undefined; // hold fire until someone of ours is attacked
+    turnTo(e, t.location);
+    const dd = dist(t.location, e.location);
+    if (anchor && flat(t.location, anchor.location) > leash) { note(e, "holding post"); return undefined; } // fight from the post
+    if (stance === "defensive") { note(e, "defending"); return { g: "g_none", t: melee ? "t_short" : "t_mid", urgent: false }; }
+    if (isMob(t) && dd > 10) return undefined;                  // shoot an attacking mob if it's there, never chase it
+    if (gun) {
+      const fire = GUN_SPEC[d.weapon]?.fire ?? 30;
+      const stopRange = Math.min(fire * 0.9, ["charge", "follow"].includes(d.func) ? 45 : 90);
+      if (dd <= stopRange && canHit(e, t)) { note(e, "firing"); return { g: "g_none", t: "t_mid", urgent: false }; } // stop and shoot
+      if (dd <= stopRange) { note(e, "moving for a clear shot"); const sl = slotForThreat(t); return sl ? { g: "g_wp", slot: sl, t: "t_mid", urgent: true } : undefined; }
+      if (dd > 60) { note(e, `firing at ${Math.round(dd)} blocks`); return undefined; } // far: keep to the order, shoot on the move
+    } else if (dd > 40 && !attackedRecently(e, t, now)) return undefined;     // melee doesn't run 100 blocks after someone
+    note(e, isMob(t) ? "fighting a mob" : "engaging");
+    const slot = slotForThreat(t);
+    return slot ? { g: "g_wp", slot, t: "t_mid", urgent: true } : { g: "g_none", t: "t_mid", urgent: true };
+  }
+  const moving = ["charge", "follow", "patrol"].includes(d.func);
+  if (moving && s.searchUntil > now + 60) s.searchUntil = now + 60;          // marching: a quick look, then carry on
+  if (anchor && s.searchUntil > now + 60) s.searchUntil = now + 60;          // posts: don't wander off searching
+  if (s.searchUntil > now && s.lastSeen && stance !== "defensive" && stance !== "holdfire") {
+    if (dist(e.location, s.lastSeen) < 3) { s.searchUntil = Math.min(s.searchUntil, now + 60); turnTo(e, { x: e.location.x + Math.cos(now / 7), z: e.location.z + Math.sin(now / 7) }, 25); }
+    if (!anchor || flat(s.lastSeen, anchor.location) <= leash) {
+      const slot = makeWaypoint(e.dimension, s.lastSeen);
+      if (slot) return { g: "g_wp", slot, t: "t_mid", urgent: false };
+    }
+  }
+  if (s.alert === "suspicious" && s.noise && stance !== "holdfire") {
+    turnTo(e, s.noise, 12);                                    // face the noise
+    if (!moving && !anchor && now - s.noiseT < 40) { note(e, "listening"); return { g: "g_none", t: melee ? "t_short" : "t_mid", urgent: false, slow: true }; }
+  }
+  return undefined;
+}
+
+// ================================================================ Marches, formations and route-finding
+// A virtual guide walks ahead of the group in stages on real, walkable ground (never leaves, roofs,
+// lava, fire or deep water), probing left/right around obstacles and preferring gates and doors;
+// if the group stalls it reroutes at an angle. The group follows a set of lane points that form a
+// column, line, wedge or loose skirmish depending on the ground and the situation.
+let marches = null;            // id -> { pos, dest, dim, then, final, lanes:[slot], heading, best, bestT, detour }
+const laneOf = new Map();      // lane slot -> march id
+function getMarches() {
+  if (!marches) {
+    marches = getJSON(world, "war:marches2", {}); laneOf.clear();
+    for (const [id, m] of Object.entries(marches)) { for (const s of m.lanes) laneOf.set(s, id); if (m.planning) { m.planning = false; m.path = undefined; } }
+  }
+  return marches;
+}
+function saveMarches() {
+  const slim = {};
+  for (const [id, m] of Object.entries(marches ?? {})) { const { path, legs, ...rest } = m; slim[id] = rest; }
+  try { setJSON(world, "war:marches2", slim); } catch {}
+}
+const spacingSetting = () => Math.max(1, Math.min(2, Number(setting("spacing", 1.5))));
+const HAZARD = ["lava", "fire", "magma", "cactus", "sweet_berry", "powder_snow", "campfire"];
+const CLIMB = ["ladder", "vine", "scaffolding"];
+const isClimb = (b) => !!b && CLIMB.some((k) => b.typeId.includes(k));
+const isWoodDoor = (b) => !!b && b.typeId.includes("door") && !b.typeId.includes("iron") && !b.typeId.includes("trapdoor");
+const PASSABLE = ["ladder", "vine", "scaffolding", "short_grass", "tall_grass", "fern", "flower", "dandelion", "poppy", "tulip", "orchid", "allium", "bluet", "daisy", "cornflower", "lily", "bush", "sapling", "snow_layer", "torch", "carpet", "vine", "button", "lever", "rail", "redstone_wire", "pressure_plate", "sign", "dead_bush", "seagrass"];
+const passable = (b) => !!b && (b.isAir || isWoodDoor(b) || (PASSABLE.some((p) => b.typeId.includes(p)) && !b.typeId.includes("grass_block")));
+// a spot a soldier can stand on, searched up and down from refY; undefined if none (or not loaded)
+function walkableNear(dim, x, z, refY) {
+  const bx = Math.floor(x) + 0.5, bz = Math.floor(z) + 0.5;
+  for (const dy of [0, 1, -1, 2, -2, 3, -3, 4, -4, 6, -6, 8, -8]) {
+    const y = Math.floor(refY) + dy;
+    try {
+      const floor = tBlock(dim, bx, y - 1, bz), feet = tBlock(dim, bx, y, bz), head = tBlock(dim, bx, y + 1, bz);
+      if (!floor || !feet || !head) return undefined;
+      if (floor.isAir || floor.isLiquid || floor.typeId.includes("leaves") || HAZARD.some((h) => floor.typeId.includes(h))) continue;
+      if (!passable(feet) || !passable(head)) continue;
+      return { x: bx, y, z: bz };
+    } catch { return undefined; }
+  }
+  return undefined;
+}
+function hazardBetween(dim, a, b, allowWater = false) {
+  const n = Math.max(4, Math.ceil(Math.hypot(b.x - a.x, b.z - a.z)));
+  for (let i = 1; i < n; i++) {
+    const t = i / n, x = a.x + (b.x - a.x) * t, z = a.z + (b.z - a.z) * t;
+    const g = walkableNear(dim, x, z, a.y + (b.y - a.y) * t);       // is there walkable ground (a bridge counts)?
+    if (g) continue;
+    if (allowWater) {
+      try { const w = dim.getBlock({ x, y: Math.floor(a.y + (b.y - a.y) * t) - 1, z }); if (w && w.typeId.includes("water")) continue; } catch {}
+    }
+    return true;
+  }
+  return false;
+}
+function findGate(dim, from, dest) {
+  const fx = dest.x - from.x, fz = dest.z - from.z, l = Math.hypot(fx, fz) || 1;
+  let best, bd = 1e9;
+  for (let dx = -8; dx <= 8; dx++) for (let dz = -8; dz <= 8; dz++) for (const dy of [0, 1]) {
+    if ((dx * fx + dz * fz) / l < -2) continue; // only ahead-ish
+    try {
+      const b = dim.getBlock({ x: from.x + dx, y: Math.floor(from.y) + dy, z: from.z + dz });
+      if (!b || !(b.typeId.includes("door") || b.typeId.includes("fence_gate"))) continue;
+      const dd = Math.hypot(dest.x - (from.x + dx), dest.z - (from.z + dz));
+      if (dd < bd) { bd = dd; best = { x: Math.floor(from.x + dx) + 0.5, y: Math.floor(from.y) + dy, z: Math.floor(from.z + dz) + 0.5 }; }
+    } catch {}
+  }
+  return best;
+}
+function nextStage(dim, from, dest, m) {
+  const dry = nextStageInner(dim, from, dest, { ...m, wet: false });
+  if (dry) return dry;
+  return nextStageInner(dim, from, dest, { ...m, wet: true }); // no dry way: crossing water is allowed
+}
+function nextStageInner(dim, from, dest, m) {
+  const L = Math.hypot(dest.x - from.x, dest.z - from.z) || 1;
+  const base = Math.atan2(dest.z - from.z, dest.x - from.x);
+  const step = Math.min(16, L);
+  let best;
+  for (const a of [0, 20, -20, 40, -40, 60, -60, 85, -85]) {
+    const ang = base + ((a + (m.detour ?? 0)) * Math.PI) / 180;
+    for (const st of [step, step * 0.6]) {
+      const w = walkableNear(dim, from.x + Math.cos(ang) * st, from.z + Math.sin(ang) * st, from.y);
+      if (!w || hazardBetween(dim, from, w, !!m.wet)) continue;
+      const score = Math.hypot(dest.x - w.x, dest.z - w.z) + Math.abs(w.y - from.y) * 1.5;
+      if (!best || score < best.score) best = { ...w, score };
+    }
+    if (best && a === 0) break; // straight ahead works
+  }
+  return best;
+}
+const SHAPES = {
+  column: [[0, 0], [0, -1], [0, -2], [0, -3], [0, -4], [0, -5]],
+  line: [[-0.5, 0], [0.5, 0], [-1.5, 0], [1.5, 0], [-2.5, 0], [2.5, 0]],
+  wedge: [[0, 0], [-1, -1], [1, -1], [-2, -2], [2, -2], [0, -2]],
+  skirmish: [[-1.5, 0], [1.5, 0], [-3, -1], [3, -1], [-4.5, -1.5], [4.5, -1.5]],
+};
+function chooseShape(dim, pos, heading, members, now) {
+  const rx = -Math.sin(heading), rz = Math.cos(heading);
+  let width = 1;
+  for (const side of [1, -1]) for (let k = 1; k <= 4; k++) { if (!walkableNear(dim, pos.x + rx * k * side, pos.z + rz * k * side, pos.y)) break; width++; }
+  if (width < 5) return "column";                                                   // narrow: street, bridge, path
+  const underFire = members.some((e) => now - (hurtBy.get(e.id)?.t ?? -999) < 100);
+  if (underFire) return "skirmish";                                                 // spread out under fire
+  const enemyKnown = members.some((e) => perc.get(e.id)?.alert === "combat");
+  return enemyKnown ? "wedge" : "line";                                            // wedge toward a known enemy
+}
+function placeLanes(m, dim, center, heading, shape) {
+  if (isIndoorsAt(dim, center)) { for (const slot of m.lanes) { try { marker(slot)?.teleport(center); } catch {} } m.shape = "single file"; return; }  // indoors: single file on the route
+  const S = spacingSetting() * 2, fx = Math.cos(heading), fz = Math.sin(heading), rx = -fz, rz = fx;
+  m.lanes.forEach((slot, i) => {
+    const [ox, oy] = SHAPES[shape][i % 6];
+    const x = center.x + rx * ox * S + fx * oy * S, z = center.z + rz * ox * S + fz * oy * S;
+    let w = walkableNear(dim, x, z, center.y);
+    if (!w || Math.abs(w.y - center.y) > 1) {                   // unusable spot: nearest usable one around it
+      w = undefined;
+      for (let r = 1; r <= 3 && !w; r++) for (let k = 0; k < 8 && !w; k++) {
+        const a = (k / 8) * Math.PI * 2;
+        const c2 = walkableNear(dim, x + Math.cos(a) * r, z + Math.sin(a) * r, center.y);
+        if (c2 && Math.abs(c2.y - center.y) <= 1) w = c2;
+      }
+      w = w ?? center;
+    }
+    try { marker(slot)?.teleport(w); } catch {}
+  });
+  m.shape = shape;
+}
+function startMarch(player, pool, dest, then) {
+  let cx = 0, cy = 0, cz = 0;
+  for (const e of pool) { cx += e.location.x; cy += e.location.y; cz += e.location.z; }
+  cx /= pool.length; cy /= pool.length; cz /= pool.length;
+  const dim = player.dimension, from = { x: cx, y: cy, z: cz };
+  const m = { pos: from, dest, dim: dim.id, then, final: false, lanes: [], heading: Math.atan2(dest.z - cz, dest.x - cx),
+    path: undefined, idx: 0, planning: false, progT: tick(), replans: 0, members: pool.map((e) => e.id) };
+  const nLanes = Math.min(6, Math.max(2, Math.ceil(pool.length / 4)));
+  for (let i = 0; i < nLanes; i++) { const s = makeWaypoint(dim, from, false); if (s) m.lanes.push(s); }
+  if (!m.lanes.length) return undefined;
+  const id = `m${tick()}_${m.lanes[0]}`;
+  getMarches()[id] = m;
+  for (const s of m.lanes) laneOf.set(s, id);
+  // don't stand around while the route is worked out: start walking toward the destination
+  const L0 = Math.hypot(dest.x - cx, dest.z - cz) || 1, st0 = Math.min(12, L0);
+  const first = walkableNear(dim, cx + ((dest.x - cx) / L0) * st0, cz + ((dest.z - cz) / L0) * st0, cy);
+  void first;                                                 // (no early wandering: they wait the second or two for the route)
+  requestPlan(id, m, from);
+  saveMarches();
+  return { id, lanes: m.lanes };
+}
+// Long or blocked routes: first a coarse map (4-block cells, ~420 blocks around) finds which WAY works
+// (e.g. around the mountain), split into legs of ~28 blocks; each leg is then planned block by block.
+// "wide" = after a dead end: search wider and less straight-at-the-goal.
+function requestPlan(id, m, from, wide = false) {
+  const dim = world.getDimension(m.dim);
+  m.planning = true;
+  const far = Math.hypot(m.dest.x - from.x, m.dest.z - from.z) > 280;
+  if ((!m.legs || !m.legs.length) && far) {
+    planRoute(dim, from, { x: m.dest.x, z: m.dest.z }, (pts) => {
+      const mm = getMarches()[id];
+      if (!mm) return;
+      const legs = [];
+      if (pts) {
+        let lastL = from;
+        for (const p of pts.slice(1)) if (flat(p, lastL) >= 28) { legs.push({ x: p.x, y: p.y, z: p.z }); lastL = p; }
+      }
+      legs.push({ x: mm.dest.x, y: mm.dest.y, z: mm.dest.z });
+      mm.legs = legs;
+      planLeg(id, mm, from, wide);
+    }, { step: 4, maxRadius: 420, max: wide ? 16000 : 9000, weight: wide ? 1.0 : 1.2, dead: m.dead });
+    return;
+  }
+  planLeg(id, m, from, wide);
+}
+function planLeg(id, m, from, wide) {
+  const dim = world.getDimension(m.dim);
+  m.planning = true;
+  const target = m.legs?.[0] ?? m.dest;
+  const lastLeg = !m.legs || m.legs.length <= 1;
+  m.legT = { x: target.x, y: target.y, z: target.z, final: lastLeg };
+  planRoute(dim, from, lastLeg ? m.dest : { x: target.x, z: target.z }, (pts, partial, frontier) => {
+    const mm = getMarches()[id];
+    if (!mm) return;
+    mm.planning = false;
+    mm.replans++;
+    mm.frontier = !!(partial && frontier);                      // stopped at unloaded land: just the next stretch, not a dead end
+    if (pts) { mm.path = pts; mm.idx = 0; mm.bestIdx = 0; }
+    else if (!lastLeg) {                                        // this leg point can't be reached: it was a bad corridor
+      markDeadEnd(mm, target);
+      mm.path = undefined;                                      // the march loop will plan again (a new corridor)
+    } else if (!mm.path) {                                      // nothing found yet: head straight and try again later
+      mm.path = [{ x: from.x, y: from.y, z: from.z, w: false }, { x: target.x, y: target.y ?? from.y, z: target.z, w: false }];
+      mm.idx = 0; mm.bestIdx = 0;
+    }
+    mm.progT = tick();
+    saveMarches();
+  }, { step: 1, maxRadius: 300, max: 120000, weight: wide ? 1.0 : 1.15, dead: m.dead });
+}
+function markDeadEnd(m, at, small = false) {
+  const near = (m.dead ?? []).filter((z) => Math.hypot(z.x - at.x, z.z - at.z) < 30).length;
+  m.dead = (m.dead ?? []).concat([{ x: at.x, z: at.z, r: small ? 4 + 2 * Math.min(3, near) : 14 + 6 * Math.min(4, near) }]).slice(-16);
+  m.legs = undefined;                                          // the corridor was wrong: rethink the whole way
+}
+// v5.3: how far along a route a soldier is. 3D (another floor is far away, not close) and windowed: it only
+// moves a little back or forward from where he was, so a spiral stair or a ladder shaft can't make him "jump"
+// to a point above or below him. One cheap search per soldier instead of scanning the whole route every time.
+const rTrack = new Map(); // soldier id -> { pts, i, t }
+const r3 = (p, l) => Math.hypot(p.x - l.x, p.z - l.z) + Math.abs(p.y - l.y) * 3;
+function nearestIdx(pts, loc, lo, hi, prefer) {
+  let bi = prefer ?? lo, bd = prefer !== undefined && pts[prefer] ? r3(pts[prefer], loc) - 0.01 : 1e9;
+  for (let i = lo; i < hi; i++) { const d0 = r3(pts[i], loc); if (d0 < bd) { bd = d0; bi = i; } }
+  return bi;
+}
+function trackIdx(id, pts, loc) {
+  let t = rTrack.get(id);
+  if (!t || t.pts !== pts) { t = { pts, i: nearestIdx(pts, loc, 0, pts.length), t: tick() }; rTrack.set(id, t); return t.i; }
+  if (tick() - t.t > 200) t.i = nearestIdx(pts, loc, 0, pts.length);                        // long gap (unloaded, teleported): look again
+  else t.i = nearestIdx(pts, loc, Math.max(0, t.i - 3), Math.min(pts.length, t.i + 14), t.i);
+  t.t = tick();
+  return t.i;
+}
+system.runInterval(() => { for (const id of [...rTrack.keys()]) if (!world.getEntity(id)) rTrack.delete(id); }, 1200);
+// a point is a "gate" when ordinary walking can't be trusted past it: a ladder, a change of level, something to open
+const isGate = (a, b) => b.climb || a.climb || b.open || Math.abs(b.y - a.y) >= 2;
+// how far ahead along the route the guide may go: about maxLen blocks of route, but never past a gate
+// (the group gets to the foot of the ladder / stair / door first, then the next stretch opens up)
+function lookahead(pts, from, maxLen) {
+  let len = 0, j = from;
+  const y0 = pts[from].y;
+  while (j < pts.length - 1) {
+    const a = pts[j], b = pts[j + 1];
+    if (isGate(a, b) && j > from) break;
+    if (Math.abs(b.y - y0) > 1.5 && j > from) break;                                    // one level at a time
+    len += Math.hypot(b.x - a.x, b.z - a.z) + Math.abs(b.y - a.y);
+    j++;
+    if (len >= maxLen || b.climb) break;
+  }
+  return j;
+}
+function routeProgress(m, loc, id) {
+  if (id) return trackIdx(id, m.path, loc);
+  return nearestIdx(m.path, loc, 0, m.path.length);
+}
+// next route point that's a few blocks ahead of the lead (route distance, not straight-line), stopping at gates
+function advance(m, c) { void m; void c; }   // (v5.3: the guide position is set from the lead's progress above)
+system.runInterval(() => {
+  const ms = getMarches();
+  const ids = Object.keys(ms);
+  if (!ids.length) return;
+  const now = tick();
+  const soldiers = allOf(SOLDIER);
+  let changed = false;
+  for (const id of ids) {
+    const m = ms[id];
+    m.members = m.members ?? [];
+    if (!m.members.length) { for (const s of m.lanes) laneOf.delete(s); delete ms[id]; changed = true; continue; } // everyone arrived, died or got new orders
+    const members = soldiers.filter((e) => m.members.includes(e.id));
+    if (!members.length) continue;                              // out of range: keep the order, resume when they load again
+    if (!m.path && !m.planning && !m.final) {                    // (after a reload) plan again from the group
+      let x = 0, y = 0, z = 0; for (const e of members) { x += e.location.x; y += e.location.y; z += e.location.z; }
+      requestPlan(id, m, { x: x / members.length, y: y / members.length, z: z / members.length }); changed = true; continue;
+    }
+    if (m.final || m.planning || !m.path) continue;
+    const dim = world.getDimension(m.dim);
+    let cx = 0, cy = 0, cz = 0;
+    for (const e of members) { cx += e.location.x; cy += e.location.y; cz += e.location.z; }
+    const c = { x: cx / members.length, y: cy / members.length, z: cz / members.length };
+    const fighting = members.some((e) => e.getDynamicProperty("war:ordergoal") !== undefined);
+    const before = m.idx;
+    // the lead sets the pace: progress = how far along the route the front half has got
+    const progOf = new Map(members.map((e) => [e.id, routeProgress(m, e.location, e.id)]));
+    const prog = [...progOf.values()].sort((a, b) => b - a);
+    const lead = prog[Math.floor((prog.length - 1) / 2)];
+    // the guide: ~6 blocks of route ahead of the lead in the open, ~3 indoors, and never past a ladder / level change / door
+    // until the lead has reached it
+    const leadPt = m.path[Math.min(lead, m.path.length - 1)];
+    const tight = isIndoorsAt(dim, leadPt) || m.path.slice(lead, lead + 6).some((p, k, arr) => k && isGate(arr[k - 1], p));
+    m.idx = Math.min(m.path.length - 1, Math.max(lookahead(m.path, lead, tight ? 3.5 : 6), Math.min(m.idx, lookahead(m.path, lead, 12))));
+    advance(m, c);
+    if (lead > (m.bestIdx ?? 0) || fighting) { m.bestIdx = Math.max(m.bestIdx ?? 0, lead); m.progT = now; }
+    // stragglers well behind get their own catch-up point along the route (nobody waits for them)
+    for (const e of members) {
+      const pi = progOf.get(e.id) ?? 0;
+      if (m.idx - pi >= 4) {
+        const tgt = m.path[lookahead(m.path, pi, 7)];                 // along the route (past the 3-block stop distance), not past a ladder / level change
+        const slot = myMarker(e, tgt);                                // his own marker (never another lane's formation marker)
+        if (slot) e.setDynamicProperty("war:catchup", slot);     // the brain walks him there (no waiting for him)
+      } else if (e.getDynamicProperty("war:catchup") !== undefined) e.setDynamicProperty("war:catchup", undefined);
+    }
+    const last = m.path[m.path.length - 1];
+    const atEnd = m.idx >= m.path.length - 1 && flat(last, c) < 8;
+    if (atEnd) {
+      const lt = m.legT ?? { x: m.dest.x, z: m.dest.z, final: true };
+      const atDest = Math.hypot(m.dest.x - last.x, m.dest.z - last.z) <= 6 && (!Number.isFinite(m.dest.y) || Math.abs(m.dest.y - last.y) <= 2) && !last.climb;
+      if (atDest) {
+        // arrived: lanes become formation spots at the destination
+        m.final = true; m.dest.y = last.y; m.pos = { x: last.x, y: last.y, z: last.z };
+        placeLanes(m, dim, m.pos, m.heading, "line");
+        for (const e of members) e.setDynamicProperty("war:catchup", undefined);   // stragglers now just join the formation
+      } else if (!lt.final && Math.hypot(lt.x - last.x, lt.z - last.z) <= 8) {
+        m.legs?.shift();                                         // leg done: plan the next one
+        requestPlan(id, m, c);
+      } else if (m.frontier) {
+        requestPlan(id, m, c);                                   // reached the edge of the loaded land: plan the next stretch
+      } else {
+        markDeadEnd(m, last);                                    // the route ran out short of the target: a dead end
+        requestPlan(id, m, c, true);
+      }
+      changed = true; continue;
+    }
+    if (now - m.progT > 300 && m.replans < 60) {               // no new ground for ~15 s: a dead end -> rethink wider
+      const leadE = members.reduce((b, e) => ((progOf.get(e.id) ?? 0) > (progOf.get(b.id) ?? 0) ? e : b), members[0]);
+      const pi0 = progOf.get(leadE.id) ?? 0;
+      const tightSpot = isIndoorsAt(dim, leadE.location) || m.path.slice(Math.max(0, pi0 - 1), pi0 + 4).some((p, k, arr) => k && isGate(arr[k - 1], p));
+      markDeadEnd(m, leadE.location, tightSpot);                 // stalled in a building / at a door: only that spot, not the whole building
+      requestPlan(id, m, leadE.location, true); changed = true; continue;
+    }
+    const p = m.path[m.idx], prev = m.path[Math.max(0, m.idx - 1)];
+    m.heading = Math.atan2(p.z - prev.z, p.x - prev.x) || m.heading;
+    const narrow = p.w || prev.w;
+    placeLanes(m, dim, p, m.heading, narrow ? "column" : chooseShape(dim, p, m.heading, members, now));
+    m.pos = { x: p.x, y: p.y, z: p.z };
+    changed = true;
+  }
+  if (changed) saveMarches();
+}, 10);
+// is this soldier's current route stretch a planned water crossing?
+function plannedSwim(e) {
+  const g = Number(e.getDynamicProperty("war:ordergoal") ?? e.getDynamicProperty("war:goal") ?? 0);
+  const id = laneOf.get(g); const m = id ? getMarches()[id] : undefined;
+  if (!m || !m.path) return false;
+  return m.path.some((p) => p.w && flat(p, e.location) < 14);    // the route crosses water right here
+}
+function arriveCharge(e, d) {
+  const id = laneOf.get(d.goal) ?? (getMarches(), laneOf.get(d.goal));
+  const m = id ? getMarches()[id] : undefined;
+  const lane = marker(d.goal);
+  if (!lane) return false;
+  if (m && !m.final) return false;                   // still marching
+  if (dist(e.location, lane.location) > 4) return false;
+  const then = m?.then ?? e.getDynamicProperty("war:then") ?? "hold";
+  radio(e, `in position (${Math.round(e.location.x)}, ${Math.round(e.location.z)}), ${then === "patrol" ? "patrolling" : "holding"}`);
+  giveFunction(e, then === "patrol" ? "patrol" : (d.div === "garrison" ? "post" : "hold"), undefined, d.goal);
+  return true;
+}
+// formation spots for Hold here / Patrol here (and as a fallback)
+function formationSlot(dim, center, e, spread = 3) {
+  const S = spread * spacingSetting() / 1.5;
+  const k = e.id.charCodeAt(e.id.length - 1) % 4;
+  const off = [[-1, -1], [1, -1], [-1, 1], [1, 1]][k];
+  let spot = walkableNear(dim, center.x + off[0] * S, center.z + off[1] * S, center.y);
+  if (!spot || Math.abs(spot.y - center.y) > 1 || !localReach(dim, center, spot)) spot = center;   // never into a pit or another room
+  return makeWaypoint(dim, spot) || makeWaypoint(dim, center);
+}
+// keep a little space between moving soldiers (spacing setting, 1-2 blocks)
+system.runInterval(() => {
+  const sp = spacingSetting();
+  for (const e of allOf(SOLDIER)) {
+    try {
+      const d = sd(e);
+      if (isRiding(e) || e.getDynamicProperty("war:ordergoal") !== undefined || d.func === "post") continue;
+      const moving = ["charge", "patrol", "follow"].includes(d.func);
+      for (const o of nearbyCombatants(e.dimension.id, e.location, moving ? sp : 0.8)) {   // standing: only un-stack
+        if (o.id === e.id || o.typeId !== SOLDIER) continue;
+        const a = e.location, b = o.location, l = Math.hypot(a.x - b.x, a.z - b.z) || 0.01;
+        push(e, { x: ((a.x - b.x) / l) * 0.08, y: 0, z: ((a.z - b.z) / l) * 0.08 }, 1);
+        break;
+      }
+    } catch {}
+  }
+}, 10);
+
+// ================================================================ Decision readout (hidden testing setting)
+// Soldiers always think; this only makes the latest decision visible above their heads.
+const notes = new Map(); // soldier id -> { text, t }
+function note(e, text) { notes.set(e.id, { text, t: tick() }); }
+system.runInterval(() => {
+  const on = !!setting("readout", false);
+  const now = tick();
+  for (const e of allOf(SOLDIER)) {
+    try {
+      const n = notes.get(e.id);
+      const want = on && n && now - n.t < 60 ? n.text : "";
+      if ((e.getDynamicProperty("war:readout") ?? "") !== want) { e.setDynamicProperty("war:readout", want); updateName(e); }
+    } catch {}
+  }
+  if (now % 400 < 20) for (const id of [...notes.keys()]) if (!world.getEntity(id)) notes.delete(id);
+}, 20);
+
+// ================================================================ Water: get back on land
+// A soldier in water that he doesn't need to be in swims for the nearest land toward his goal.
+function inWater(e) {
+  try { if (typeof e.isInWater === "boolean") return e.isInWater; } catch {}
+  try { const b = e.dimension.getBlock({ x: e.location.x, y: e.location.y + 0.2, z: e.location.z }); return !!b && b.typeId.includes("water"); } catch { return false; }
+}
+function goalPoint(e) {
+  const d = sd(e);
+  const g = marker(Number(e.getDynamicProperty("war:ordergoal") ?? e.getDynamicProperty("war:goal") ?? 0));
+  if (g) return g.location;
+  if (d.leader) { const p = findPlayer(d.leader); if (p && p.dimension.id === e.dimension.id) return p.location; }
+  return undefined;
+}
+const wetSince = new Map(); // soldier id -> tick he entered water
+const crossing = new Map();  // soldier id -> true while committed to a planned crossing
+const exitSpot = new Map();  // soldier id -> { slot, at, t } chosen shore (kept until reached)
+function waterExit(e, d, now) {
+  if (isRiding(e) || !inWater(e)) {
+    wetSince.delete(e.id);
+    if (crossing.has(e.id)) crossing.delete(e.id);
+    if (exitSpot.has(e.id)) exitSpot.delete(e.id);
+    return undefined;
+  }
+  if (!wetSince.has(e.id)) wetSince.set(e.id, now);
+  // a planned crossing: commit to it until out on land
+  if (crossing.has(e.id) || (d.func === "charge" && plannedSwim(e))) { crossing.set(e.id, true); note(e, "crossing water"); swimOn(e); return undefined; }
+  // already heading for a shore: keep going there
+  const ex = exitSpot.get(e.id);
+  if (ex && marker(ex.slot) && now - ex.t < 300) { swimTo(e, ex.at); return { g: "g_wp", slot: ex.slot, t: "t_mid", urgent: true }; }
+  if (now - wetSince.get(e.id) < 10) return undefined;
+  const goal = goalPoint(e), p = e.location;
+  let best, bs = 1e9;
+  for (let r = 2; r <= 16; r += 2) {
+    for (let i = 0; i < 16; i++) {
+      const a = (i / 16) * Math.PI * 2;
+      const w = walkableNear(e.dimension, p.x + Math.cos(a) * r, p.z + Math.sin(a) * r, p.y);
+      if (!w) continue;
+      const sc = r * 2 + (goal ? Math.hypot(goal.x - w.x, goal.z - w.z) * 0.5 : 0);
+      if (sc < bs) { bs = sc; best = w; }
+    }
+    if (best) break;
+  }
+  if (!best) { swimOn(e); return undefined; }                       // open water: keep moving toward the goal
+  const slot = makeWaypoint(e.dimension, best);
+  if (!slot) return undefined;
+  exitSpot.set(e.id, { slot, at: best, t: now });
+  note(e, "getting out of the water");
+  swimTo(e, best);
+  return { g: "g_wp", slot, t: "t_mid", urgent: true };
+}
+// swimming with purpose: a steady stroke toward the target, and a boost up onto the bank
+function swimTo(e, at) {
+  const p = e.location, dx = at.x - p.x, dz = at.z - p.z, l = Math.hypot(dx, dz) || 1;
+  let bank = false;
+  try {
+    const ax = p.x + (dx / l) * 0.9, az = p.z + (dz / l) * 0.9, y = Math.floor(p.y);
+    const f = e.dimension.getBlock({ x: ax, y, z: az }), h = e.dimension.getBlock({ x: ax, y: y + 1, z: az });
+    bank = !!f && !f.isAir && !f.isLiquid && !!h && passable(h);
+  } catch {}
+  push(e, { x: (dx / l) * 0.22, y: bank ? 0.5 : 0.04, z: (dz / l) * 0.22 }, 2);
+}
+function swimOn(e) { const g = goalPoint(e); if (g) swimTo(e, g); }
+
+// ================================================================ Fall awareness
+// Before stepping off a ledge, a soldier works out the fall: free up to ~3 blocks, then ~1 HP per
+// block. He only drops if it costs less than about a third of his current health (any height into
+// water at least 2 deep). Never into lava or fire. Otherwise he looks along the ledge for a better way.
+function dropInfo(dim, x, z, fromY) {
+  for (let h = 1; h <= 40; h++) {
+    let b;
+    try { b = dim.getBlock({ x, y: fromY - h, z }); } catch { return undefined; }
+    if (!b) return undefined;
+    if (b.isAir || passable(b)) continue;
+    const id = b.typeId;
+    if (id.includes("water")) {
+      let deep = 1;
+      try { const b2 = dim.getBlock({ x, y: fromY - h - 1, z }); if (b2 && b2.typeId.includes("water")) deep = 2; } catch {}
+      return { h: h - 1, water: deep >= 2, bad: false };
+    }
+    return { h: h - 1, water: false, bad: HAZARD.some((k) => id.includes(k)) };
+  }
+  return { h: 40, water: false, bad: true };
+}
+function safeDrop(e, info) {
+  if (!info || info.bad) return false;
+  if (info.water) return true;
+  if (info.h <= 3) return true;
+  const hp = e.getComponent("minecraft:health");
+  const cur = hp ? hp.currentValue : 16;
+  return info.h - 3 < cur * 0.33;
+}
+// returns true if it handled the move (dropped or headed to a better way down)
+function descend(e, goalLoc) {
+  const p = e.location, dim = e.dimension;
+  if (goalLoc.y > p.y - 2) return false;                         // goal isn't below him
+  const hx = goalLoc.x - p.x, hz = goalLoc.z - p.z, l = Math.hypot(hx, hz) || 1;
+  const ax = Math.floor(p.x + (hx / l) * 1.2) + 0.5, az = Math.floor(p.z + (hz / l) * 1.2) + 0.5;
+  const fy = Math.floor(p.y);
+  let ahead;
+  try { ahead = dim.getBlock({ x: ax, y: fy - 1, z: az }); } catch { return false; }
+  if (!ahead || !(ahead.isAir || passable(ahead))) return false;  // not at an edge
+  const info = dropInfo(dim, ax, az, fy);
+  if (safeDrop(e, info)) { note(e, info.h > 3 ? `dropping ${info.h} blocks` : "stepping down"); push(e, { x: (hx / l) * 0.3, y: 0.05, z: (hz / l) * 0.3 }, 2); return true; }
+  // too high here: look along the ledge (within ~12 blocks) for a safe way down
+  let best, bs = 1e9;
+  for (let r = 2; r <= 12; r += 2) for (let i = 0; i < 16; i++) {
+    const a = (i / 16) * Math.PI * 2;
+    const x = Math.floor(p.x + Math.cos(a) * r) + 0.5, z = Math.floor(p.z + Math.sin(a) * r) + 0.5;
+    const top = walkableNear(dim, x, z, p.y);
+    if (!top || Math.abs(top.y - fy) > 1) continue;
+    for (let j = 0; j < 4; j++) {
+      const b = j * Math.PI / 2;
+      const ex = Math.floor(x + Math.cos(b)) + 0.5, ez = Math.floor(z + Math.sin(b)) + 0.5;
+      let eb; try { eb = dim.getBlock({ x: ex, y: top.y - 1, z: ez }); } catch { continue; }
+      if (!eb || !(eb.isAir || passable(eb))) continue;
+      const inf = dropInfo(dim, ex, ez, top.y);
+      if (!safeDrop(e, inf)) continue;
+      const sc = r + inf.h * 0.5 + Math.hypot(goalLoc.x - ex, goalLoc.z - ez) * 0.2;
+      if (sc < bs) { bs = sc; best = { x, z }; }
+    }
+  }
+  if (best) { note(e, "finding a way down"); nudge(e, { x: best.x, y: p.y, z: best.z }, 0.3, 2); return true; }
+  note(e, "waiting: drop too high");
+  return true;                                                    // stay put rather than die
+}
+
+// ================================================================ Long-range aiming and marked spots
+// "Where I'm looking" works at any distance: the view ray is followed through loaded land; past the
+// edge of what the game runs, the destination is estimated along the same line.
+function aimFar(player) {
+  try { const s = lookedSpot(player, 200); if (s) return s; } catch {}
+  const eye = player.getHeadLocation(), dir = player.getViewDirection(), dim = player.dimension;
+  let lastGroundY = player.location.y, tExit = 0;
+  for (let t = 4; t <= 600; t += 4) {
+    const p = { x: eye.x + dir.x * t, y: eye.y + dir.y * t, z: eye.z + dir.z * t };
+    let b;
+    try { b = dim.getBlock(p); } catch { tExit = t; break; }        // left the loaded area
+    if (!b) { tExit = t; break; }
+    if (!b.isAir && !passable(b) && !b.typeId.includes("water")) return { x: p.x, y: p.y + 1, z: p.z };
+    const g = walkableNear(dim, p.x, p.z, lastGroundY);
+    if (g) lastGroundY = g.y;
+  }
+  if (!tExit) tExit = 600;
+  // estimate: where the view line meets the last known ground height, else a bit past the edge
+  let t = tExit + 48;
+  if (dir.y < -0.02) t = Math.max(tExit, Math.min(800, (lastGroundY - eye.y) / dir.y));
+  else if (dir.y > 0.02) t = Math.min(800, tExit + 48 + dir.y * 400); // looking up at a far hill: go farther
+  const hl = Math.hypot(dir.x, dir.z) || 1;
+  return { x: eye.x + (dir.x / hl) * t, y: lastGroundY, z: eye.z + (dir.z / hl) * t, estimated: true };
+}
+const getMarks = () => getJSON(world, "war:marks", []);
+async function markSpot(player) {
+  const r = await show(new ModalFormData().title("Mark this spot").textField("Name", "e.g. Eastern mountain"), player);
+  if (!r || r.canceled || !r.formValues) return;
+  const name = String(r.formValues[0]).trim().slice(0, 32) || `Mark ${getMarks().length + 1}`;
+  const marks = getMarks().filter((m) => m.name !== name);
+  const l = player.location;
+  marks.push({ name, x: l.x, y: l.y, z: l.z, dim: player.dimension.id });
+  setJSON(world, "war:marks", marks.slice(-30));
+  player.onScreenDisplay.setActionBar(`§aMarked "${name}" at ${Math.round(l.x)}, ${Math.round(l.y)}, ${Math.round(l.z)}`);
+}
+async function pickMark(player) {
+  const marks = getMarks().filter((m) => m.dim === player.dimension.id);
+  if (!marks.length) { player.sendMessage("§7No marked spots yet. Use the Command Baton > Mark this spot while standing there."); return undefined; }
+  const af = new ActionFormData().title("Marked spots");
+  for (const m of marks) af.button(`${m.name}\n§8${Math.round(m.x)}, ${Math.round(m.y)}, ${Math.round(m.z)} · ${Math.round(Math.hypot(m.x - player.location.x, m.z - player.location.z))} blocks`);
+  af.button("§cDelete a mark...");
+  const r = await show(af, player);
+  if (!r || r.canceled || r.selection === undefined) return undefined;
+  if (r.selection === marks.length) {
+    const df = new ActionFormData().title("Delete which mark?");
+    for (const m of marks) df.button(m.name);
+    const dr = await show(df, player);
+    if (dr && !dr.canceled && dr.selection !== undefined) setJSON(world, "war:marks", getMarks().filter((m) => m.name !== marks[dr.selection].name));
+    return undefined;
+  }
+  return marks[r.selection];
+}
+
+// ================================================================ Movement arbiter
+// Every system that wants to move a soldier proposes a push with a priority; each soldier gets at
+// most one push at a time (escape 4 > combat 3 > route 2 > spacing 1), so nothing fights anything.
+const pushes = new Map();   // soldier id -> { e, vec, p }
+const pushCool = new Map(); // soldier id -> tick of last push
+function push(e, vec, p = 2) {
+  const cur = pushes.get(e.id);
+  if (!cur || p > cur.p) pushes.set(e.id, { e, vec, p });
+}
+system.runInterval(() => {
+  const now = tick();
+  for (const [id, it] of pushes) {
+    if (downed.has(id)) continue;                                   // nothing moves the downed
+    if (now - (pushCool.get(id) ?? -99) < (it.p >= 3 ? 4 : 8)) continue;
+    try { if (it.e.isValid) { it.e.applyImpulse(it.vec); pushCool.set(id, now); } } catch {}
+  }
+  pushes.clear();
+  if (now % 400 < 2) for (const id of [...pushCool.keys()]) if (now - pushCool.get(id) > 400) pushCool.delete(id);
+}, 2);
+
+// ================================================================ Route planner (A*, the army's GPS)
+// Reads the real terrain around the army and finds the cheapest route: flat ground and bridges are
+// cheap, climbing costs a little, safe drops are cheap, swimming is expensive but allowed, lava /
+// fire / deadly drops / walls over 2 blocks are impossible. Runs in small slices every tick.
+const planJobs = [];
+// Every route reads the world through this memory: a block is read from the game once and remembered for ~30 s,
+// so plans share what others already read. Fresh reads are capped per tick for the whole add-on (no lag spikes).
+const TERRAIN = new Map();            // "dim|x|y|z" -> { typeId, isAir, isLiquid, t }
+let freshReads = 0, readBudget = 1500;
+system.runInterval(() => { freshReads = 0; }, 1);
+system.runInterval(() => { const now = tick(); if (TERRAIN.size > 150000) TERRAIN.clear(); else for (const [k, v] of TERRAIN) if (now - v.t > 600) TERRAIN.delete(k); }, 600);
+function tBlock(dim, x, y, z) {
+  const key = `${dim.id}|${Math.floor(x)}|${Math.floor(y)}|${Math.floor(z)}`;
+  const c = TERRAIN.get(key);
+  if (c) return c;
+  freshReads++;
+  const b = dim.getBlock({ x, y, z });                                   // throws when unloaded (callers handle it)
+  if (!b) return undefined;
+  const v = { typeId: b.typeId, isAir: b.isAir, isLiquid: b.isLiquid, t: tick() };
+  if (OPENABLE_ID(b.typeId)) { try { v.open = !!b.permutation.getState("open_bit"); } catch {} }
+  TERRAIN.set(key, v);
+  return v;
+}
+const SKY = new Map();
+function tSky(dim, x, y, z) {
+  const key = `${dim.id}|${Math.floor(x)}|${Math.floor(y)}|${Math.floor(z)}`;
+  const c = SKY.get(key);
+  if (c !== undefined) return c;
+  freshReads++;
+  const v = dim.getSkyLightLevel({ x, y, z });
+  if (SKY.size > 100000) SKY.clear();
+  SKY.set(key, v);
+  return v;
+}
+const isIronDoor = (b) => !!b && b.typeId.includes("iron_door") && !b.typeId.includes("trapdoor");
+const isPlate = (b) => !!b && b.typeId.includes("pressure_plate");
+// v5.3: blocks a soldier can open himself on the way (wooden trapdoors, fence gates); the route follower opens them
+const OPENABLE_ID = (id) => (id.includes("trapdoor") && !id.includes("iron")) || id.includes("fence_gate") || (id.includes("door") && !id.includes("iron"));
+const isOpenable = (b) => !!b && ((b.typeId.includes("trapdoor") && !b.typeId.includes("iron")) || b.typeId.includes("fence_gate"));
+// fences, walls and fence gates are 1.5 high: nobody steps up onto them, so they are never a floor
+const isTall = (b) => { if (!b) return false; const id = b.typeId; return id.includes("fence") || /_wall$/.test(id) || id.endsWith(":cobblestone_wall"); };
+const pathable = (b) => passable(b) || isOpenable(b);
+// a real floor: solid under the feet (a ladder counts: he can stand on its top rung); not a plant, torch, open trapdoor or fence
+const isFloor = (b) => !!b && !b.isAir && !b.isLiquid && !isTall(b) && !(b.typeId.includes("trapdoor") && b.open) && (!passable(b) || isClimb(b)) && !b.typeId.includes("leaves") && !HAZARD.some((h) => b.typeId.includes(h));
+const PLAN_BUDGET = 700;          // node expansions per tick, shared by all plans (a big search takes a few seconds)
+function cellAt(job, x, z, refY) {
+  const key = job.step > 1 ? `${x},${z}` : `${x},${z},${Math.floor(refY)}`;
+  const c = job.cells.get(key);
+  if (c !== undefined) {
+    if (c.miss !== undefined) { if (Math.abs(c.miss - refY) <= 2) return null; }   // "no ground here" only counts for that height
+    else if (c.unloaded) return null;
+    else if (Math.abs(c.y - refY) <= 9) return c;
+  }
+  let found = null;
+  const dim = job.dim;
+  const bx = x + 0.5, bz = z + 0.5;
+  const DY = job.step > 1 ? [0, 1, -1, 2, -2, 3, -3, 4, -4, -5, -6, -7, -8, -9, -10, 5, 6] : [0, 1, -1, 2, -2, -3, -4, -5, -6, -7, -8];
+  try {
+    for (const dy of DY) {
+      const y = Math.floor(refY) + dy;
+      const floor = tBlock(dim, bx, y - 1, bz), feet = tBlock(dim, bx, y, bz), head = tBlock(dim, bx, y + 1, bz);
+      if (!floor || !feet || !head) { found = null; break; }
+      if (job.step === 1 && isIronDoor(feet) && !floor.isAir && !floor.isLiquid) { found = { x, z, y, w: false, iron: true }; break; }  // iron door: see expansion
+      if (feet.typeId.includes("water") && passable(head)) { found = { x, z, y, w: true }; break; }  // surface water: swim
+      if (feet.typeId.includes("water")) continue;
+      if (job.step === 1 && isClimb(feet) && pathable(head)) { found = { x, z, y, w: false, climb: true }; break; }   // on a ladder
+      if (!isFloor(floor)) continue;
+      if (!pathable(feet) || !pathable(head)) continue;
+      // a shoreline cell (water right next to it) costs a little extra, so routes keep off the water's edge;
+      // a ledge cell (a drop of 3+ right beside it) costs extra too, so routes don't hug the edge of pits and walls
+      let shore = false, ledge = false;
+      for (const [dx, dz] of [[1, 0], [-1, 0], [0, 1], [0, -1]]) {
+        const nf = tBlock(dim, bx + dx, y - 1, bz + dz);
+        if (nf && nf.typeId.includes("water")) { shore = true; break; }
+        if (job.step === 1 && !ledge && nf && (nf.isAir || passable(nf))) {
+          const n2 = tBlock(dim, bx + dx, y - 2, bz + dz), n3 = tBlock(dim, bx + dx, y - 3, bz + dz);
+          if (n2 && n3 && (n2.isAir || passable(n2)) && (n3.isAir || passable(n3))) ledge = true;
+        }
+      }
+      let cave = false;
+      try {
+        if (tSky(dim, bx, y, bz) < 6) {
+          for (let k = 2; k <= 6; k++) { const up = tBlock(dim, bx, y + k, bz); if (up && !up.isAir) { cave = ["stone", "dirt", "deepslate", "gravel", "tuff", "granite", "diorite", "andesite"].some((n) => up.typeId.includes(n)) && !up.typeId.includes("brick"); break; } }
+        }
+      } catch {}  // natural rock overhead: underground
+      const hatchBelow = job.step === 1 && floor.typeId.includes("trapdoor") && isClimb(tBlock(dim, bx, y - 2, bz));     // standing on a hatch over a ladder: can go down
+      found = { x, z, y, w: false, shore, cave, ledge, open: job.step === 1 && (isOpenable(feet) || isOpenable(head) || isWoodDoor(feet)) && !isClimb(feet), climb: job.step === 1 && (isClimb(floor) || hatchBelow) }; break;   // standing on top of a ladder: can climb down
+    }
+  } catch { job.cells.set(key, { unloaded: true }); job.hitUnloaded = true; return null; }  // unloaded: can't plan through it
+  job.cells.set(key, found ?? { miss: Math.floor(refY) });
+  return found;
+}
+function inDead(job, b) {
+  if (Math.hypot(b.x - job.origin.x, b.z - job.origin.z) < 10) return false;   // never trap him where he stands
+  for (const z of job.dead ?? []) if (Math.hypot(b.x - z.x, b.z - z.z) < z.r) return true;
+  return false;
+}
+function stepCost(a, b, diag, job) {
+  const step = job?.step ?? 1;
+  let base = (diag ? 1.414 : 1) * step;
+  const dy = b.y - a.y;
+  if (step > 1) {
+    // coarse map (4-block cells): judge slopes over the whole cell
+    if (dy > 4 || (a.w && dy > 2)) return Infinity;
+    if (dy > 2) base += 20 * (dy - 2) + 10;                     // steep over a whole cell: probably a cliff
+    else if (dy > 0) base += dy * 0.8;
+    else if (-dy > 10 && !b.w) return Infinity;
+    else if (-dy > 5 && !b.w) base += (-dy) * 0.3;
+  } else {
+    if (dy > 1) return Infinity;                                // only steps a soldier can always take
+    if (dy === 1) base += 0.4;
+    else if (dy < 0) {
+      const h = -dy;
+      if (!b.w) {
+        if (h > 8) return Infinity;                             // deadly drop
+        if (h > 3) base += 0.3 * h;                             // a drop that costs some health
+        if (h >= 3) base += 14;                                 // no walking back up from here (pits): only if it really pays
+      }
+    }
+  }
+  if (job && inDead(job, b)) base += 40 * step;                 // a known dead end: only if there's truly nothing else
+  if (b.w) base *= 10;                                          // swimming: only when it saves a lot
+  else if (b.shore) base += 0.6;                                // keep off the shoreline
+  if (b.ledge) base += 1.2;                                      // keep away from the edge of a drop
+  if (b.open) base += 0.5;                                       // a trapdoor / gate to open: fine, but not for nothing
+  if (b.cave) base += 8 * (job?.step ?? 1);                     // caves are traps: only if there's truly no open route
+  return base;
+}
+class Heap {
+  constructor() { this.a = []; }
+  push(n) { const a = this.a; a.push(n); let i = a.length - 1; while (i > 0) { const p = (i - 1) >> 1; if (a[p].f <= a[i].f) break; [a[p], a[i]] = [a[i], a[p]]; i = p; } }
+  pop() {
+    const a = this.a; const top = a[0]; const last = a.pop();
+    if (a.length) { a[0] = last; let i = 0; for (;;) { const l = i * 2 + 1, r = l + 1; let m = i; if (l < a.length && a[l].f < a[m].f) m = l; if (r < a.length && a[r].f < a[m].f) m = r; if (m === i) break; [a[m], a[i]] = [a[i], a[m]]; i = m; } }
+    return top;
+  }
+  get size() { return this.a.length; }
+}
+function planRoute(dim, start, goal, onDone, opts = {}) {
+  const step = opts.step ?? 1;
+  const maxRadius = opts.maxRadius ?? 170;
+  const snap = (v) => Math.floor(v / step) * step;
+  const sx = snap(start.x), sz = snap(start.z);
+  const gy = Number.isFinite(goal.y) ? Math.floor(goal.y) : undefined;
+  const job = { dim, goal: { x: Math.floor(goal.x), z: Math.floor(goal.z), y: step > 1 ? undefined : gy }, cells: new Map(), open: new Heap(), g: new Map(), came: new Map(),
+    closed: new Set(), best: undefined, bestH: Infinity, exp: 0, max: opts.max ?? 9000, onDone, origin: { x: sx, z: sz }, maxRadius,
+    step, weight: opts.weight ?? 1.25, dead: opts.dead ?? [], goalFn: opts.goalFn };
+  const s0 = cellAt(job, sx, sz, start.y) ?? { x: sx, z: sz, y: Math.floor(start.y), w: false };
+  const nkey = (x, z, y) => step > 1 ? `${x},${z}` : `${x},${z},${y}`;
+  job.nkey = nkey;
+  job.cells.set(nkey(sx, sz, s0.y), s0);
+  const h0 = job.goalFn ? 0 : Math.hypot(job.goal.x - sx, job.goal.z - sz);
+  job.open.push({ x: sx, z: sz, y: s0.y, w: s0.w, climb: !!s0.climb, f: h0 });
+  job.g.set(nkey(sx, sz, s0.y), 0);
+  job.best = { x: sx, z: sz, key: nkey(sx, sz, s0.y) }; job.bestH = h0;
+  planJobs.push(job);
+}
+function finishJob(job, endKey, partial = false) {
+  const pts = [];
+  let k = endKey;
+  while (k) { const parts = k.split(",").map(Number); const [x, z] = parts; const c = job.cells.get(k); pts.push({ x: x + 0.5, y: c && c.y !== undefined ? c.y : (parts[2] ?? 0), z: z + 0.5, w: !!c?.w, climb: !!c?.climb, open: !!c?.open }); k = job.came.get(k); }
+  pts.reverse();
+  // keep a point every ~6 blocks, at turns, height changes and water edges
+  const out = [];
+  let last;
+  for (let i = 0; i < pts.length; i++) {
+    const p = pts[i], prev = pts[i - 1], next = pts[i + 1];
+    const turn = prev && next && ((next.x - p.x) * (p.z - prev.z) - (next.z - p.z) * (p.x - prev.x)) !== 0;
+    const edge = prev && (prev.w !== p.w || Math.abs(prev.y - p.y) >= 1 || p.climb || prev.climb || p.open || (next && (next.climb || next.open)));
+    const step = job.step > 1 ? 6 : 2;                                  // fine routes: dense (no room for shortcuts into pits)
+    if (i === 0 || i === pts.length - 1 || edge || turn || (last && flat(last, p) >= step)) { out.push(p); last = p; }
+  }
+  try { job.onDone(out.length > 1 ? out : undefined, partial, !!job.hitUnloaded); } catch {}
+}
+let jobTurn = 0;
+system.runInterval(() => {
+  let budget = PLAN_BUDGET;
+  let rounds = 0;
+  const tStart = Date.now();
+  while (budget > 0 && planJobs.length && freshReads < readBudget && rounds < planJobs.length * 4 && Date.now() - tStart < 3) {
+    rounds++;
+    jobTurn = (jobTurn + 1) % planJobs.length;
+    const job = planJobs[jobTurn];
+    let share = Math.max(40, Math.floor(PLAN_BUDGET / planJobs.length));
+    let finished = false;
+    while (share-- > 0 && budget-- > 0 && freshReads < readBudget && ((budget & 31) || Date.now() - tStart < 3)) {
+      if (!job.open.size || job.exp >= job.max) {
+        // no full route: go as far as we can toward the goal (re-planned later)
+        const bk = job.best.key ?? `${job.best.x},${job.best.z}`;
+        if (job.bestH < Math.hypot(job.goal.x - job.origin.x, job.goal.z - job.origin.z) - 6) finishJob(job, bk, true); else { try { job.onDone(undefined, true, !!job.hitUnloaded); } catch {} }
+        finished = true; break;
+      }
+      const n = job.open.pop();
+      const nk = job.nkey(n.x, n.z, n.y);
+      if (job.closed.has(nk)) continue;
+      job.closed.add(nk);
+      job.exp++;
+      const hz = job.goal.y === undefined ? 0 : Math.abs(n.y - job.goal.y);
+      const h = Math.hypot(job.goal.x - n.x, job.goal.z - n.z) + hz * 0.5;
+      if (h < job.bestH) { job.bestH = h; job.best = { x: n.x, z: n.z, key: nk }; }
+      // right spot AND right height: on his feet (not on a ladder) and on the goal's level; a near level is only
+      // accepted after a long search (the clicked height can be a little off, e.g. on a tree or a roof edge)
+      const reached = job.goalFn ? job.goalFn(job.dim, n) : (Math.hypot(job.goal.x - n.x, job.goal.z - n.z) <= Math.max(2, job.step * 1.5) &&
+        (job.step > 1 || (!n.climb && (hz <= 1.5 || (hz <= 3 && job.exp > 4000)))));
+      if (reached) { finishJob(job, nk); finished = true; break; }
+      const cur = { y: n.y, w: n.w, climb: n.climb };
+      const S = job.step;
+      for (const [ddx, ddz] of [[1, 0], [-1, 0], [0, 1], [0, -1], [1, 1], [1, -1], [-1, 1], [-1, -1]]) {
+        const dx = ddx * S, dz = ddz * S;
+        const x = n.x + dx, z = n.z + dz;
+        if (Math.hypot(x - job.origin.x, z - job.origin.z) > job.maxRadius) continue;
+        const c = cellAt(job, x, z, n.y);
+        if (!c) continue;
+        const key = job.nkey(x, z, c.y);
+        if (job.closed.has(key)) continue;
+        if (c.iron) {                                                  // an iron door opens only from a side with a pressure plate
+          let plate = false;
+          try { plate = isPlate(tBlock(job.dim, n.x + 0.5, n.y, n.z + 0.5)); } catch {}
+          if (!plate) continue;
+        }
+        if (job.step === 1 && c.y !== n.y) {
+          // a drop needs open air all the way down; a step up needs headroom above where he stands
+          let ok = true;
+          try {
+            if (c.y < n.y) { for (let yy = c.y + 2; yy <= n.y + 1; yy++) { const b = tBlock(job.dim, x + 0.5, yy, z + 0.5); if (!pathable(b) && !isIronDoor(b)) { ok = false; break; } } }
+            else { const b = tBlock(job.dim, n.x + 0.5, n.y + 2, n.z + 0.5); if (!pathable(b) && !isIronDoor(b)) ok = false; }
+          } catch { ok = false; }
+          if (!ok) continue;
+        }
+        const diag = dx !== 0 && dz !== 0;
+        if (diag && S === 1) { // no cutting corners
+          const c1 = cellAt(job, n.x + dx, n.z, n.y), c2 = cellAt(job, n.x, n.z + dz, n.y);
+          if (!c1 || !c2 || c1.iron || c2.iron || Math.abs(c1.y - n.y) > 1 || Math.abs(c2.y - n.y) > 1) continue;
+        }
+        const sc = stepCost(cur, c, diag, job);
+        if (!isFinite(sc)) continue;
+        const g = (job.g.get(nk) ?? 0) + sc;
+        if (g >= (job.g.get(key) ?? Infinity)) continue;
+        job.g.set(key, g); job.came.set(key, nk);
+        job.open.push({ x, z, y: c.y, w: c.w, climb: !!c.climb, f: g + (job.goalFn ? 0 : job.weight * (Math.hypot(job.goal.x - x, job.goal.z - z) + (job.goal.y === undefined ? 0 : Math.abs(c.y - job.goal.y) * 0.5))) }); // aimed search
+      }
+      // ladders: climb straight up or down while the ladder continues (and off the bottom onto the ground)
+      if (job.step === 1 && n.climb) {
+        for (const dy of [1, -1]) {
+          const yy = n.y + dy;
+          let c2 = null;
+          try {
+            const feet = tBlock(job.dim, n.x + 0.5, yy, n.z + 0.5), head = tBlock(job.dim, n.x + 0.5, yy + 1, n.z + 0.5), fl = tBlock(job.dim, n.x + 0.5, yy - 1, n.z + 0.5);
+            const hatch = feet && feet.typeId.includes("trapdoor") && isOpenable(feet) && isClimb(tBlock(job.dim, n.x + 0.5, yy - 1, n.z + 0.5));   // a trapdoor over a ladder: climbable once open
+            if (feet && head && pathable(head) && (isClimb(feet) || hatch)) c2 = { x: n.x, z: n.z, y: yy, w: false, climb: true, open: !!hatch };
+            else if (dy < 0 && feet && fl && pathable(feet) && pathable(head) && isFloor(fl)) c2 = { x: n.x, z: n.z, y: yy, w: false };
+          } catch {}
+          if (!c2) continue;
+          const key = job.nkey(n.x, n.z, yy);
+          if (job.closed.has(key)) continue;
+          job.cells.set(key, c2);
+          const g = (job.g.get(nk) ?? 0) + 1.6;
+          if (g >= (job.g.get(key) ?? Infinity)) continue;
+          job.g.set(key, g); job.came.set(key, nk);
+          job.open.push({ x: n.x, z: n.z, y: yy, w: false, climb: !!c2.climb, f: g + (job.goalFn ? 0 : job.weight * Math.hypot(job.goal.x - n.x, job.goal.z - n.z)) });
+        }
+      }
+    }
+    if (finished) { planJobs.splice(planJobs.indexOf(job), 1); jobTurn = Math.max(0, jobTurn - 1); }
+  }
+}, 1);
+
+world.afterEvents.entityDie.subscribe((ev) => {
+  try {
+    if (ev.deadEntity.typeId !== SOLDIER) return;
+    const id = ev.deadEntity.id;
+    delete getRefs()[id];
+    let changed = false;
+    for (const m of Object.values(getMarches())) if (m.members?.includes(id)) { m.members = m.members.filter((x) => x !== id); changed = true; }
+    if (changed) saveMarches();
+  } catch {}
+});
+
+// ================================================================ Part A (v4.5)
+// Mission orders with areas of operation, wide patrol sweeps, direct blast damage on this add-on's
+// units, rare personal "shaken" breaks, rules of engagement, and realism sliders.
+const realism = () => ({ dmg: Number(setting("r_dmg", 100)) / 100, react: Number(setting("r_react", 100)) / 100 });
+const aoOf = (e) => Number(e.getDynamicProperty("war:ao") ?? 100);
+const freeOf = (e) => e.getDynamicProperty("war:free") !== false;   // "use judgment" (default) vs "exactly as ordered"
+
+// ---- blast damage applied directly (tank shells, plane bombs, crashes): soldiers, hounds, tanks, planes, boats
+function blastDamage(dim, loc, power, src) {
+  // kill zone (~3 blocks for a shell): almost certainly lethal; heavy damage out to ~6; light to the edge (~9)
+  const r = power * 1.8, core = power * 0.6;
+  let n = 0;
+  for (const o of dim.getEntities({ location: loc, maxDistance: r })) {
+    if (!(o.typeId === SOLDIER || o.typeId === HOUND || VEHICLES.includes(o.typeId) || o.typeId === NEST)) continue;
+    const dd = dist({ x: o.location.x, y: o.location.y + 0.9, z: o.location.z }, loc);
+    const dmg = dd <= core ? power * 5 : Math.round(Math.max(1, power * 3.2 * (1 - (dd - core) / (r - core)) + 1));
+    if (dmg <= 0) continue;
+    try { o.applyDamage(dmg, { cause: "entityExplosion", damagingEntity: src?.isValid ? src : undefined }); n++; }
+    catch { try { o.applyDamage(dmg, { cause: "entityExplosion" }); n++; } catch {} }
+  }
+  if (n && src?.typeId === "minecraft:player" && setting("readout", false)) { try { src.onScreenDisplay.setActionBar(`§7Blast hit ${n} unit${n === 1 ? "" : "s"}`); } catch {} }
+}
+
+// ---- areas of operation: who's defending where (for helping friends in trouble inside your area)
+function anchorOf(e) {
+  const parked = e.getDynamicProperty("war:ordergoal");
+  const g = Number(parked ?? e.getDynamicProperty("war:goal") ?? 0);
+  return marker(g) ?? marker(Number(e.getDynamicProperty("war:home") ?? 0));
+}
+function helpInArea(victim, attacker, fv, now) {
+  for (const o of nearbyCombatants(victim.dimension.id, victim.location, 200)) {
+    if (o.typeId !== SOLDIER || o.id === victim.id) continue;
+    try {
+      if (!freeOf(o) || !isFriendly(Number(P(o, "war:faction")), fv)) continue;
+      const d = sd(o);
+      if (!["hold", "patrol", "stand", "sentry"].includes(d.func) || d.retreat || d.surr) continue;
+      const a = anchorOf(o);
+      if (a && flat(a.location, victim.location) <= aoOf(o)) assist.set(o.id, { id: attacker.id, t: now });   // trouble inside my area: go help
+    } catch {}
+  }
+}
+
+// ---- patrol: a wide sweep of the whole area (not a stroll around one spot)
+const sweep = new Map(); // id -> { slot, at, t }
+function patrolSweep(e, d, now) {
+  if (d.func !== "patrol" || d.retreat || isRiding(e)) return undefined;
+  const r = Math.max(d.radius, freeOf(e) ? Math.min(150, aoOf(e)) : d.radius);
+  // every patrol uses the sweep (points on the same level, reachable on foot)
+  const a = anchorOf(e);
+  if (!a) return undefined;
+  let sw = sweep.get(e.id);
+  if (!sw || !marker(sw.slot) || flat(sw.at, e.location) < 4 || now - sw.t > 900) {
+    let spot;
+    for (let k = 0; k < 6 && !spot; k++) {
+      const ang = Math.random() * Math.PI * 2, rr = r * (0.35 + Math.random() * 0.6);
+      spot = walkableNear(e.dimension, a.location.x + Math.cos(ang) * rr, a.location.z + Math.sin(ang) * rr, a.location.y);
+      if (spot && (Math.abs(spot.y - a.location.y) > 1 || !localReach(e.dimension, a.location, spot))) spot = undefined;   // same level, reachable
+    }
+    if (!spot) return undefined;
+    const slot = makeWaypoint(e.dimension, spot);
+    if (!slot) return undefined;
+    sw = { slot, at: spot, t: now }; sweep.set(e.id, sw);
+  }
+  note(e, "patrolling");
+  return travel(e, sw.at, "patrol", now, false);
+}
+
+// ---- breaking and running: rare, personal, temporary. Never more than ~1 in 8 of a squad at once.
+const shaken = new Map();     // id -> { slot, at, until, recoverUntil, key }
+const breakCool = new Map();  // id -> tick he may break again
+const recentDeaths = [];      // { x, z, dim, f, t }
+const recentHits = new Map(); // id -> [ticks]
+const breakKey = (e, d) => d.squad ? `${d.faction}:${d.squad}` : `${d.faction}`;
+world.afterEvents.entityDie.subscribe((ev) => {
+  try {
+    const v = ev.deadEntity;
+    if (v.typeId !== SOLDIER && v.typeId !== "minecraft:player") return;
+    try { const fv = factionOf(v); const near = nearbyCombatants(v.dimension.id, v.location, 10).find((o) => o.typeId === SOLDIER && o.id !== v.id && Number(P(o, "war:faction")) === fv); if (near) callout(near, "Man down!"); } catch {}
+    recentDeaths.push({ x: v.location.x, z: v.location.z, dim: v.dimension.id, f: factionOf(v), t: tick() });
+    while (recentDeaths.length > 200) recentDeaths.shift();
+  } catch {}
+});
+world.afterEvents.entityHurt.subscribe((ev) => {
+  const v = ev.hurtEntity;
+  if (v?.typeId !== SOLDIER) return;
+  if (Math.random() < 0.3 && !downed.has(v.id)) callout(v, "I'm hit!");
+  const arr = recentHits.get(v.id) ?? []; arr.push(tick()); recentHits.set(v.id, arr.filter((t) => tick() - t < 100));
+});
+function stressOf(e, d, now) {
+  let st = 0;
+  if (recentDeaths.some((x) => x.dim === e.dimension.id && x.f === d.faction && now - x.t < 200 && Math.hypot(x.x - e.location.x, x.z - e.location.z) < 6)) st += 3; // a comrade fell beside him
+  if ((recentHits.get(e.id) ?? []).filter((t) => now - t < 100).length >= 3) st += 2;       // being hit repeatedly
+  const hp = e.getComponent("minecraft:health");
+  if (hp && hp.currentValue / hp.effectiveMax < 0.35) st += 2;
+  let foes = 0, friends = 0;
+  for (const o of nearbyCombatants(e.dimension.id, e.location, 24)) {
+    if (o.id === e.id || isMob(o) || VEHICLES.includes(o.typeId)) continue;
+    const of = factionOf(o);
+    if (isHostile(d.faction, of)) foes++; else if (isFriendly(d.faction, of)) friends++;
+  }
+  if (foes >= (friends + 1) * 2) st += 2;                                                    // badly outnumbered here
+  else if (foes > friends + 1) st += 1;                                                      // his side is losing here
+  return st;
+}
+function shakenMove(e, d, now) {
+  const sk = shaken.get(e.id);
+  if (sk) {
+    if (sk.recoverUntil) {
+      if (now >= sk.recoverUntil) { shaken.delete(e.id); breakCool.set(e.id, now + 4800); note(e, "back in the fight"); return undefined; }
+      note(e, "shaken"); return { g: "g_none", t: "t_off", urgent: false };
+    }
+    if (flat(sk.at, e.location) < 3 || now > sk.until) sk.recoverUntil = now + 200 + Math.floor(Math.random() * 200); // 10-20 s to recover
+    note(e, "shaken: running"); return { g: "g_wp", slot: sk.slot, t: "t_off", urgent: true };
+  }
+  // should he break? checked every ~2 s while in combat
+  if (now % 40 >= 10 || d.div === "guard" || d.div === "medic" || isRiding(e) || d.retreat || d.surr) return undefined;
+  if (!perc.get(e.id)?.threat || (breakCool.get(e.id) ?? 0) > now) return undefined;
+  const st = stressOf(e, d, now);
+  if (st < 4) return undefined;
+  let chance = 0.04 + (st - 4) * 0.03;                                                       // rare: a few % per check
+  if (d.func === "post") chance *= 0.1;                                                      // garrisons on posts almost never break
+  if (Math.random() >= chance) return undefined;
+  const key = breakKey(e, d);
+  const squadSize = allOf(SOLDIER).filter((o) => { try { return breakKey(o, sd(o)) === key; } catch { return false; } }).length;
+  const broken = [...shaken.values()].filter((x) => x.key === key).length;
+  if (broken >= Math.max(1, Math.floor(squadSize / 8))) return undefined;                      // never more than ~1 in 8 at once
+  // where to run: the nearest friendly rally flag within 64, else ~25 blocks directly away from the threat
+  let spot;
+  const rally = nearestFlag(e.dimension, e.location, (f) => !!P(f, "war:rally") && isFriendly(d.faction, Number(P(f, "war:faction"))), 64);
+  if (rally) spot = walkableNear(e.dimension, rally.location.x, rally.location.z, rally.location.y);
+  if (!spot) {
+    const t = perc.get(e.id).threat, p = e.location;
+    const dx = p.x - t.location.x, dz = p.z - t.location.z, L = Math.hypot(dx, dz) || 1;
+    spot = walkableNear(e.dimension, p.x + (dx / L) * 25, p.z + (dz / L) * 25, p.y);
+  }
+  if (!spot) return undefined;
+  const slot = makeWaypoint(e.dimension, spot);
+  if (!slot) return undefined;
+  shaken.set(e.id, { slot, at: spot, until: now + 400, key });
+  callout(e, "Fall back!");
+  note(e, "shaken: running");
+  return { g: "g_wp", slot, t: "t_off", urgent: true };
+}
+
+// ================================================================ Part B: the brain (v4.6)
+// Same structure as the simulator brain that was tuned by self-play (BW = the evolved weights).
+// Squads share what any member sees; attacking squads run fix -> flank -> assault with timing; each
+// gunner weighs fire / advance / cover / peek / suppress / flank / fall back / key terrain about
+// twice a second and commits to the choice. Orders still rule: a new order wipes all of this.
+const BW = {"fire":0.516,"expo":0.418,"adv":0.933,"close":0.55,"timing":0.884,"assault":0.899,"cover":0.439,"peek":0.72,"supp":0.5,"fall":0.155,"flankShare":0.17,"flankDist":33.963,"stallT":252.376,"ratioFix":1.483,"commit":10,"goodHit":0.21,"terrain":0.2};   // evolved by self-play in the battle simulator
+const squads = new Map();   // unit key -> { known: Map(id->{ent,x,y,z,t}), plan, contactT, flankPt, flankSlot, flankers:Set, suppressors:Set, enemyC, ratio, keyPt, t }
+const brain = new Map();    // soldier id -> { act, decT, spot, slot }
+const suppB = new Map();    // soldier id -> suppression points (from fire landing on/near him)
+const squadKey = (e, d) => d.squad ? `${d.faction}:${d.squad}` : `${d.faction}:c${Math.floor(e.location.x / 48)},${Math.floor(e.location.z / 48)}`;
+const bPower = (o) => { try { const h = o.getComponent("minecraft:health"); const od = o.typeId === SOLDIER ? sd(o) : null;
+  return (h ? h.currentValue / h.effectiveMax : 1) * (o.typeId === "minecraft:player" ? 1.5 : od && GUNS.includes(od.weapon) ? (od.weapon === "mg" ? 1.4 : 1) : 0.6); } catch { return 1; } };
+function openGroundB(dim, a, b) {
+  const L = Math.hypot(b.x - a.x, b.z - a.z), n = Math.max(4, Math.ceil(L / 2));
+  let bad = 0, py = a.y;
+  for (let k = 1; k < n; k++) {
+    const x = a.x + (b.x - a.x) * k / n, z = a.z + (b.z - a.z) * k / n;
+    const w = walkableNear(dim, x, z, py);
+    if (!w || Math.abs(w.y - py) > 1) bad++; else py = w.y;
+  }
+  return bad / n < 0.12;
+}
+function exposureAt(dim, p, known) {
+  let n = 0;
+  for (const k of known) { try { if (clearShot(dim, { x: k.x, y: k.y + 1.6, z: k.z }, { x: p.x, y: p.y + 1.2, z: p.z })) n++; } catch {} }
+  return n;
+}
+// ---- squad loop: shared knowledge, plan, key terrain (every second)
+system.runInterval(() => {
+  const now = tick();
+  const groups = new Map();
+  for (const e of allOf(SOLDIER)) {
+    try {
+      const d = sd(e);
+      if (d.surr || d.div === "medic" || d.div === "guard" || !d.faction || isRiding(e)) continue;
+      const k = squadKey(e, d);
+      if (!groups.has(k)) groups.set(k, []);
+      groups.get(k).push(e);
+    } catch {}
+  }
+  for (const [k, ours] of groups) {
+    try {
+      let S = squads.get(k);
+      if (!S) { S = { known: new Map(), plan: "advance", contactT: -1, flankers: new Set(), suppressors: new Set(), t: now }; squads.set(k, S); }
+      S.t = now; S.n = ours.length;
+      const d0 = sd(ours[0]);
+      // shared knowledge: everything any member has seen (a shout away)
+      for (const e of ours) {
+        const s = perc.get(e.id);
+        if (!s) continue;
+        const ids = new Set([...s.seen.keys()]); if (s.threat?.isValid) ids.add(s.threat.id);
+        for (const id of ids) { const o = world.getEntity(id); if (o?.isValid && !isMob(o)) S.known.set(id, { ent: o, x: o.location.x, y: o.location.y, z: o.location.z, t: now }); }
+      }
+      for (const [id, kk] of [...S.known]) if (!kk.ent.isValid || now - kk.t > 400) S.known.delete(id);
+      const known = [...S.known.values()];
+      const oc = { x: 0, y: 0, z: 0 }; for (const e of ours) { oc.x += e.location.x; oc.y += e.location.y; oc.z += e.location.z; }
+      oc.x /= ours.length; oc.y /= ours.length; oc.z /= ours.length; S.ourC = oc;
+      if (!known.length) {
+        if (S.contactT >= 0) { regroup.set(k, now + 200); radio(ours[0], "area clear, regrouping, then continuing", true); }
+        if (S.plan !== "advance") { S.plan = "advance"; S.flankers.clear(); S.suppressors.clear(); S.flankPt = undefined; S.contactT = -1; }
+        helpCall.delete(k); continue;
+      }
+      if (S.contactT < 0) {
+        S.contactT = now; callout(ours[Math.floor(Math.random() * ours.length)], "Contact!");
+        const ec = { x: known.reduce((t, q) => t + q.x, 0) / known.length, z: known.reduce((t, q) => t + q.z, 0) / known.length };
+        radio(ours[0], `contact! about ${known.length} enem${known.length === 1 ? "y" : "ies"} to the ${bearing(ours[0].location, ec)}, ${Math.round(dist(ours[0].location, { ...ec, y: ours[0].location.y }))} blocks`, true);
+      }
+      S.enemyC = { x: known.reduce((t, q) => t + q.x, 0) / known.length, y: known.reduce((t, q) => t + q.y, 0) / known.length, z: known.reduce((t, q) => t + q.z, 0) / known.length };
+      S.ratio = ours.reduce((t, e) => t + bPower(e), 0) / Math.max(0.5, known.reduce((t, q) => t + bPower(q.ent), 0));
+      const attacking = ours.some((e) => ["charge", "follow", "patrol"].includes(sd(e).func)) && String(ours[0].getDynamicProperty("war:stance") ?? "aggressive") === "aggressive";
+      squadHelpTargets(k, S, ours, now);
+      const mem = adaptSquad(k, S, now);
+      S.siege = mem.siegeUntil > now;
+      if (!attacking) { S.plan = "defend"; }
+      else {
+        const height = oc.y - S.enemyC.y;
+        let cov = 0, pairs = 0;
+        for (const q of known.slice(0, 4)) for (const e of ours.slice(0, 4)) {
+          if (!clearShot(e.dimension, e.getHeadLocation(), chest(q.ent))) continue;
+          pairs++; if (!clearShot(e.dimension, e.getHeadLocation(), { x: q.x, y: q.y + 0.5, z: q.z })) cov++;
+        }
+        const dug = height <= -2 || (pairs > 0 && cov / pairs > 0.4);
+        if (S.plan === "advance" || S.plan === "defend") S.plan = "contact";
+        if (S.plan === "contact") {
+          const stalled = now - S.contactT > BW.stallT;
+          if ((dug || stalled) && S.ratio >= 0.9 && !S.flankPt && !S.siege) {
+            const guns = ours.filter((e) => GUNS.includes(sd(e).weapon)).sort((a, b) => (Number(sd(b).weapon === "mg") - Number(sd(a).weapon === "mg")) || (a.id < b.id ? -1 : 1));
+            const nF = Math.max(2, Math.round(guns.length * BW.flankShare));
+            const dx = S.enemyC.x - oc.x, dz = S.enemyC.z - oc.z, L = Math.hypot(dx, dz) || 1;
+            let best, bExp = 1e9;
+            for (const sg of [1, -1]) {
+              if (mem.failedSides.has(sg)) continue;                    // that side already failed: try the other
+              const w = walkableNear(ours[0].dimension, S.enemyC.x + (-dz / L) * BW.flankDist * sg + (dx / L) * 3, S.enemyC.z + (dx / L) * BW.flankDist * sg + (dz / L) * 3, S.enemyC.y);
+              if (!w || !openGroundB(ours[0].dimension, oc, w)) continue;
+              const mid = { x: (oc.x + w.x) / 2, y: (oc.y + w.y) / 2, z: (oc.z + w.z) / 2 };
+              const exp = exposureAt(ours[0].dimension, mid, known) + known.filter((q) => Math.hypot(q.x - w.x, q.z - w.z) < 20).length * 2; // covered approach
+              if (exp < bExp) { bExp = exp; best = w; S.flankSide = sg; }
+            }
+            if (best && guns.length >= 4) {
+              const slot = makeWaypoint(ours[0].dimension, best);
+              if (slot) {
+                S.flankPt = best; S.flankSlot = slot; S.plan = "fix";
+                callout(ours[0], "Flanking!"); radio(ours[0], `pinning them down, ${nF} flanking`, true);
+                guns.slice(guns.length - nF).forEach((e) => S.flankers.add(e.id));
+                guns.slice(0, guns.length - nF).forEach((e) => S.suppressors.add(e.id));
+                const cmdr = findPlayer(ours[0].getDynamicProperty("war:cmdr"));
+                try { cmdr?.onScreenDisplay.setActionBar(`§e${d0.squad ? squadName(d0.faction, d0.squad) : factionLabel(d0.faction, true)}: §fpinning them, ${nF} flanking`); } catch {}
+              }
+            } else if (!dug) S.plan = "assault";
+          } else if (!dug && S.ratio >= BW.ratioFix && !S.siege) { S.plan = "assault"; callout(ours[0], "Charge!"); }
+        }
+        if (S.plan === "fix") {
+          const fl = ours.filter((e) => S.flankers.has(e.id));
+          const inPlace = fl.length && fl.filter((e) => flat(S.flankPt, e.location) < 8 || now - (gunState.get(e.id)?.lastShot ?? -999) < 20).length >= Math.ceil(fl.length / 2);
+          if (inPlace || now - S.contactT > BW.stallT * 3 || !fl.length) { S.plan = "assault"; S.flankers.clear(); S.suppressors.clear(); callout(ours[0], "Go, go, go!"); radio(ours[0], "assaulting the position", true); }
+        }
+        if (S.plan === "assault" && S.ratio < 0.5) S.plan = "contact";
+      }
+      // key terrain: the highest nearby ground that sees the enemy
+      if (!S.keyPt || now % 200 < 20) {
+        let best, bh = -1e9;
+        for (let i = 0; i < 16; i++) {
+          const a = (i / 16) * Math.PI * 2, r = 6 + (i % 3) * 5;
+          const w = walkableNear(ours[0].dimension, oc.x + Math.cos(a) * r, oc.z + Math.sin(a) * r, oc.y);
+          if (!w) continue;
+          const sc = w.y * 2 + (exposureAt(ours[0].dimension, w, known.slice(0, 3)) > 0 ? 5 : 0);
+          if (sc > bh) { bh = sc; best = w; }
+        }
+        S.keyPt = best;
+      }
+    } catch {}
+  }
+  for (const [k, S] of [...squads]) if (now - S.t > 600) squads.delete(k);
+  for (const [id, v] of [...suppB]) { const nv = v - 2; if (nv <= 0) suppB.delete(id); else suppB.set(id, nv); }
+}, 20);
+// suppression: fire landing on or near a soldier (hits or misses) shakes his aim and pushes him to cover
+function suppressNear(t, w) { try { for (const o of nearbyCombatants(t.dimension.id, t.location, 3)) if (o.typeId === SOLDIER) suppB.set(o.id, Math.min(30, (suppB.get(o.id) ?? 0) + (w === "mg" ? 1.6 : w === "smg" ? 0.8 : 0.4))); } catch {} }
+// fire at a position (suppressing a last known position, no clear view needed)
+function fireAtPoint(e, spec, p) {
+  const h = e.getHeadLocation();
+  let dx = p.x - h.x, dy = p.y + 1 - h.y, dz = p.z - h.z;
+  const n = Math.hypot(dx, dy, dz) || 1;
+  const r = () => (Math.random() + Math.random() - 1) * spec.spread * 3;
+  const dir = { x: dx / n + r(), y: dy / n + r(), z: dz / n + r() };
+  try {
+    const b = e.dimension.spawnEntity(spec.bullet, { x: h.x + dir.x * 0.9, y: h.y - 0.2 + dir.y * 0.9, z: h.z + dir.z * 0.9 });
+    const pc = b.getComponent("minecraft:projectile");
+    if (pc) { pc.owner = e; pc.shoot({ x: dir.x * spec.speed, y: dir.y * spec.speed, z: dir.z * spec.speed }); }
+  } catch {}
+  for (const o of nearbyCombatants(e.dimension.id, p, 4)) if (o.typeId === SOLDIER) suppB.set(o.id, Math.min(30, (suppB.get(o.id) ?? 0) + 1));
+}
+function nearestKnownB(S, e) { let b, bd = 1e9; for (const q of S.known.values()) { const dd = Math.hypot(q.x - e.location.x, q.z - e.location.z); if (dd < bd) { bd = dd; b = q; } } return b ? { q: b, dd: bd } : undefined; }
+function spotNear(e, test, anchor, leash) {
+  let best, bd = 1e9;
+  for (let r = 1; r <= 4; r++) for (let i = 0; i < 12; i++) {
+    const a = (i / 12) * Math.PI * 2;
+    const w = walkableNear(e.dimension, e.location.x + Math.cos(a) * r, e.location.z + Math.sin(a) * r, e.location.y);
+    if (!w || Math.abs(w.y - e.location.y) > 1) continue;
+    if (anchor && flat(w, anchor.location) > leash) continue;
+    if (nearbyCombatants(e.dimension.id, w, 1.4).some((o) => o.typeId === SOLDIER && o.id !== e.id)) continue;
+    if (!test(w)) continue;
+    if (r < bd) { bd = r; best = w; }
+  }
+  return best;
+}
+// ---- each gunner's decision (about twice a second, then he commits)
+// a quick walk check (same rules as the route planner, small area): can he get there on foot from here?
+function localReach(dim, from, to) {
+  if (Math.abs(to.y - from.y) > 3) return false;
+  if (flat(from, to) < 1.5) return true;
+  const sx = Math.floor(from.x), sz = Math.floor(from.z), tx = Math.floor(to.x), tz = Math.floor(to.z);
+  const stand = (x, y, z) => { try { const f = tBlock(dim, x + 0.5, y - 1, z + 0.5), ft = tBlock(dim, x + 0.5, y, z + 0.5), h = tBlock(dim, x + 0.5, y + 1, z + 0.5);
+    return !!f && !!ft && !!h && !f.isAir && !f.isLiquid && passable(ft) && passable(h); } catch { return false; } };
+  const seen = new Set([`${sx},${Math.floor(from.y)},${sz}`]), q = [[sx, Math.floor(from.y), sz]];
+  for (let i = 0; i < q.length && i < 400; i++) {
+    const [x, y, z] = q[i];
+    if (Math.abs(x - tx) <= 1 && Math.abs(z - tz) <= 1 && Math.abs(y - to.y) <= 1.5) return true;
+    for (const [dx, dz] of [[1, 0], [-1, 0], [0, 1], [0, -1]]) for (const dy of [0, 1, -1, -2, -3]) {
+      const nx = x + dx, nz = z + dz, ny = y + dy, k = `${nx},${ny},${nz}`;
+      if (seen.has(k) || Math.abs(nx - sx) > 14 || Math.abs(nz - sz) > 14) continue;
+      if (!stand(nx, ny, nz)) continue;
+      if (dy === 1) { try { if (!passable(tBlock(dim, x + 0.5, y + 2, z + 0.5))) continue; } catch { continue; } }
+      seen.add(k); q.push([nx, ny, nz]); break;
+    }
+  }
+  return false;
+}
+function planPersonalTo(e, kind, dest, now) {
+  const pr = { pts: undefined, idx: 0, kind, t: now, planning: true };
+  personal.set(e.id, pr);
+  const hit = cachedRoute(e.dimension, e.location, dest);                       // a squad mate just worked this out: use his route
+  if (hit) { pr.planning = false; pr.pts = hit; return; }
+  if (planJobs.length > 28) { pr.planning = false; pr.pts = undefined; pr.t = now - 10000; return; }   // planner busy: try again shortly
+  const dim = e.dimension;
+  planRoute(dim, e.location, dest, (pts, partial) => { pr.planning = false; pr.pts = pts; pr.idx = 0; if (pts && !partial) rememberRoute(dim, dest, pts); }, { max: 20000, maxRadius: 90 });
+}
+function brainMove(e, d, now, melee, anchor, leash) {
+  if (d.retreat || d.surr || d.div === "medic" || d.div === "guard" || isRiding(e)) return undefined;
+  const stance = String(e.getDynamicProperty("war:stance") ?? "aggressive");
+  if (stance === "holdfire") return undefined;
+  const S = squads.get(squadKey(e, d));
+  if (!S || !S.known.size) { brain.delete(e.id); return undefined; }
+  if (["charge", "follow", "patrol"].includes(d.func)) {
+    const n0 = nearestKnownB(S, e);
+    const hit = now - (hurtBy.get(e.id)?.t ?? -999) < 100 || now - (firedAt.get(e.id)?.t ?? -999) < 60;
+    if (!n0 || (n0.dd > 50 && !hit)) return undefined;                 // far away: keep to the order, shoot on the move
+    // the enemy is on another level (down the stairs, up on the wall): go along a real route, not a straight line
+    if (!melee && Math.abs(n0.q.y - e.location.y) > 3 && !personal.has(e.id) && now - (brain.get(e.id)?.routeT ?? -999) > 200) {
+      const Bx = brain.get(e.id) ?? { act: "", decT: -999 }; Bx.routeT = now; brain.set(e.id, Bx);
+      planPersonalTo(e, "advance", { x: n0.q.x, y: n0.q.y, z: n0.q.z }, now);
+      return followPersonal(e, now);
+    }
+  }
+  let B = brain.get(e.id);
+  if (!B) { B = { act: "", decT: -999 }; brain.set(e.id, B); }
+  const go = (spot, urgent = true) => { if (!spot) return undefined;
+    if (!localReach(e.dimension, e.location, spot)) { B.act = ""; return undefined; }   /* not reachable on foot from here: skip it */
+    if (!B.slot || !B.spot || flat(B.spot, spot) > 1.5 || !marker(B.slot)) { B.slot = myMarker(e, spot); B.spot = spot; } return B.slot ? { g: "g_wp", slot: B.slot, t: "t_mid", urgent } : undefined; };
+  const known = [...S.known.values()];
+  if (melee) {
+    const n = nearestKnownB(S, e);
+    if (n && n.dd < (S.plan === "assault" ? 90 : 60)) { note(e, "charging"); return undefined; }       // engagement charges him in
+    return undefined;
+  }
+  if (!GUNS.includes(d.weapon)) return undefined;
+  const ps = perc.get(e.id), t = ps?.threat?.isValid ? ps.threat : undefined;
+  if (now - B.decT >= BW.commit && spendDecision()) {
+    B.decT = now;
+    const bold = boldOf(e), winning = S.ratio > 1.5;
+    const dd = t ? dist(t.location, e.location) : 1e9;
+    const shot = t && canHit(e, t);
+    const exposure = exposureAt(e.dimension, e.location, known.slice(0, 3));
+    const covered = t ? !clearShot(e.dimension, chest(t), { x: e.location.x, y: e.location.y + 0.5, z: e.location.z }) : false;
+    const underFire = now - (firedAt.get(e.id)?.t ?? -999) < 40 || attackedRecently(e, t ?? e, now, 40);
+    const p = t ? Math.min(1, (GOOD_RANGE_B[d.weapon] ?? 40) / Math.max(1, dd)) * (shot ? 1 : 0) : 0;
+    const gs = t?.typeId === SOLDIER ? gunState.get(t.id) : undefined;
+    const enemyWeak = !!t && ((gs && gs.ammo === (GUN_SPEC[sd(t).weapon]?.mag ?? 1) && gs.next - now > 20) || (suppB.get(t.id) ?? 0) > 8 || now - (hurtBy.get(t.id)?.t ?? -999) < 30);
+    const moving = ["charge", "follow", "patrol"].includes(d.func);
+    const opts = [];
+    if (S.flankers.has(e.id) && S.plan === "fix" && S.flankPt && flat(S.flankPt, e.location) > 6) opts.push(["flank", 3]);
+    if (t && shot) opts.push(["fire", BW.fire * p * (S.suppressors.has(e.id) ? 1.5 : 1) - BW.expo * exposure * (covered ? 0.3 : 1)]);
+    const needGround = moving ? (t ? (dd > (GOOD_RANGE_B[d.weapon] ?? 40) * BW.close ? 1 : 0.35) : 1) : 0;
+    opts.push(["advance", bold * (BW.adv * needGround + (enemyWeak ? BW.timing : 0) + (S.plan === "assault" ? BW.assault : 0) + (winning ? 0.3 : 0)) - (S.plan === "fix" && S.suppressors.has(e.id) ? 0.8 : 0) - 0.15 * exposure * (1 - BW.close) - (S.siege ? 0.5 : 0) - (d.weapon === "sniper" ? 0.6 : 0)]);
+    if (underFire && !covered && exposure > 0) opts.push(["cover", (2 - bold) * BW.cover * exposure + ((suppB.get(e.id) ?? 0) > 8 ? 0.4 : 0)]);
+    if (!shot && (S.suppressors.has(e.id) || d.weapon === "mg")) opts.push(["suppress", BW.supp + (S.plan === "fix" ? 0.4 : 0)]);
+    if (!shot) opts.push(["peek", BW.peek]);
+    const hp = e.getComponent("minecraft:health");
+    if (hp && hp.currentValue < 5 && exposure >= 2) opts.push(["fallback", BW.fall]);
+    if (!moving) opts.push(["hold", 0.5 + (t ? 0 : 0.3)]);
+    if (S.keyPt && (d.weapon === "mg" || d.weapon === "sniper" || !moving) && !shot) opts.push(["terrain", BW.terrain + (d.weapon === "sniper" ? 0.8 : 0)]);
+    if (d.weapon === "sniper" && t && shot) opts.push(["fire", 1.6]);                  // a sniper with a shot takes it
+    if ((!moving || underFire) && S.enemyC) {
+      const threatAt = t?.isValid ? t.location : S.enemyC;            // the nearest danger decides which side is safe
+      const sbs = sandbagSpot(e, threatAt, anchor, leash, now);
+      if (sbs) {
+        const holding = B.act === "sandbag" && B.sandbag && flat(B.sandbag, sbs) < 1.5;
+        B.sandbag = sbs;
+        opts.push(["sandbag", (holding ? 2.2 : 1.2) + (underFire ? 0.5 : 0)]);  // once there, he stays while the bags shield him
+      }
+    }
+    opts.sort((a, b) => b[1] - a[1]);
+    B.act = opts[0][0];
+    B.spot = undefined;
+    if (B.act === "cover") B.target = spotNear(e, (w) => !t || !clearShot(e.dimension, chest(t), { x: w.x, y: w.y + 0.5, z: w.z }), anchor, leash);
+    else if (B.act === "peek") {
+      const n = nearestKnownB(S, e);
+      // rare, believable mistake: a stale sighting (2+ s old, not shooting at us) is remembered a little off
+      let tp = n?.q; if (tp && now - tp.t > 40 && !underFire && Math.random() < 0.05) tp = { ...tp, x: tp.x + (Math.random() - 0.5) * 10, z: tp.z + (Math.random() - 0.5) * 10 };
+      B.target = tp ? spotNear(e, (w) => clearShot(e.dimension, { x: w.x, y: w.y + 1.6, z: w.z }, { x: tp.x, y: tp.y + 1.2, z: tp.z }), anchor, leash) : undefined;
+    } else if (B.act === "fallback") {
+      const n = nearestKnownB(S, e);
+      if (n) { const dx = e.location.x - n.q.x, dz = e.location.z - n.q.z, L = Math.hypot(dx, dz) || 1; B.target = walkableNear(e.dimension, e.location.x + dx / L * 8, e.location.z + dz / L * 8, e.location.y); }
+    } else if (B.act === "advance" && S.plan !== "advance" && moving) {
+      // covered approach: of three directions toward the enemy, the least exposed
+      const g = S.enemyC; const dx = g.x - e.location.x, dz = g.z - e.location.z, L = Math.hypot(dx, dz) || 1;
+      let best, be = 1e9;
+      for (const a of [0, 0.5, -0.5]) {
+        const c = Math.cos(a), sn = Math.sin(a);
+        const w = walkableNear(e.dimension, e.location.x + (dx / L * c - dz / L * sn) * 8, e.location.z + (dx / L * sn + dz / L * c) * 8, e.location.y);
+        if (!w) continue;
+        const ex = exposureAt(e.dimension, w, known.slice(0, 3)) + (a ? 0.3 : 0);
+        if (ex < be) { be = ex; best = w; }
+      }
+      B.target = best;
+    } else B.target = undefined;
+  }
+  {
+    const shot0 = t?.isValid ? canHit(e, t) : false;
+    const bm = buildingMove(e, d, now, S, t, B, now - (firedAt.get(e.id)?.t ?? -999) < 40, exposureAt(e.dimension, e.location, [...S.known.values()].slice(0, 3)), ["charge", "follow", "patrol"].includes(d.func), anchor);
+    if (bm) return bm;
+  }
+  switch (B.act) {
+    case "flank": note(e, "flanking"); return S.flankSlot && marker(S.flankSlot) ? { g: "g_wp", slot: S.flankSlot, t: "t_mid", urgent: true } : undefined;
+    case "fire": note(e, "firing"); return { g: "g_none", t: "t_mid", urgent: false };
+    case "cover": note(e, "taking cover"); return B.target ? go(B.target) : { g: "g_none", t: "t_mid", urgent: false };
+    case "peek": note(e, "peeking for a shot"); return B.target ? go(B.target) : undefined;
+    case "suppress": {
+      note(e, "suppressing");
+      const n = nearestKnownB(S, e), spec = GUN_SPEC[d.weapon], gs = gunState.get(e.id);
+      if (n && spec && gs && now >= gs.next && dist(n.q, e.location) <= spec.fire) {
+        fireAtPoint(e, spec, n.q);
+        gs.ammo--; if (gs.ammo > 0) gs.next = now + Math.max(2, spec.gap); else { gs.ammo = spec.mag; gs.next = now + spec.reload; }
+      }
+      // on the move (not pinning for a flank): keep walking while suppressing
+      if (["charge", "follow", "patrol"].includes(d.func) && S.plan !== "fix") return undefined;
+      return { g: "g_none", t: "t_mid", urgent: false };
+    }
+    case "fallback": note(e, "falling back"); return B.target ? go(B.target) : undefined;
+    case "terrain": note(e, "taking high ground"); return S.keyPt ? go(S.keyPt, false) : undefined;
+    case "sandbag": {
+      if (!B.sandbag) return undefined;
+      const dSb = flat(B.sandbag, e.location);
+      if (dSb > 0.45) {
+        note(e, "taking the sandbags");
+        if (dSb < 3.5) { push(e, { x: (B.sandbag.x - e.location.x) * 0.3, y: 0.02, z: (B.sandbag.z - e.location.z) * 0.3 }, 3); return { g: "g_none", t: "t_mid", urgent: false }; }
+        return go(B.sandbag);
+      }
+      // at the bags: fire over them; step back out of sight to reload, then back up
+      const gs = gunState.get(e.id), reloading = gs && gs.ammo === (GUN_SPEC[d.weapon]?.mag ?? 1) && gs.next - now > 10;
+      if (reloading && S.enemyC) {
+        const dx = e.location.x - S.enemyC.x, dz = e.location.z - S.enemyC.z, L = Math.hypot(dx, dz) || 1;
+        const duck = walkableNear(e.dimension, B.sandbag.x + (dx / L) * 1.2, B.sandbag.z + (dz / L) * 1.2, B.sandbag.y);
+        if (duck) { note(e, "ducking behind the bags"); return go(duck); }
+      }
+      note(e, "firing over the sandbags");
+      return { g: "g_none", t: "t_mid", urgent: false };
+    }
+    case "hold": return undefined;
+    case "advance": note(e, S.plan === "assault" ? "assaulting" : "advancing"); return B.target ? go(B.target) : undefined;
+  }
+  return undefined;
+}
+// "good shot" range per weapon (same model as the simulator)
+function erfB(x) { const s = Math.sign(x); x = Math.abs(x); const t = 1 / (1 + 0.3275911 * x);
+  return s * (1 - ((((1.061405429 * t - 1.453152027) * t + 1.421413741) * t - 0.284496736) * t + 0.254829592) * t * Math.exp(-x * x)); }
+const GOOD_RANGE_B = {};
+for (const [k, spec] of Object.entries(GUN_SPEC)) {
+  const sig = spec.spread * 0.653; let dd = 4;
+  while (dd < spec.fire) { const sdv = Math.max(1e-4, sig * dd * Math.SQRT2); if (Math.abs(erfB(0.3 / sdv)) * Math.abs(erfB(0.9 / sdv)) < BW.goodHit) break; dd += 2; }
+  GOOD_RANGE_B[k] = dd;
+}
+
+// ================================================================ Part C1 (v4.7)
+// ---- personalities: every soldier is a little bolder or more careful (stable per soldier)
+const boldOf = (e) => { let h = 0; for (const ch of e.id) h = (h * 31 + ch.charCodeAt(0)) >>> 0; return 0.8 + (h % 41) / 100; }; // 0.80 .. 1.20
+// ---- performance: brain decisions are budgeted per tick so huge battles never spike
+let decisionBudget = 0;
+system.runInterval(() => { decisionBudget = 20; }, 1);
+const spendDecision = () => (decisionBudget-- > 0);
+
+// ---- fluid water crossings: in water a soldier only ever keeps moving: steady strokes along his route,
+// a boost up the bank as soon as he touches it. No firing / peeking / taking cover in the water.
+system.runInterval(() => {
+  for (const e of allOf(SOLDIER)) {
+    try {
+      if (isRiding(e) || !inWater(e)) continue;
+      const g = goalPoint(e);
+      if (!g) continue;
+      const p = e.location, dx = g.x - p.x, dz = g.z - p.z, l = Math.hypot(dx, dz) || 1;
+      if (l < 2) continue;
+      let bank = false;
+      try {
+        const ax = p.x + (dx / l) * 0.9, az = p.z + (dz / l) * 0.9, y = Math.floor(p.y);
+        const f = e.dimension.getBlock({ x: ax, y, z: az }), h = e.dimension.getBlock({ x: ax, y: y + 1, z: az });
+        bank = !!f && !f.isAir && !f.isLiquid && !!h && passable(h);
+      } catch {}
+      push(e, { x: (dx / l) * 0.32, y: bank ? 0.55 : 0.05, z: (dz / l) * 0.32 }, 2);
+      note(e, bank ? "climbing out" : "swimming across");
+    } catch {}
+  }
+}, 4);
+
+function reinforceMove(e, d, now) {
+  if (d.retreat || d.surr || d.div === "medic" || d.div === "guard" || isRiding(e) || now % 40 >= 20 && !reinforcing.has(e.id)) return reinforcing.get(e.id)?.mv;
+  const spot = reinforceSpot(e, d, now);
+  if (!spot) { reinforcing.delete(e.id); return undefined; }
+  const prev = reinforcing.get(e.id);
+  if (prev && flat(prev.at, spot) < 6) return travel(e, prev.at, "reinforce", now, true);
+  const mv = travel(e, spot, "reinforce", now, true);
+  if (!mv) return undefined;
+  reinforcing.set(e.id, { at: spot, slot: mv.slot ?? 0, mv });
+  note(e, "reinforcing"); callout(e, "Moving up!");
+  return mv;
+}
+const reinforcing = new Map();
+// ---- squads helping each other: a squad being mauled draws help from free squads nearby, who come in
+// from the side (crossfire), never from the same direction
+const helpCall = new Map(); // helped squad key -> { enemyC, ourC, t, dim, f }
+function squadHelpTargets(k, S, ours, now) {
+  if (S.known.size && S.ratio < 0.8 && S.enemyC) helpCall.set(k, { enemyC: S.enemyC, ourC: S.ourC, t: now, dim: ours[0].dimension.id, f: sd(ours[0]).faction });
+  else if (helpCall.has(k) && now - helpCall.get(k).t > 200) helpCall.delete(k);
+}
+function reinforceSpot(e, d, now) {
+  if (!freeOf(e) || d.func === "post") return undefined;
+  const myKey = squadKey(e, d);
+  const mine = squads.get(myKey);
+  if (mine && mine.known.size) return undefined;                       // we're busy ourselves
+  let best, bd = 1e9;
+  for (const [k, h] of helpCall) {
+    if (k === myKey || h.dim !== e.dimension.id || !isFriendly(d.faction, h.f) || now - h.t > 200) continue;
+    const dd = Math.hypot(h.enemyC.x - e.location.x, h.enemyC.z - e.location.z);
+    if (dd < 140 && dd < bd) { bd = dd; best = h; }
+  }
+  if (!best) return undefined;
+  // come in from the side: 90 degrees off the line between the mauled squad and its enemy
+  const dx = best.enemyC.x - best.ourC.x, dz = best.enemyC.z - best.ourC.z, L = Math.hypot(dx, dz) || 1;
+  const side = ((e.location.x - best.enemyC.x) * (-dz) + (e.location.z - best.enemyC.z) * dx) >= 0 ? 1 : -1;
+  return walkableNear(e.dimension, best.enemyC.x + (-dz / L) * 30 * side, best.enemyC.z + (dx / L) * 30 * side, best.enemyC.y);
+}
+
+// ---- adapting: remember what failed. A flank that didn't break them -> next time the other side;
+// an assault that stalled -> pin them again; the same approach failing twice -> stop trying it for a while
+const squadMemory = new Map(); // key -> { failedSides: Set, flankFails, assaultFails, siegeUntil, lastPlan, lastEnemyPower, planT }
+function adaptSquad(k, S, now) {
+  const m = squadMemory.get(k) ?? { failedSides: new Set(), flankFails: 0, assaultFails: 0, siegeUntil: 0, lastPlan: "", planT: now };
+  squadMemory.set(k, m);
+  if (S.plan !== m.lastPlan) { m.lastPlan = S.plan; m.planT = now; m.startRatio = S.ratio; }
+  if (S.plan === "fix" && now - m.planT > BW.stallT * 3 && S.ratio <= (m.startRatio ?? S.ratio) + 0.05) {
+    m.flankFails++; if (S.flankSide) m.failedSides.add(S.flankSide);           // the flank went nowhere
+  }
+  if (S.plan === "contact" && m.lastPlanWasAssault) { m.assaultFails++; m.lastPlanWasAssault = false; }
+  if (S.plan === "assault") m.lastPlanWasAssault = true;
+  if (m.flankFails + m.assaultFails >= 2 && !m.siegeUntil) { m.siegeUntil = now + 1200; m.flankFails = 0; m.assaultFails = 0; } // 1 min: pin and grind, no more rushes
+  if (m.siegeUntil && now > m.siegeUntil) { m.siegeUntil = 0; m.failedSides.clear(); }
+  return m;
+}
+
+// ---- the War Horn: aim with your eyes. Use = your soldiers nearby attack that way, everything in that
+// direction is their priority. Sneak + use = they focus fire that way without moving.
+const hornCone = new Map(); // soldier id -> { x, z, dx, dz, until }
+function inHornCone(e, o, now) {
+  const h = hornCone.get(e.id);
+  if (!h || now > h.until) return false;
+  const vx = o.location.x - h.x, vz = o.location.z - h.z, L = Math.hypot(vx, vz) || 1;
+  return (vx * h.dx + vz * h.dz) / L > 0.866;                          // within ~30 degrees of the horn's direction
+}
+async function blowHorn(player) {
+  const f = playerFaction(player);
+  if (!f) { player.sendMessage("§cJoin a faction at the War Table first."); return; }
+  const dir = player.getViewDirection(), hl = Math.hypot(dir.x, dir.z) || 1;
+  const now = tick();
+  const holdFire = player.isSneaking;
+  const soldiers = player.dimension.getEntities({ type: SOLDIER, location: player.location, maxDistance: 64 })
+    .filter((e) => { try { const d = sd(e); return d.faction === f && !d.surr && d.div !== "guard" && d.div !== "medic" && !isRiding(e); } catch { return false; } });
+  if (!soldiers.length) { player.onScreenDisplay.setActionBar("§7No soldiers of yours within 64 blocks."); return; }
+  for (const e of soldiers) hornCone.set(e.id, { x: player.location.x, z: player.location.z, dx: dir.x / hl, dz: dir.z / hl, until: now + (holdFire ? 600 : 1200) });
+  try { player.dimension.playSound("raid.horn", player.location, { volume: 4, pitch: holdFire ? 1.3 : 1 }); } catch {}
+  if (holdFire) { player.onScreenDisplay.setActionBar(`§eFire that way! §f${soldiers.length} soldiers`); return; }
+  // attack that way: a Charge POS aimed by your eyes (to what you're looking at, or ~100 blocks out)
+  let pt = aimFar(player);
+  if (!pt || pt.estimated || dist(pt, player.location) > 200) pt = { x: player.location.x + (dir.x / hl) * 100, y: player.location.y, z: player.location.z + (dir.z / hl) * 100 };
+  const march = startMarch(player, soldiers, pt, "hold");
+  if (!march) return;
+  let n = 0;
+  for (const e of soldiers) {
+    freshMind(e);
+    e.setDynamicProperty("war:cmdr", player.id); e.setDynamicProperty("war:stance", "aggressive");
+    e.setDynamicProperty("war:ao", 100); e.setDynamicProperty("war:free", true); e.setDynamicProperty("war:then", "hold");
+    hornCone.set(e.id, { x: player.location.x, z: player.location.z, dx: dir.x / hl, dz: dir.z / hl, until: now + 1200 });
+    giveFunction(e, mapFunc("charge", sd(e).div), player, march.lanes[n % march.lanes.length]); n++;
+  }
+  player.onScreenDisplay.setActionBar(`§eAttack that way! §f${n} soldiers`);
+}
+// your own shots: when you hit someone, your soldiers nearby go after him too
+world.afterEvents.entityHurt.subscribe((ev) => {
+  const a = ev.damageSource.damagingEntity, v = ev.hurtEntity;
+  if (a?.typeId !== "minecraft:player" || !v?.isValid || v.id === a.id) return;
+  const f = playerFaction(a);
+  if (!f || (v.typeId !== SOLDIER && v.typeId !== "minecraft:player" && v.typeId !== HOUND && !VEHICLES.includes(v.typeId))) return;
+  if (isFriendly(f, factionOf(v))) return;
+  const now = tick();
+  for (const o of nearbyCombatants(a.dimension.id, a.location, 48)) {
+    if (o.typeId !== SOLDIER) continue;
+    try { if (Number(P(o, "war:faction")) === f) { assist.set(o.id, { id: v.id, t: now }); provoked.set(`${f}:${v.id}`, now + 1200); } } catch {}
+  }
+});
+
+// ---- battle chatter: short callouts in each faction's voice (War Table -> Settings -> Callout flavor)
+const VOICES = { us: "mob.us.idle", soviet: "mob.soviet.idle", jap: "mob.jap.idle", french: "mob.french.idle", german: "mob.german.hurt" };
+const VOICE_KEYS = ["none", "us", "soviet", "jap", "french", "german"];
+const VOICE_NAMES = ["None (silent)", "American", "Soviet", "Japanese", "French", "German"];
+const LOADOUT_VOICE = { american: "us", german: "german", soviet: "soviet", japanese: "jap", western: "french" };
+// v4.7's menu saved "None" for every faction: cleared once, lazily (world data can't be touched while the script loads)
+let voicesChecked = false;
+function voiceOf(f) {
+  if (!voicesChecked) {
+    voicesChecked = true;
+    try { if (!world.getDynamicProperty("war:voices_v2")) { world.setDynamicProperty("war:voices", undefined); world.setDynamicProperty("war:voices_v2", true); } } catch {}
+  }
+  return getJSON(world, "war:voices", {})[f] ?? LOADOUT_VOICE[loadoutOf(f)] ?? "us";
+}
+const lastCall = new Map(); // soldier id / squad key -> tick
+function callout(e, text) { /* callouts removed (v5.0) */ }
+async function voiceMenu(player) {
+  const pick = await show(new ActionFormData().title("Callout flavor").button("Set voices per faction").button("Test callouts (soldiers near you)").button("« Back"), player);
+  if (!pick || pick.canceled || pick.selection === undefined) return;
+  if (pick.selection === 1) { testCallouts(player); return; }
+  if (pick.selection === 2) return;
+  const all = getJSON(world, "war:voices", {});
+  const f = new ModalFormData().title("Callout flavor");
+  COLORS.forEach((_, i) => f.dropdown(factionLabel(i + 1), VOICE_NAMES, { defaultValueIndex: Math.max(0, VOICE_KEYS.indexOf(voiceOf(i + 1))) }));
+  const r = await show(f, player);
+  if (!r || r.canceled || !r.formValues) return;
+  r.formValues.forEach((v, i) => { all[i + 1] = VOICE_KEYS[Number(v)]; });
+  setJSON(world, "war:voices", all);
+  player.sendMessage("§aCallout flavor saved.");
+}
+
+// ---- test battle: two balanced squads in front of you, ordered to fight
+async function testBattle(player) {
+  const names = COLORS.map((_, i) => factionLabel(i + 1));
+  const f = new ModalFormData().title("Test battle")
+    .dropdown("Side A", names, { defaultValueIndex: 1 }).dropdown("Side B", names, { defaultValueIndex: 2 })
+    .slider("Soldiers per side", 4, 20, { valueStep: 2, defaultValue: 8 })
+    .dropdown("Weapons", ["Mixed guns", "Rifles", "SMGs", "Swords", "Mixed guns + swords"], { defaultValueIndex: 0 })
+    .slider("Distance apart (blocks)", 30, 120, { valueStep: 10, defaultValue: 60 });
+  const r = await show(f, player);
+  if (!r || r.canceled || !r.formValues) return;
+  const [ia, ib, n, wi, gap] = r.formValues.map(Number);
+  const A = ia + 1, B = ib + 1;
+  if (A === B) { player.sendMessage("§cPick two different factions."); return; }
+  setRelPair(A, B, "1", true);                                        // they're at war for the test
+  const MIX = [["rifle", "smg", "semi", "mg"], ["rifle"], ["smg"], ["sword"], ["rifle", "sword", "smg", "sword"]][wi];
+  const dir = player.getViewDirection(), hl = Math.hypot(dir.x, dir.z) || 1, fx = dir.x / hl, fz = dir.z / hl;
+  const c = { x: player.location.x + fx * (gap / 2 + 12), z: player.location.z + fz * (gap / 2 + 12) };
+  const posA = { x: c.x - (-fz) * gap / 2, z: c.z - fx * gap / 2 }, posB = { x: c.x + (-fz) * gap / 2, z: c.z + fx * gap / 2 };
+  const spawnSide = (fac, pos) => {
+    const out = [];
+    for (let i = 0; i < n; i++) {
+      const g = walkableNear(player.dimension, pos.x + (i % 4 - 1.5) * 2.5, pos.z + (Math.floor(i / 4) - 1) * 2.5, player.location.y);
+      if (!g) continue;
+      const e = player.dimension.spawnEntity(SOLDIER, g);
+      const weapon = MIX[i % MIX.length];
+      setupSoldier(e, { faction: fac, squad: 0, weapon, ranged: weapon !== "sword", div: "foot", radius: 8, func: "__none" }, player);
+      out.push(e);
+    }
+    return out;
+  };
+  const sa = spawnSide(A, posA), sb = spawnSide(B, posB);
+  if (!sa.length || !sb.length) { player.sendMessage("§cNot enough open ground in front of you."); return; }
+  const go = (pool, target) => {
+    const m = startMarch(player, pool, { x: target.x, y: player.location.y, z: target.z }, "hold");
+    if (!m) return;
+    pool.forEach((e, i) => { e.setDynamicProperty("war:stance", "aggressive"); e.setDynamicProperty("war:ao", 100); e.setDynamicProperty("war:free", true); giveFunction(e, "charge", player, m.lanes[i % m.lanes.length]); });
+  };
+  go(sa, posB); go(sb, posA);
+  player.sendMessage(`§aTest battle: ${factionLabel(A)} vs ${factionLabel(B)}, ${sa.length} v ${sb.length}. They're now Hostile.`);
+}
+
+// ================================================================ Part C2 (v4.8)
+// ---- downed, not dead: at 0 HP a soldier falls wounded for ~30 s. A friendly player (right-click) or a
+// medic revives him; otherwise he dies. Hit again while down, he dies. Enemies leave the downed alone.
+const downed = new Map(); // id -> until tick
+const isDowned = (e) => downed.has(e.id);
+const downPos = new Map(); // id -> where he fell
+function goDown(e) {
+  const now = tick();
+  downed.set(e.id, now + 600);
+  downPos.set(e.id, { ...e.location });
+  e.setDynamicProperty("war:downed", now + 600);
+  try { e.addEffect("slowness", 640, { amplifier: 6, showParticles: false }); e.addEffect("weakness", 640, { amplifier: 4, showParticles: false }); } catch {}
+  setGroups(e, { w: "w_none", t: "t_off", g: "g_none", s: "s_1", d: "d_off", r: "r_off" });
+  setP(e, "war:down", true);
+  updateName(e);
+  radio(e, "man down, needs a medic");
+  try { const fv = Number(P(e, "war:faction")); const near = nearbyCombatants(e.dimension.id, e.location, 10).find((o) => o.typeId === SOLDIER && o.id !== e.id && Number(P(o, "war:faction")) === fv && !downed.has(o.id)); if (near) callout(near, "Man down!"); } catch {}
+}
+function revive(e, hpTo = 6) {
+  downed.delete(e.id); downPos.delete(e.id);
+  setP(e, "war:down", false);
+  e.setDynamicProperty("war:downed", undefined);
+  try { e.removeEffect("slowness"); e.removeEffect("weakness"); } catch {}
+  const h = e.getComponent("minecraft:health");
+  if (h) h.setCurrentValue(Math.min(h.effectiveMax, hpTo));
+  try { e.dimension.spawnParticle("minecraft:heart_particle", { x: e.location.x, y: e.location.y + 2, z: e.location.z }); } catch {}
+  updateName(e);
+}
+system.runInterval(() => {
+  const now = tick();
+  for (const [id, until] of [...downed]) {
+    const e = world.getEntity(id);
+    if (!e?.isValid) { downed.delete(id); continue; }
+    if (now >= until) {
+      downed.delete(id); downPos.delete(id);
+      try { e.setDynamicProperty("war:downed", undefined); } catch {}
+      killReal(e);
+      system.runTimeout(() => { try { if (e.isValid) e.remove(); } catch {} }, 6);       // if the kill didn't take, he's removed
+      continue;
+    }
+    // pinned where he fell, lying down, at the edge of death: no getting up on his own
+    try {
+      const at = downPos.get(id) ?? e.location; if (!downPos.has(id)) downPos.set(id, { ...at });
+      if (dist(at, e.location) > 0.6) e.teleport(at);
+      e.clearVelocity?.();
+      const hh = e.getComponent("minecraft:health"); if (hh && hh.currentValue !== 1) hh.setCurrentValue(1);
+      if (!P(e, "war:down")) setP(e, "war:down", true);
+    } catch {}
+    try { if (now % 20 === 0) e.dimension.spawnParticle("minecraft:basic_smoke_particle", { x: e.location.x, y: e.location.y + 0.3, z: e.location.z }); } catch {}
+  }
+}, 10);
+world.afterEvents.playerInteractWithEntity.subscribe((ev) => {
+  const e = ev.target, p = ev.player;
+  if (e?.typeId !== SOLDIER || !(isDowned(e) || isPow(e))) return;
+  if ((ev.beforeItemStack ?? ev.itemStack)?.typeId === "war:unit_wand") return;     // the wand opens the same menu itself
+  system.run(() => captiveMenu(p, e).catch(() => {}));
+});
+
+// ---- health bar in the name tag (green -> yellow -> red); wounds slow and shake a soldier
+function healthBar(e) {
+  const h = e.getComponent("minecraft:health");
+  if (!h) return "";
+  const r = Math.max(0, h.currentValue / h.effectiveMax), n = Math.round(r * 6);
+  const col = r > 0.6 ? "§a" : r > 0.3 ? "§e" : "§c";
+  return `${col}${"■".repeat(n)}§8${"■".repeat(6 - n)}`;
+}
+const woundK = (e) => { const h = e.getComponent("minecraft:health"); if (!h) return 1; const r = h.currentValue / h.effectiveMax; return r < 0.5 ? 1 + (0.5 - r) * 2 : 1; }; // up to 2x worse aim
+const lastHp = new Map();
+system.runInterval(() => {
+  for (const e of allOf(SOLDIER)) {
+    try {
+      const h = e.getComponent("minecraft:health"); if (!h) continue;
+      const v = Math.round(h.currentValue);
+      if (lastHp.get(e.id) !== v) { lastHp.set(e.id, v); updateName(e); }
+      // badly wounded: slower
+      if (!isDowned(e) && h.currentValue / h.effectiveMax < 0.35) { try { e.addEffect("slowness", 30, { amplifier: 0, showParticles: false }); } catch {} }
+    } catch {}
+  }
+}, 10);
+
+// ---- medics: go to the worst wounded (the downed first), revive / heal; otherwise wait at a rally flag
+const medicTask = new Map(); // medic id -> { target, slot }
+function medicMove(e, d, now) {
+  if (d.div !== "medic" || d.surr || isRiding(e)) return undefined;
+  let best, bs = -1;
+  for (const o of nearbyCombatants(e.dimension.id, e.location, 40)) {
+    if (o.id === e.id || o.typeId !== SOLDIER) continue;
+    try {
+      if (!isFriendly(d.faction, Number(P(o, "war:faction")))) continue;
+      const h = o.getComponent("minecraft:health"); if (!h) continue;
+      const need = isDowned(o) ? 10 : 1 - h.currentValue / h.effectiveMax;
+      if (need < 0.25) continue;
+      const sc = need * 10 - dist(o.location, e.location) * 0.1;
+      if (sc > bs) { bs = sc; best = o; }
+    } catch {}
+  }
+  if (best) {
+    const dd = dist(best.location, e.location);
+    if (dd < 3) {
+      if (isDowned(best)) { if (now % 40 < 10) { revive(best, 8); note(e, "revived a soldier"); callout(e, "You're okay!"); } }
+      return { g: "g_none", t: "t_off", urgent: false };
+    }
+    let mt = medicTask.get(e.id);
+    if (!mt || mt.target !== best.id || !marker(mt.slot) || now % 40 < 10) {
+      const slot = makeWaypoint(e.dimension, best.location);
+      if (!slot) return undefined;
+      mt = { target: best.id, slot }; medicTask.set(e.id, mt);
+    }
+    note(e, isDowned(best) ? "going to a downed soldier" : "treating the wounded");
+    const mv = travel(e, best.location, "medic", now, true);
+    return mv ? { ...mv, t: "t_off" } : undefined;
+  }
+  medicTask.delete(e.id);
+  // nobody to treat: station at a friendly rally flag within 64 (where the wounded come)
+  const rally = nearestFlag(e.dimension, e.location, (f) => !!P(f, "war:rally") && isFriendly(d.faction, Number(P(f, "war:faction"))), 64);
+  if (rally && dist(rally.location, e.location) > 5) { note(e, "waiting at the rally point"); return { g: "g_wp", slot: slotOf(rally), t: "t_off", urgent: false }; }
+  return undefined;
+}
+
+// ---- radio reports to the commander (chat), a few per minute per squad at most
+const lastRadio = new Map();
+function radio(e, text, force = false) {
+  try {
+    const d = sd(e), cmdr = findPlayer(e.getDynamicProperty("war:cmdr"));
+    if (!cmdr) return;
+    const k = squadKey(e, d), now = tick();
+    if (!force && now - (lastRadio.get(k) ?? -9999) < 200) return;
+    lastRadio.set(k, now);
+    const name = d.squad ? squadName(d.faction, d.squad) : factionLabel(d.faction, true);
+    cmdr.sendMessage(`§7[Radio] §e${name}§7: ${text}`);
+  } catch {}
+}
+const bearing = (from, to) => { const a = (Math.atan2(to.x - from.x, -(to.z - from.z)) * 180 / Math.PI + 360) % 360; return ["north", "north-east", "east", "south-east", "south", "south-west", "west", "north-west"][Math.round(a / 45) % 8]; };
+
+// ---- infantry and tanks: stay out of an enemy tank's line of fire; advance behind friendly tanks
+system.runInterval(() => {
+  for (const tk of vehicleList) {
+    try {
+      if (tk.typeId !== "war:tank" || !tk.isValid) continue;
+      const crew = tk.getComponent("minecraft:rideable")?.getRiders() ?? [];
+      if (!crew.length) continue;
+      const tf = factionOf(crew[0]);
+      const yaw = tk.getRotation().y * Math.PI / 180, fx = -Math.sin(yaw), fz = Math.cos(yaw);
+      for (const o of nearbyCombatants(tk.dimension.id, tk.location, 60)) {
+        if (o.typeId !== SOLDIER || isDowned(o)) continue;
+        if (!isHostile(Number(P(o, "war:faction")), tf)) continue;
+        const vx = o.location.x - tk.location.x, vz = o.location.z - tk.location.z, L = Math.hypot(vx, vz) || 1;
+        if ((vx * fx + vz * fz) / L < 0.96) continue;                               // not in front of the gun
+        const side = (vx * (-fz) + vz * fx) >= 0 ? 1 : -1;
+        push(o, { x: -fz * side * 0.5, y: 0.1, z: fx * side * 0.5 }, 3);              // dive aside
+        note(o, "dodging the tank's gun");
+      }
+    } catch {}
+  }
+}, 20);
+
+// ---- building / breaking (only when truly stuck and enabled): a few steps up, or a soft block out of the way.
+// Everything placed or broken is put back after ~1 minute.
+const SOFT = ["leaves", "dirt", "grass_block", "sand", "gravel", "glass", "wool", "planks", "mud", "snow", "clay", "hay", "moss", "vine", "bush", "fence"];
+const restoreList = []; // { dim, loc, typeId, at }
+const buildBudget = new Map(); // id -> { n, reset }
+function canBuild(e, now) {
+  if (!setting("build", true)) return false;
+  let b = buildBudget.get(e.id);
+  if (!b || now > b.reset) { b = { n: 0, reset: now + 1200 }; buildBudget.set(e.id, b); }
+  return b.n < 4;
+}
+function spendBuild(e) { const b = buildBudget.get(e.id); if (b) b.n++; }
+function placeStep(e, goalLoc, now) {
+  // stuck below a wall: stand on a placed block to rise one step (at most a 3-4 block wall)
+  const p = e.location, dim = e.dimension, y = Math.floor(p.y);
+  const hx = goalLoc.x - p.x, hz = goalLoc.z - p.z, l = Math.hypot(hx, hz) || 1;
+  const ax = p.x + (hx / l) * 0.9, az = p.z + (hz / l) * 0.9;
+  let wall = 0;
+  for (let k = 0; k < 6; k++) { try { const b = dim.getBlock({ x: ax, y: y + k, z: az }); if (b && !b.isAir && !passable(b)) wall = k + 1; else break; } catch { break; } }
+  if (wall < 2 || wall > 4 || goalLoc.y < p.y + 1) return false;
+  try {
+    const here = dim.getBlock({ x: p.x, y, z: p.z }), above = dim.getBlock({ x: p.x, y: y + 2, z: p.z });
+    if (!here || !here.isAir || !above || !above.isAir) return false;
+    e.teleport({ x: Math.floor(p.x) + 0.5, y: y + 1, z: Math.floor(p.z) + 0.5 });
+    here.setType("minecraft:cobblestone");
+    restoreList.push({ dim: dim.id, loc: { x: Math.floor(p.x), y, z: Math.floor(p.z) }, typeId: "minecraft:air", placed: "minecraft:cobblestone", at: now + 1200 });
+    spendBuild(e); note(e, "building a step");
+    return true;
+  } catch { return false; }
+}
+function breakSoft(e, goalLoc, now) {
+  const p = e.location, dim = e.dimension, y = Math.floor(p.y);
+  const hx = goalLoc.x - p.x, hz = goalLoc.z - p.z, l = Math.hypot(hx, hz) || 1;
+  const ax = p.x + (hx / l) * 0.9, az = p.z + (hz / l) * 0.9;
+  for (const dy of [1, 0]) {
+    try {
+      const b = dim.getBlock({ x: ax, y: y + dy, z: az });
+      if (!b || b.isAir || passable(b) || !SOFT.some((s) => b.typeId.includes(s))) continue;
+      restoreList.push({ dim: dim.id, loc: { x: Math.floor(ax), y: y + dy, z: Math.floor(az) }, typeId: b.typeId, placed: "minecraft:air", at: now + 1200 });
+      b.setType("minecraft:air");
+      spendBuild(e); note(e, "clearing the way");
+      return true;
+    } catch {}
+  }
+  return false;
+}
+system.runInterval(() => {
+  const now = tick();
+  for (let i = restoreList.length - 1; i >= 0; i--) {
+    const r = restoreList[i];
+    if (now < r.at) continue;
+    try {
+      const b = world.getDimension(r.dim).getBlock(r.loc);
+      if (b && b.typeId === r.placed && !nearbyCombatants(r.dim, { x: r.loc.x + 0.5, y: r.loc.y, z: r.loc.z + 0.5 }, 1.2).length) { b.setType(r.typeId); restoreList.splice(i, 1); }
+      else if (b && b.typeId !== r.placed) restoreList.splice(i, 1);          // someone changed it since: leave it
+    } catch { if (now - r.at > 6000) restoreList.splice(i, 1); }              // unloaded: try again later (give up after 5 min)
+  }
+}, 40);
+
+// ---- faction skins: a default skin per faction (individual Unit Wand skins still win)
+const factionSkin = (f) => Number(getJSON(world, "war:fskins", {})[f] ?? 0);
+async function factionSkinMenu(player) {
+  const all = getJSON(world, "war:fskins", {});
+  const choices = [{ name: "Faction uniform", slot: 0 }, ...skinChoices()];
+  const f = new ModalFormData().title("Faction skins");
+  COLORS.forEach((_, i) => f.dropdown(factionLabel(i + 1), choices.map((c) => c.name), { defaultValueIndex: Math.max(0, choices.findIndex((c) => c.slot === Number(all[i + 1] ?? 0))) }));
+  f.toggle("Also apply to soldiers with their own skin (everyone matches)", { defaultValue: false });
+  const r = await show(f, player);
+  if (!r || r.canceled || !r.formValues) return;
+  const vals = r.formValues;
+  for (let i = 0; i < COLORS.length; i++) all[i + 1] = choices[Number(vals[i])]?.slot ?? 0;
+  setJSON(world, "war:fskins", all);
+  const everyone = !!vals[COLORS.length];
+  let n = 0;
+  for (const e of allOf(SOLDIER)) {
+    try {
+      const d = sd(e);
+      if (everyone) { setP(e, "war:skin", 0); }
+      syncSkin(e); n++;
+    } catch {}
+  }
+  player.sendMessage(`§aFaction skins saved${everyone ? " and applied to everyone" : ""}.`);
+}
+// the skin actually drawn: his own Unit Wand skin, else his faction's skin, else the faction uniform
+function syncSkin(e) {
+  try {
+    const own = Number(e.getDynamicProperty("p_war:skin") ?? 0);
+    const eff = own || factionSkin(Number(P(e, "war:faction") ?? 0));
+    if (e.getProperty("war:skin") !== eff) e.setProperty("war:skin", eff);
+  } catch {}
+}
+
+// ---- after the battle: re-form, treat the wounded, gather stragglers, then carry on with the mission
+const regroup = new Map(); // squad key -> until tick
+function regroupMove(e, d, now) {
+  const k = squadKey(e, d), until = regroup.get(k);
+  if (!until || now > until || d.div === "medic") return undefined;
+  const S = squads.get(k);
+  if (!S?.ourC) return undefined;
+  if (Math.hypot(S.ourC.x - e.location.x, S.ourC.z - e.location.z) < 6) { note(e, "regrouping"); return { g: "g_none", t: "t_mid", urgent: false }; }
+  const w = walkableNear(e.dimension, S.ourC.x, S.ourC.z, S.ourC.y ?? e.location.y);
+  if (!w) return undefined;
+  note(e, "regrouping");
+  return travel(e, w, "regroup", now, false);
+}
+
+// ================================================================ v4.9: fixes + sandbags + MG nests
+// ---- deaths the add-on causes on purpose (out of time while downed, plane crash, tank sinking) skip downing
+const dying = new Set();
+function killReal(e) {
+  dying.add(e.id);
+  try { e.applyDamage(1000, { cause: "override" }); } catch {}
+  system.runTimeout(() => { try { if (e.isValid) e.kill(); } catch {} }, 2);
+  system.runTimeout(() => { try { if (e.isValid) e.remove(); } catch {} dying.delete(e.id); }, 6);
+}
+
+// ---- POWs: captured enemies are unarmed, never shot, follow their captor at a distance or sit in "jail"
+const pows = new Map(); // id -> { captor, mode: "follow"|"jail", at, slot }
+function makePow(e, captor) {
+  downed.delete(e.id); downPos.delete(e.id); e.setDynamicProperty("war:downed", undefined); setP(e, "war:down", false);
+  try { e.removeEffect("slowness"); e.removeEffect("weakness"); } catch {}
+  const h = e.getComponent("minecraft:health"); if (h) h.setCurrentValue(Math.max(h.currentValue, 6));
+  pows.set(e.id, { captor: captor.id, mode: "follow" });
+  e.setDynamicProperty("war:pow", JSON.stringify({ captor: captor.id, mode: "follow" }));
+  equip(e, "air"); setP(e, "war:gun", 0);
+  updateName(e);
+}
+function freePow(e, rearm) {
+  pows.delete(e.id); e.setDynamicProperty("war:pow", undefined);
+  if (rearm) equip(e, weaponItem(e));
+  updateName(e);
+}
+const isPow = (e) => pows.has(e.id);
+function powMove(e, now) {
+  const pw = pows.get(e.id);
+  if (!pw) return undefined;
+  const g = { w: "w_none", t: "t_off", d: "d_off", r: "r_off", s: "s_1" };
+  if (pw.mode === "jail") {
+    if (!pw.slot || !marker(pw.slot)) pw.slot = makeWaypoint(e.dimension, pw.at ?? e.location);
+    const a = marker(pw.slot);
+    return { ...g, g: a && flat(a.location, e.location) > 3 ? "g_wp" : "g_none", slot: pw.slot };
+  }
+  const c = findPlayer(pw.captor);
+  if (!c || c.dimension.id !== e.dimension.id) return { ...g, g: "g_none", slot: 0 };
+  const dd = dist(c.location, e.location);
+  if (dd <= 7) return { ...g, g: "g_none", slot: 0 };                    // close enough: wait (not on your heels)
+  const dx = e.location.x - c.location.x, dz = e.location.z - c.location.z, L = Math.hypot(dx, dz) || 1;
+  const spot = walkableNear(e.dimension, c.location.x + (dx / L) * 6, c.location.z + (dz / L) * 6, c.location.y) ?? c.location;
+  if (!pw.slot || !marker(pw.slot) || flat(marker(pw.slot).location, spot) > 3) pw.slot = makeWaypoint(e.dimension, spot);
+  return { ...g, g: "g_wp", slot: pw.slot, s: dd > 20 ? "s_3" : "s_2" };
+}
+// ---- callouts: test button (every soldier near you calls out once, right now)
+function testCallouts(player) {
+  let n = 0;
+  for (const e of player.dimension.getEntities({ type: SOLDIER, location: player.location, maxDistance: 24 })) {
+    lastCall.delete(e.id); try { lastCall.delete(squadKey(e, sd(e))); } catch {}
+    callout(e, "Testing!"); n++;
+  }
+  player.sendMessage(n ? `§7${n} soldier${n === 1 ? "" : "s"} called out. Heard nothing? Check the "Hostile creatures" volume slider.` : "§7No soldiers within 24 blocks.");
+}
+
+// ---- soldier damage to players follows the Realism slider too (gun-pack bullets often carry no shooter)
+const shotAtPlayer = new Map(); // player id -> tick a soldier last fired at him
+
+// ---- sandbags: soldiers know them as cover / peek spots
+const SANDBAG = "war:sandbag";
+const sandbagCache = new Map(); // "x,z" cell (8x8) -> { t, list: [{x,y,z}] }
+function sandbagsNear(dim, loc, r, now) {
+  const out = [];
+  for (let cx = Math.floor((loc.x - r) / 8); cx <= Math.floor((loc.x + r) / 8); cx++) for (let cz = Math.floor((loc.z - r) / 8); cz <= Math.floor((loc.z + r) / 8); cz++) {
+    const key = `${dim.id}:${cx},${cz}:${Math.floor(loc.y / 8)}`;
+    let c = sandbagCache.get(key);
+    if (!c || now - c.t > 400) {
+      c = { t: now, list: [] };
+      for (let x = cx * 8; x < cx * 8 + 8; x++) for (let z = cz * 8; z < cz * 8 + 8; z++) for (let y = Math.floor(loc.y) - 3; y <= Math.floor(loc.y) + 3; y++) {
+        try { const b = tBlock(dim, x, y, z); if (b?.typeId === SANDBAG) c.list.push({ x, y, z }); } catch {}
+      }
+      sandbagCache.set(key, c);
+    }
+    for (const s of c.list) if (Math.hypot(s.x + 0.5 - loc.x, s.z + 0.5 - loc.z) <= r) out.push(s);
+  }
+  return out;
+}
+// a spot right behind a sandbag, with the sandbag between it and the enemy
+function sandbagSpot(e, enemyC, anchor, leash, now) {
+  let best, bd = 1e9;
+  for (const sb of sandbagsNear(e.dimension, e.location, 12, now)) {
+    const dx = enemyC.x - (sb.x + 0.5), dz = enemyC.z - (sb.z + 0.5), L = Math.hypot(dx, dz) || 1;
+    const spot = walkableNear(e.dimension, sb.x + 0.5 - (dx / L) * 1.0, sb.z + 0.5 - (dz / L) * 1.0, sb.y);
+    if (!spot || Math.abs(spot.y - sb.y) > 0.6 || !localReach(e.dimension, e.location, spot)) continue;
+    if (anchor && flat(spot, anchor.location) > leash) continue;
+    if (nearbyCombatants(e.dimension.id, spot, 1.2).some((o) => o.typeId === SOLDIER && o.id !== e.id)) continue;
+    const dd = dist(spot, e.location);
+    if (dd < bd) { bd = dd; best = spot; }
+  }
+  return best;
+}
+
+// ---- MG nests: a placeable emplacement a soldier or a player can man
+const NEST = "war:mg_nest";
+const NEST_SPEC = { bullet: "ww:nlmg_projectile", sight: 200, fire: 200, mag: 40, gap: 2, reload: 50, speed: 5.0, spread: 0.006 };
+const nestRider = (n) => (n.getComponent("minecraft:rideable")?.getRiders() ?? [])[0];
+function ridingNest(e) { try { return e.getComponent("minecraft:riding")?.entityRidingOn?.typeId === NEST; } catch { return false; } }
+const nestState = new Map(); // nest id -> { ammo, next }
+system.runInterval(() => {
+  const now = tick();
+  for (const n of allOf(NEST)) {
+    try {
+      const r = nestRider(n);
+      n.clearVelocity?.();
+      if (!r) continue;
+      let st = nestState.get(n.id); if (!st) { st = { ammo: NEST_SPEC.mag, next: 0 }; nestState.set(n.id, st); }
+      if (r.typeId === "minecraft:player") {
+        n.setRotation({ x: 0, y: r.getRotation().y });                         // the gun follows your view
+        if (consumeFire(r) && now >= st.next) {
+          const dir = r.getViewDirection(), h = r.getHeadLocation();
+          for (let k = 0; k < 6 && st.ammo > 0; k++) {
+            system.runTimeout(() => {
+              try {
+                const s = NEST_SPEC.spread, rr = () => (Math.random() + Math.random() - 1) * s * 1.6;
+                const d2 = { x: dir.x + rr(), y: dir.y + rr(), z: dir.z + rr() };
+                const b = n.dimension.spawnEntity(NEST_SPEC.bullet, { x: h.x + d2.x * 1.4, y: h.y - 0.2 + d2.y * 1.4, z: h.z + d2.z * 1.4 });
+                const pc = b.getComponent("minecraft:projectile"); if (pc) { pc.owner = r; pc.shoot({ x: d2.x * NEST_SPEC.speed, y: d2.y * NEST_SPEC.speed, z: d2.z * NEST_SPEC.speed }); }
+                n.dimension.playSound("mg42_shot_mid", n.location, { volume: 2 });
+              } catch {}
+            }, k * 2);
+            st.ammo--;
+          }
+          st.next = now + 12;
+          if (st.ammo <= 0) { st.ammo = NEST_SPEC.mag; st.next = now + NEST_SPEC.reload; try { r.onScreenDisplay.setActionBar("§7Reloading..."); } catch {} }
+          else try { r.onScreenDisplay.setActionBar(`§7MG ${st.ammo}/${NEST_SPEC.mag}`); } catch {}
+        }
+      } else if (r.typeId === SOLDIER) {
+        if (Number(P(r, "war:gun") ?? 0) !== 0) { r.setDynamicProperty("war:gunSaved", true); setP(r, "war:gun", 0); }   // his own gun is put away
+        if (!P(r, "war:nest")) setP(r, "war:nest", true);                                                     // standing, hands on the gun
+        const t = perc.get(r.id)?.threat;
+        if (t?.isValid) {
+          const want = (Math.atan2(-(t.location.x - n.location.x), t.location.z - n.location.z) * 180) / Math.PI;
+          n.setRotation({ x: 0, y: turnToward(n.getRotation().y, want, 9) });                              // smooth traverse
+          r.setRotation({ x: 0, y: n.getRotation().y });
+          // overrun from behind or the side up close: get off the gun
+          const vx = t.location.x - n.location.x, vz = t.location.z - n.location.z, L = Math.hypot(vx, vz) || 1, yaw = n.getRotation().y * Math.PI / 180;
+          if (L < 6 && (vx * -Math.sin(yaw) + vz * Math.cos(yaw)) / L < 0) { n.getComponent("minecraft:rideable")?.ejectRider(r); }
+        }
+      }
+    } catch {}
+  }
+}, 2);
+// soldiers holding a position man an empty nest close by (further out once the enemy shows up)
+system.runInterval(() => {
+  for (const n of allOf(NEST)) {
+    try {
+      if (nestRider(n)) continue;
+      let best, bd = 15;
+      for (const o of nearbyCombatants(n.dimension.id, n.location, 15)) {
+        if (o.typeId !== SOLDIER || isRiding(o) || isDowned(o) || isPow(o)) continue;
+        const d = sd(o);
+        if (!["hold", "post", "sentry", "stand"].includes(d.func) || d.div === "medic" || d.div === "guard" || d.retreat) continue;
+        const dd = dist(o.location, n.location);
+        const contact = !!squads.get(squadKey(o, d))?.known?.size;
+        if (dd > 9 && !contact) continue;                                // far ones only come once there's a fight
+        if (dd < bd) { bd = dd; best = o; }
+      }
+      if (best) { n.getComponent("minecraft:rideable")?.addRider(best); note(best, "manning the MG"); callout(best, "On the gun!"); }
+    } catch {}
+  }
+}, 40);
+
+// one menu for the downed and for prisoners (Unit Wand or right-click)
+async function captiveMenu(p, e) {
+  const pf = playerFaction(p), ef = Number(P(e, "war:faction"));
+  const friendly = isFriendly(pf, ef);
+  if (isPow(e)) {
+    const pw = pows.get(e.id);
+    if (friendly) { const r = await show(new ActionFormData().title("Captured comrade").button("Free and rearm him"), p); if (r && !r.canceled && r.selection === 0) { freePow(e, true); p.onScreenDisplay.setActionBar("§aFreed and rearmed."); } return; }
+    const r = await show(new ActionFormData().title("Prisoner").button(pw.mode === "jail" ? "Follow me" : "Imprison (stay here)").button("Release (goes home unarmed)").button("§cKill"), p);
+    if (!r || r.canceled || r.selection === undefined || !e.isValid) return;
+    if (r.selection === 0) {
+      if (pw.mode === "jail") { pw.mode = "follow"; pw.captor = p.id; pw.slot = undefined; }
+      else { pw.mode = "jail"; pw.at = { ...e.location }; pw.slot = makeWaypoint(e.dimension, e.location); }
+      e.setDynamicProperty("war:pow", JSON.stringify({ captor: pw.captor, mode: pw.mode, at: pw.at }));
+      p.onScreenDisplay.setActionBar(pw.mode === "jail" ? "§7Imprisoned here." : "§7He follows you.");
+    } else if (r.selection === 1) { freePow(e, false); p.onScreenDisplay.setActionBar("§7Released."); }
+    else { pows.delete(e.id); killReal(e); }
+    return;
+  }
+  if (friendly) { revive(e, 6); p.onScreenDisplay.setActionBar("§aRevived."); return; }
+  const r = await show(new ActionFormData().title("Downed enemy").button("Capture").button("§cKill"), p);
+  if (!r || r.canceled || r.selection === undefined || !e.isValid || !isDowned(e)) return;
+  if (r.selection === 0) { makePow(e, p); p.onScreenDisplay.setActionBar("§aCaptured. He follows you at a distance."); }
+  else killReal(e);
+}
+
+// ================================================================ v5.0: buildings, castles, general's view
+// ---- indoors? (a roof over his head)
+function isIndoors(e) {
+  try {
+    const p = e.location;
+    if (tSky(e.dimension, p.x, p.y + 1, p.z) >= 10) return false;
+    for (let k = 2; k <= 7; k++) { const b = tBlock(e.dimension, p.x, p.y + k, p.z); if (b && !b.isAir && !passable(b) && !b.typeId.includes("leaves")) return true; }
+  } catch {}
+  return false;
+}
+// ---- personal routes (3D): the quickest way out of a building, or into one for refuge
+const personal = new Map(); // id -> { pts, idx, kind, t, planning }
+function planPersonal(e, kind, goalFn, now, max = 20000, radius = 60) {
+  const pr = { pts: undefined, idx: 0, kind, t: now, planning: true };
+  personal.set(e.id, pr);
+  planRoute(e.dimension, e.location, { x: e.location.x, z: e.location.z }, (pts) => { pr.planning = false; pr.pts = pts; pr.idx = 0; }, { goalFn, max, maxRadius: radius });
+}
+// v5.3: is there any roof at all within ~24 blocks? (a few cached samples; remembered per 16-block area for 30 s)
+// Saves an expensive search for a building that isn't there (open fields, beaches, hills).
+const roofMemo = new Map(); // "dim:cx,cz" -> { v, t }
+function roofNear(e, now) {
+  const k = `${e.dimension.id}:${Math.floor(e.location.x / 16)},${Math.floor(e.location.z / 16)}`;
+  const c = roofMemo.get(k);
+  if (c && now - c.t < 600) return c.v;
+  let v = false;
+  for (let i = 0; i < 24 && !v; i++) {
+    const a = (i / 8) * Math.PI * 2, r = 6 + 6 * Math.floor(i / 8);
+    const w = walkableNear(e.dimension, e.location.x + Math.cos(a) * r, e.location.z + Math.sin(a) * r, e.location.y);
+    if (w && insideGoal(e.dimension, { x: Math.floor(w.x), y: w.y, z: Math.floor(w.z) })) v = true;
+  }
+  roofMemo.set(k, { v, t: now });
+  if (roofMemo.size > 500) roofMemo.clear();
+  return v;
+}
+function followPersonal(e, now) {
+  const pr = personal.get(e.id);
+  if (!pr) return undefined;
+  if (pr.planning) return now - pr.t < 60 ? { g: "g_none", t: "t_mid", urgent: false } : undefined;   // a short wait for the route; never frozen
+  if (!pr.pts || now - pr.t > 600 + pr.pts.length * 40) { personal.delete(e.id); travelTo.delete(e.id); return undefined; }
+  const i = trackIdx(e.id, pr.pts, e.location);
+  pr.idx = i;
+  const end = pr.pts[pr.pts.length - 1];
+  if (i >= pr.pts.length - 2 && dist(end, e.location) < 2) { personal.delete(e.id); travelTo.delete(e.id); return undefined; }   // there
+  const pt = pr.pts[lookahead(pr.pts, i, 4.5)];
+  note(e, { exit: "getting out of the building", advance: "moving to the enemy's level", refuge: "taking refuge inside", patrol: "patrolling", reinforce: "reinforcing", regroup: "regrouping", medic: "going to the wounded", rally: "falling back to the rally point" }[pr.kind] ?? "on the move");
+  const slot = myMarker(e, pt);
+  if (dist(pt, e.location) < 3.2) stepAlong(e, pr.pts, i);                    // last steps (followers stop short of the marker)
+  return slot ? { g: "g_wp", slot, t: "t_mid", urgent: true } : undefined;
+}
+const outsideGoal = (dim, n) => { try { return !n.climb && tSky(dim, n.x + 0.5, n.y + 1, n.z + 0.5) >= 13; } catch { return false; } };
+const insideGoal = (dim, n) => { try {
+  if (n.climb || tSky(dim, n.x + 0.5, n.y + 1, n.z + 0.5) >= 8) return false;
+  for (let k = 2; k <= 6; k++) { const b = tBlock(dim, n.x + 0.5, n.y + k, n.z + 0.5); if (b && !b.isAir && !passable(b)) return !["stone", "dirt", "deepslate"].some((s) => b.typeId.includes(s)) || b.typeId.includes("brick"); }
+  return false; } catch { return false; } };
+// ---- windows: from inside, open a firing slot by breaking ONE glass block toward the enemy (put back later)
+function openWindow(e, t, now) {
+  if (!setting("build", true) || !canBuild(e, now)) return false;
+  try {
+    const h = e.getHeadLocation(), c = chest(t), dx = c.x - h.x, dy = c.y - h.y, dz = c.z - h.z, L = Math.hypot(dx, dy, dz) || 1;
+    const hit = e.dimension.getBlockFromRay(h, { x: dx / L, y: dy / L, z: dz / L }, { maxDistance: 4, includePassableBlocks: false });
+    const b = hit?.block;
+    if (!b || !b.typeId.includes("glass")) return false;
+    restoreList.push({ dim: e.dimension.id, loc: { ...b.location }, typeId: b.typeId, placed: "minecraft:air", at: now + 2400 });
+    b.setType("minecraft:air"); spendBuild(e); note(e, "breaking a window to fire");
+    return true;
+  } catch { return false; }
+}
+// ---- holding a door from inside: two blocks in, facing it
+const doorLook = new Map();
+function doorSpot(e, now) {
+  if (now - (doorLook.get(e.id) ?? -9999) < 200) return undefined;   // a door search at most every 10 s
+  doorLook.set(e.id, now);
+  try {
+    const p = e.location;
+    for (let dx = -6; dx <= 6; dx++) for (let dz = -6; dz <= 6; dz++) for (const dy of [0]) {
+      const b = tBlock(e.dimension, p.x + dx, Math.floor(p.y) + dy, p.z + dz);
+      if (!isWoodDoor(b)) continue;
+      for (const [ox, oz] of [[2, 0], [-2, 0], [0, 2], [0, -2]]) {
+        const w = walkableNear(e.dimension, b.location.x + 0.5 + ox, b.location.z + 0.5 + oz, p.y);
+        if (w && isIndoorsAt(e.dimension, w)) return w;
+      }
+    }
+  } catch {}
+  return undefined;
+}
+function isIndoorsAt(dim, p) { return insideGoal(dim, { x: Math.floor(p.x), y: Math.floor(p.y), z: Math.floor(p.z) }); }
+// building tactics inside the brain: get out under fire, take refuge when caught in the open, man windows, hold doors
+function buildingMove(e, d, now, S, t, B, underFire, exposure, moving, anchor) {
+  const pr = personal.get(e.id);
+  if (pr) return followPersonal(e, now);
+  if (d.func === "post" || isRiding(e)) return undefined;
+  const inside = isIndoors(e);
+  const supp = (suppB.get(e.id) ?? 0) > 8;
+  const defending = ["hold", "post", "sentry", "stand"].includes(d.func) && (!anchor || isIndoorsAt(e.dimension, anchor.location) || flat(anchor.location, e.location) < 12);
+  if (inside && defending && S?.known?.size) {
+    // the building is theirs: everyone on alert, facing the way in, firing from doorways and windows
+    if (t?.isValid) { turnTo(e, t.location, 25); if (!canHit(e, t) && openWindow(e, t, now)) return { g: "g_none", t: "t_mid", urgent: false }; }
+    note(e, "defending the building");
+    return undefined;                                                   // (the brain / gunfire do the fighting from here)
+  }
+  if (inside && !defending && (supp || (underFire && exposure >= 2) || (S && S.ratio < 0.6 && S.known.size)) && now - (B.exitT ?? -9999) > 300) {
+    B.exitT = now; planPersonal(e, "exit", outsideGoal, now); return followPersonal(e, now);         // trapped inside under fire: get out
+  }
+  if (!inside && underFire && exposure >= 3 && S && S.ratio < 0.8 && now - (B.refT ?? -9999) > 400) {
+    B.refT = now;
+    if (roofNear(e, now)) { planPersonal(e, "refuge", insideGoal, now, 6000, 32); return followPersonal(e, now); }   // caught in the open: into a building
+  }
+  if (inside && t?.isValid && !canHit(e, t)) {
+    if (openWindow(e, t, now)) return { g: "g_none", t: "t_mid", urgent: false };
+    if (!moving && S && (e.id.charCodeAt(e.id.length - 1) % 5 === 0)) {                               // one in five holds a door
+      const ds = doorSpot(e, now);
+      if (ds && (!anchor || flat(ds, anchor.location) < 20)) { note(e, "holding the door"); const sl = makeWaypoint(e.dimension, ds); return sl ? { g: "g_wp", slot: sl, t: "t_mid", urgent: false } : undefined; }
+    }
+  }
+  return undefined;
+}
+
+// ---- general's view: the camera hangs above a ground cursor and looks straight down, so the middle of your
+// screen (your crosshair) IS the cursor. Look further up to push it out (up to ~160 blocks), down to pull it in;
+// turn to swing it around. You stay where you are. Any baton order (or backing out) ends it; so does dying.
+const generals = new Map(); // player id -> { cursor }
+function generalCursor(p) {
+  const rot = p.getRotation(), yaw = rot.y * Math.PI / 180;
+  const pitch = Math.max(-30, Math.min(90, rot.x));                    // 90 = looking straight down
+  const reach = Math.max(0, (90 - pitch) / 120) * 160;                 // straight down: here; level: ~120; up: ~160
+  const x = p.location.x - Math.sin(yaw) * reach, z = p.location.z + Math.cos(yaw) * reach;
+  let y = p.location.y;
+  try { const top = p.dimension.getTopmostBlock({ x, z }); if (top) y = top.location.y + 1; } catch {}
+  return { x, y, z };
+}
+function endGeneral(player) {
+  generals.delete(player.id);
+  try { player.camera.clear(); } catch {}
+}
+function toggleGeneral(player) {
+  if (generals.has(player.id)) { endGeneral(player); player.onScreenDisplay.setActionBar("§7General's view off."); return; }
+  generals.set(player.id, { cursor: generalCursor(player) });
+  player.onScreenDisplay.setActionBar("§eGeneral's view: your crosshair is the ground target. Use the baton to order; that ends the view.");
+}
+system.runInterval(() => {
+  for (const [id, g] of [...generals]) {
+    const p = findPlayer(id);
+    if (!p) { generals.delete(id); continue; }
+    try {
+      g.cursor = generalCursor(p);
+      p.camera.setCamera("minecraft:free", { location: { x: g.cursor.x, y: g.cursor.y + 55, z: g.cursor.z }, rotation: { x: 90, y: p.getRotation().y }, easeOptions: { easeTime: 0.15 } });
+      p.dimension.spawnParticle("minecraft:villager_happy", { x: g.cursor.x, y: g.cursor.y + 0.5, z: g.cursor.z });
+      const f = playerFaction(p);
+      for (const [k, S] of squads) {
+        if (!S.ourC || !k.startsWith(`${f}:`)) continue;
+        p.dimension.spawnParticle(S.known?.size ? "minecraft:redstone_ore_dust_particle" : "minecraft:blue_flame_particle", { x: S.ourC.x, y: S.ourC.y + 4, z: S.ourC.z });
+      }
+    } catch {}
+  }
+}, 4);
+// never stuck in it: cleared on death, on respawn, and when you join
+world.afterEvents.entityDie.subscribe((ev) => { try { if (ev.deadEntity.typeId === "minecraft:player") endGeneral(ev.deadEntity); } catch {} });
+world.afterEvents.playerSpawn.subscribe((ev) => { try { endGeneral(ev.player); } catch {} });
+
+// ================================================================ v5.2: one movement system
+// ---- ladders: Minecraft's walking won't climb on purpose, so a soldier whose route goes up/down a ladder is
+// moved along the ladder directly (step by step), then stepped onto the next route point.
+const climbing = new Map(); // id -> { x, z, toY, exit, t }
+function routeOf(e) {
+  const pr = personal.get(e.id);
+  if (pr?.pts) return { pts: pr.pts, idx: trackIdx(e.id, pr.pts, e.location) };
+  const g = Number(e.getDynamicProperty("war:ordergoal") ?? e.getDynamicProperty("war:goal") ?? 0);
+  const id = laneOf.get(g); const m = id ? getMarches()[id] : undefined;
+  if (m?.path) return { pts: m.path, idx: routeProgress(m, e.location, e.id) };
+  return undefined;
+}
+function startClimbIfNeeded(e) {
+  if (climbing.has(e.id) || isRiding(e)) return;
+  const r = routeOf(e);
+  if (!r) return;
+  const pts = r.pts;
+  for (let i = Math.max(0, r.idx - 1); i < Math.min(pts.length, r.idx + 4); i++) {
+    const p = pts[i];
+    if (!p.climb) continue;
+    if (Math.hypot(p.x - e.location.x, p.z - e.location.z) > 1.3 || Math.abs(p.y - e.location.y) > 1.3) continue;   // his ladder, on his level
+    // the run of ladder points from here: climb to its far end, then step to the point after it
+    let j = i; while (j + 1 < pts.length && pts[j + 1].climb && Math.hypot(pts[j + 1].x - p.x, pts[j + 1].z - p.z) < 0.6) j++;
+    if (j + 1 <= r.idx) continue;                                   // v5.3: that ladder is behind him (he just got off it)
+    const exit = pts[Math.min(pts.length - 1, j + 1)];
+    const toY = pts[j].y;
+    if (Math.abs(toY - e.location.y) < 0.6 && (!exit || Math.abs(exit.y - e.location.y) < 0.6)) return;
+    climbing.set(e.id, { x: Math.floor(p.x) + 0.5, z: Math.floor(p.z) + 0.5, toY, exit, t: tick() });
+    for (let yy = Math.min(e.location.y, toY) - 1; yy <= Math.max(e.location.y, toY) + 2; yy++) openAt(e.dimension, { x: p.x, y: yy, z: p.z });   // trapdoors in the shaft
+    note(e, "climbing the ladder");
+    return;
+  }
+}
+system.runInterval(() => {
+  const now = tick();
+  for (const [id, c] of [...climbing]) {
+    const e = world.getEntity(id);
+    if (!e?.isValid || now - c.t > 400) { climbing.delete(id); continue; }
+    try {
+      const y = e.location.y, dy = c.toY - y;
+      if (Math.abs(dy) > 0.15) {
+        e.teleport({ x: c.x, y: y + Math.sign(dy) * Math.min(0.2, Math.abs(dy)), z: c.z });   // up or down the ladder
+      } else {
+        if (c.exit) e.teleport({ x: c.exit.x, y: c.exit.y, z: c.exit.z });                    // step off onto the next point
+        climbing.delete(id);
+      }
+    } catch { climbing.delete(id); }
+  }
+}, 1);
+system.runInterval(() => { for (const e of allOf(SOLDIER)) { try { startClimbIfNeeded(e); } catch {} } }, 4);
+
+// ---- one way to travel anywhere: a direct step only when it's close and plainly reachable on foot;
+// otherwise a proper dense route (the same planner and follower as every march)
+const travelTo = new Map(); // id -> destination of his current personal route
+function travel(e, dest, kind, now, urgent = false) {
+  if (!dest) return undefined;
+  if (flat(dest, e.location) <= 12 && Math.abs(dest.y - e.location.y) <= 1 && localReach(e.dimension, e.location, dest)) {
+    const slot = myMarker(e, dest);
+    return slot ? { g: "g_wp", slot, t: "t_mid", urgent } : undefined;
+  }
+  const cur = travelTo.get(e.id), pr = personal.get(e.id);
+  if (!pr || !cur || flat(cur, dest) > 6) {                           // a new destination: plan a route to it
+    travelTo.set(e.id, { ...dest });
+    planPersonalTo(e, kind, dest, now);
+  }
+  return followPersonal(e, now);
+}
+
+// ================================================================ v5.3: route stepping, shared routes, close-combat drills
+// ---- one marker per soldier for his own moves (personal routes, short hops, brain spots). It is moved, never
+// re-spawned, so a soldier crossing a castle no longer leaves a trail of markers behind him (lag).
+function myMarker(e, loc) {
+  let s = Number(e.getDynamicProperty("war:mymk") ?? 0);
+  const m = s ? marker(s) : undefined;
+  if (!m) {
+    s = makeWaypoint(e.dimension, loc, false);
+    if (!s) return 0;
+    try { marker(s)?.addTag("war_mine"); } catch {}
+    e.setDynamicProperty("war:mymk", s);
+    try { noteRefs(e); } catch {}
+    return s;
+  }
+  if (dist(m.location, loc) > 0.4) { try { m.teleport(loc); } catch {} }
+  return s;
+}
+
+// ---- shared routes: squad mates heading to the same place reuse a route one of them just worked out
+// (from the nearest point on it, same floor, reachable on foot). Fewer plans = less lag, and they move together.
+const routeCache = []; // { dim, goal, pts, t }
+function rememberRoute(dim, dest, pts) {
+  const end = pts[pts.length - 1];
+  routeCache.push({ dim: dim.id, goal: { x: dest.x, y: Number.isFinite(dest.y) ? dest.y : end.y, z: dest.z }, pts, t: tick() });
+  if (routeCache.length > 40) routeCache.shift();
+}
+function cachedRoute(dim, from, dest) {
+  const now = tick();
+  for (let k = routeCache.length - 1; k >= 0; k--) {
+    const c = routeCache[k];
+    if (now - c.t > 400) { routeCache.splice(k, 1); continue; }
+    if (c.dim !== dim.id || r3(c.goal, { x: dest.x, y: Number.isFinite(dest.y) ? dest.y : c.goal.y, z: dest.z }) > 3) continue;
+    const i = nearestIdx(c.pts, from, 0, c.pts.length);
+    if (r3(c.pts[i], from) > 3 || c.pts[i].climb) continue;
+    if (!localReach(dim, from, c.pts[i])) continue;
+    return c.pts.slice(i);
+  }
+  return undefined;
+}
+
+// ---- doors, trapdoors and fence gates on the route: opened as he gets there, shut again once everyone is through
+const opened = []; // { dim, loc, at }
+const hopT = new Map(); // id -> tick of his last step-up hop
+function openAt(dim, loc) {
+  try {
+    const p = { x: Math.floor(loc.x), y: Math.floor(loc.y), z: Math.floor(loc.z) };
+    const b = dim.getBlock(p);
+    if (!b || !OPENABLE_ID(b.typeId) || b.typeId.includes("iron")) return;
+    if (b.permutation.getState("open_bit")) return;
+    b.setPermutation(b.permutation.withState("open_bit", true));
+    TERRAIN.delete(`${dim.id}|${p.x}|${p.y}|${p.z}`);
+    if (!opened.some((o) => o.dim === dim.id && o.loc.x === p.x && o.loc.y === p.y && o.loc.z === p.z)) opened.push({ dim: dim.id, loc: p, at: tick() + 60 });
+  } catch {}
+}
+system.runInterval(() => {
+  const now = tick();
+  for (let i = opened.length - 1; i >= 0; i--) {
+    const o = opened[i];
+    if (now < o.at) continue;
+    try {
+      if (nearbyCombatants(o.dim, { x: o.loc.x + 0.5, y: o.loc.y, z: o.loc.z + 0.5 }, 2.2).some((c) => c.typeId === SOLDIER || c.typeId === "minecraft:player")) { o.at = now + 40; continue; }
+      const b = world.getDimension(o.dim).getBlock(o.loc);
+      if (b && OPENABLE_ID(b.typeId)) b.setPermutation(b.permutation.withState("open_bit", false));
+      TERRAIN.delete(`${o.dim}|${o.loc.x}|${o.loc.y}|${o.loc.z}`);
+      opened.splice(i, 1);
+    } catch { if (now - o.at > 6000) opened.splice(i, 1); }
+  }
+}, 20);
+
+// ---- the stepper: where plain walking toward the guide can't be trusted (stairs, ladders, doors, trapdoors, gates,
+// tight rooms), the soldier is walked point by point along his own route. The climber takes over on a ladder.
+function stepAlong(e, pts, i) {
+  if (climbing.has(e.id) || isRiding(e) || downed.has(e.id)) return;
+  let k = i;
+  while (k < pts.length - 1 && r3(pts[k], e.location) < 0.9) k++;
+  const p = pts[k];
+  if (!p) return;
+  for (const q of [pts[k], pts[k + 1]]) {                                   // open what's in the way, here and next
+    if (!q || dist(q, e.location) > 3) continue;
+    openAt(e.dimension, q); openAt(e.dimension, { x: q.x, y: q.y + 1, z: q.z });
+  }
+  const dx = p.x - e.location.x, dz = p.z - e.location.z, L = Math.hypot(dx, dz);
+  if (p.climb && L <= 1.1 && Math.abs(p.y - e.location.y) <= 1.3) { startClimbIfNeeded(e); return; }   // on the ladder: climb
+  if (L < 0.25) return;
+  // brake near drops: if just past this point (or beside the way down) there's a drop, step gently so he can't overshoot
+  let cap = 0.6;
+  try {
+    const ux = dx / L, uz = dz / L;
+    const dropAt = (x, z) => { const f1 = tBlock(e.dimension, x, p.y - 1, z), f2 = tBlock(e.dimension, x, p.y - 2, z); return !!f1 && !!f2 && (f1.isAir || passable(f1)) && (f2.isAir || passable(f2)); };
+    if (p.y < e.location.y - 0.5 || dropAt(p.x + ux, p.z + uz) || dropAt(p.x - uz, p.z + ux) || dropAt(p.x + uz, p.z - ux)) cap = 0.2;
+  } catch {}
+  const s = Math.min(1, cap / Math.max(0.01, L * 0.25));
+  const up = p.y > e.location.y + 0.5 && !p.climb;
+  let face = false;                                                         // a full block in front at his feet: hop first, then forward
+  if (up) { try { const b = tBlock(e.dimension, e.location.x + (dx / L) * 0.8, Math.floor(e.location.y), e.location.z + (dz / L) * 0.8); face = !!b && !pathable(b) && !b.typeId.includes("stairs") && !b.typeId.includes("slab"); } catch {} }
+  if (face) {
+    if (tick() - (hopT.get(e.id) ?? -99) < 12) return;
+    hopT.set(e.id, tick());
+    push(e, { x: dx / L * 0.04, y: 0.42, z: dz / L * 0.04 }, 3);
+    const fwd = cap < 0.6 ? 0.16 : 0.3;                                       // a drop beyond: land on the step, don't sail past it
+    const ent = e, vx = dx / L * fwd, vz = dz / L * fwd;
+    system.runTimeout(() => { try { if (ent.isValid) push(ent, { x: vx, y: 0, z: vz }, 3); } catch {} }, 5);   // over the edge once he's up
+    return;
+  }
+  push(e, { x: dx * 0.25 * s, y: 0.05, z: dz * 0.25 * s }, 2);             // stairs / slabs: walked up (mobs step half blocks), never jumped
+}
+// march members: step only near gates / level changes / indoors; in the open the guide marker does the work
+system.runInterval(() => {
+  for (const e of allOf(SOLDIER)) {
+    try {
+      if (personal.has(e.id) || climbing.has(e.id) || isRiding(e) || downed.has(e.id) || pows.has(e.id)) continue;
+      const og = e.getDynamicProperty("war:ordergoal"), goal = Number(e.getDynamicProperty("war:goal") ?? 0);
+      const cu = Number(e.getDynamicProperty("war:catchup") ?? 0);
+      if (og !== undefined && goal !== cu) continue;                         // fighting: the brain moves him
+      const id = laneOf.get(Number(og ?? goal)); const m = id ? getMarches()[id] : undefined;
+      if (!m?.path || m.final) continue;
+      const pts = m.path, i = routeProgress(m, e.location, e.id);
+      let hard = isIndoors(e);
+      for (let k = i; !hard && k < Math.min(pts.length - 1, i + 4); k++) if (isGate(pts[k], pts[k + 1]) || Math.abs(pts[k + 1].y - e.location.y) >= 1) hard = true;
+      const mk = marker(goal);
+      const close = !mk || dist(mk.location, e.location) <= 3.3;                // the guide is inside vanilla's stop distance: he won't walk on his own
+      if (!hard && !close) continue;
+      if (!close && !pts.slice(i, i + 3).some((q) => q.climb || q.open)) continue;   // guide still far: he's walking (stairs are fine)
+      stepAlong(e, pts, i);
+    } catch {}
+  }
+}, 4);
+
+// ---- close-combat drills (War Table -> Settings -> General). They sit on top of the brain's decision:
+// cover-and-move (half the squad covers while the other half moves, swapping every few seconds, movers weave
+// under fire), shoot-and-scoot (no standing in one exposed spot trading fire for long), and flinching when hit.
+const drill = new Map(); // id -> { fx, fz, since, scoot, scootUntil }
+const teamOf = (e) => (e.id.charCodeAt(e.id.length - 1) + (e.id.charCodeAt(e.id.length - 2) || 0)) & 1;
+function drillMove(e, d, now, melee, anchor, leash) {
+  const mv = brainMove(e, d, now, melee, anchor, leash);
+  if (!setting("drills", true) || melee || !GUNS.includes(d.weapon) || isRiding(e) || personal.has(e.id)) return mv;
+  const B = brain.get(e.id), S = squads.get(squadKey(e, d));
+  if (!B || !S || !S.known.size) { drill.delete(e.id); return mv; }
+  let D = drill.get(e.id);
+  if (!D) { D = { fx: e.location.x, fz: e.location.z, since: now }; drill.set(e.id, D); }
+  const underFire = now - (firedAt.get(e.id)?.t ?? -999) < 40 || now - (hurtBy.get(e.id)?.t ?? -999) < 60;
+  const t = perc.get(e.id)?.threat;
+  // ---- shoot and scoot
+  if (D.scoot) {
+    if (now > D.scootUntil || flat(D.scoot, e.location) < 1.2) { D.scoot = undefined; D.fx = e.location.x; D.fz = e.location.z; D.since = now; }
+    else { note(e, "shifting position"); const s = myMarker(e, D.scoot); return s ? { g: "g_wp", slot: s, t: "t_mid", urgent: true } : mv; }
+  }
+  if (Math.hypot(e.location.x - D.fx, e.location.z - D.fz) > 1.5) { D.fx = e.location.x; D.fz = e.location.z; D.since = now; }
+  if (B.act === "fire" && d.func !== "post" && underFire && t?.isValid && now - D.since > 120 + (e.id.charCodeAt(e.id.length - 1) % 5) * 12 && spendDecision()) {
+    D.since = now;
+    const tc = chest(t);
+    const spot = spotNear(e, (w) => flat(w, e.location) >= 2.5 && clearShot(e.dimension, { x: w.x, y: w.y + 1.6, z: w.z }, tc), anchor, leash);
+    if (spot && localReach(e.dimension, e.location, spot)) {
+      D.scoot = spot; D.scootUntil = now + 60;
+      for (const st of gunState.values()) if (st.target?.id === e.id) st.next = Math.max(st.next, now + 8);   // those aiming at him lose their sight picture
+      note(e, "shifting position");
+      const s = myMarker(e, spot);
+      if (s) return { g: "g_wp", slot: s, t: "t_mid", urgent: true };
+    }
+  }
+  // ---- cover and move
+  if (B.act === "advance" && (S.plan === "contact" || S.plan === "assault") && (S.n ?? 0) >= 3 && ["charge", "follow", "patrol"].includes(d.func)) {
+    const moving = (Math.floor(now / 70) & 1) === teamOf(e);
+    if (!moving && t?.isValid && canHit(e, t)) { note(e, "covering the advance"); return { g: "g_none", t: "t_mid", urgent: false }; }
+    if (moving && mv && underFire && S.enemyC && !isIndoors(e)) {
+      const dx = S.enemyC.x - e.location.x, dz = S.enemyC.z - e.location.z, L = Math.hypot(dx, dz) || 1;
+      const side = ((Math.floor(now / 14) + teamOf(e)) & 1) ? 1 : -1;
+      const sx = e.location.x + (-dz / L) * side * 1.2, sz = e.location.z + (dx / L) * side * 1.2;
+      const w = walkableNear(e.dimension, sx, sz, e.location.y);
+      if (w && Math.abs(w.y - e.location.y) <= 0.6) push(e, { x: (-dz / L) * side * 0.14, y: 0, z: (dx / L) * side * 0.14 }, 2);   // weave, never off a ledge
+      note(e, S.plan === "assault" ? "assaulting (bounding)" : "advancing (bounding)");
+    }
+  }
+  return mv;
+}
+system.runInterval(() => { for (const id of [...drill.keys()]) if (!world.getEntity(id)) drill.delete(id); }, 1200);
+const flinchT = new Map();
+world.afterEvents.entityHurt.subscribe((ev) => {
+  const v = ev.hurtEntity;
+  if (v?.typeId !== SOLDIER || ev.damage < 1) return;
+  try {
+    if (!setting("drills", true)) return;
+    const st = gunState.get(v.id), now = tick();
+    if (!st || now - (flinchT.get(v.id) ?? -99) < 20) return;
+    flinchT.set(v.id, now);
+    st.next = Math.max(st.next, now + 5 + Math.floor(Math.random() * 6));   // hit: aim knocked off for a moment
+    st.wild = Math.max(st.wild ?? 0, 1);                                     // and the next shot is rushed
+  } catch {}
+});
+
+// ---- kneeling and prone (War Table -> Settings -> General). Only while still and fighting; up on his feet to move.
+// A kneeling / prone soldier is a smaller, lower target (low walls and sandbags really cover him). He only goes
+// down as low as he can still shoot from.
+const poseOf = new Map();  // id -> 1 kneel, 2 prone
+const poseSeen = new Map(); // id -> { x, z, t } where he last stood still from
+function wantPose(e, now) {
+  if (downed.has(e.id) || pows.has(e.id) || isRiding(e) || climbing.has(e.id) || inWater(e) || personal.has(e.id)) return 0;
+  const d = sd(e);
+  if (d.surr || d.div === "cavalier" || d.div === "medic" || !GUNS.includes(d.weapon) || !P(e, "war:gun")) return 0;
+  const l = e.location, ps = poseSeen.get(e.id);
+  if (!ps || Math.hypot(l.x - ps.x, l.z - ps.z) > 0.35) { poseSeen.set(e.id, { x: l.x, z: l.z, t: now }); return 0; }   // moving: on his feet
+  const still = now - ps.t;
+  const act = brain.get(e.id)?.act ?? "";
+  if (["advance", "flank", "peek", "fallback", "terrain", "cover"].includes(act) && still < 40) return 0;
+  const aiming = now - (gunState.get(e.id)?.seen ?? -999) < 40;
+  const supp = suppB.get(e.id) ?? 0;
+  if ((!aiming && supp < 6) || still < 15) return 0;
+  const t = perc.get(e.id)?.threat;
+  const tc = t?.isValid ? chest(t) : undefined;
+  const from = (h) => ({ x: l.x, y: l.y + h, z: l.z });
+  if (tc && dist(t.location, l) < 10) return clearShot(e.dimension, from(1.1), tc) ? 1 : 0;   // enemy close: ready to get up
+  const low = !isIndoors(e) && ((["mg", "sniper"].includes(d.weapon) && still > 40) || supp > 16);
+  if (low && (!tc || clearShot(e.dimension, from(0.5), tc))) return 2;
+  if (!tc || clearShot(e.dimension, from(1.1), tc)) return 1;
+  return 0;
+}
+system.runInterval(() => {
+  const on = !!setting("poses", true), now = tick();
+  for (const e of allOf(SOLDIER)) {
+    try {
+      const want = on ? wantPose(e, now) : 0;
+      if ((poseOf.get(e.id) ?? 0) !== want) { if (want) poseOf.set(e.id, want); else poseOf.delete(e.id); setP(e, "war:pose", want); }
+    } catch {}
+  }
+  if (now % 1200 < 10) for (const id of [...poseSeen.keys()]) if (!world.getEntity(id)) { poseSeen.delete(id); poseOf.delete(id); }
+}, 10);
+
+// ---- surrender when cut off (War Table -> Settings -> General): alone (no friend within 12 blocks) in a fight with
+// 5+ enemies around, or 3+ while badly hurt. Hands up: nobody shoots him. An enemy player right-clicks to take him
+// prisoner; a friendly player right-click frees him; if the enemy moves on, he rejoins his unit.
+function isoSurrender(e, captor) {
+  for (const k of [...provoked.keys()]) if (k.endsWith(`:${e.id}`)) provoked.delete(k);   // no longer a target for anyone
+  personal.delete(e.id); travelTo.delete(e.id); drill.delete(e.id);
+  surrender(e, captor);
+  e.setDynamicProperty("war:surrIso", Date.now());
+  radio(e, "one of ours was cut off and surrendered", true);
+  updateName(e);
+}
+function isoRelease(e, d) {
+  const since = Number(e.getDynamicProperty("war:surrIso") ?? 0);
+  if (!since || Date.now() - since < 20000) return;                       // (flag-capture surrenders keep the old rules)
+  for (const o of nearbyCombatants(e.dimension.id, e.location, 16)) {
+    if (o.id === e.id || isMob(o) || VEHICLES.includes(o.typeId)) continue;
+    if (o.typeId === SOLDIER && (downed.has(o.id) || pows.has(o.id))) continue;
+    if (isHostile(d.faction, factionOf(o))) return;
+  }
+  e.setDynamicProperty("war:surrIso", undefined);
+  resume(e);
+}
+system.runInterval(() => {
+  const on = !!setting("isosurr", true), now = tick();
+  for (const e of allOf(SOLDIER)) {
+    try {
+      const d = sd(e);
+      if (d.surr) { isoRelease(e, d); continue; }
+      if (!on || !d.faction || downed.has(e.id) || pows.has(e.id) || isRiding(e) || d.div === "guard" || d.func === "escort") continue;
+      if (!perc.get(e.id)?.threat && now - Number(e.getDynamicProperty("war:hurt") ?? -9999) > 200) continue;
+      let friends = 0, foes = 0, nearest, nd = 1e9;
+      for (const o of nearbyCombatants(e.dimension.id, e.location, 12)) {
+        if (o.id === e.id || isMob(o) || VEHICLES.includes(o.typeId)) continue;
+        if (o.typeId === SOLDIER && (downed.has(o.id) || pows.has(o.id))) continue;
+        const of = factionOf(o);
+        if (isFriendly(d.faction, of)) { friends++; break; }
+        if (isHostile(d.faction, of)) { foes++; const dd = dist(o.location, e.location); if (dd < nd) { nd = dd; nearest = o; } }
+      }
+      if (friends || !nearest) continue;
+      const hp = e.getComponent("minecraft:health"), hpr = hp ? hp.currentValue / hp.effectiveMax : 1;
+      if (!(foes >= 5 || (foes >= 3 && hpr < 0.5) || (foes >= 2 && hpr < 0.25))) continue;
+      if (Math.random() > 0.35 + (1 - boldOf(e))) continue;                  // not everyone gives up at the first look
+      isoSurrender(e, factionOf(nearest));
+    } catch {}
+  }
+}, 60);
+world.afterEvents.playerInteractWithEntity.subscribe((ev) => {
+  const e = ev.target, p = ev.player;
+  if (e?.typeId !== SOLDIER || !e.getDynamicProperty("war:surrIso") || pows.has(e.id)) return;
+  if ((ev.beforeItemStack ?? ev.itemStack)?.typeId === "war:unit_wand") return;
+  system.run(() => {
+    try {
+      if (!e.isValid) return;
+      const f = Number(P(e, "war:faction")), pf = playerFaction(p);
+      if (isFriendly(pf, f)) { e.setDynamicProperty("war:surrIso", undefined); resume(e); p.onScreenDisplay.setActionBar("§aHe's back with us."); return; }
+      e.setDynamicProperty("war:surr", 0); e.setDynamicProperty("war:surrIso", undefined);
+      makePow(e, p); applyRelations(e);
+      p.onScreenDisplay.setActionBar("§aTaken prisoner. He follows you at a distance.");
+    } catch {}
+  });
+});
+
+// ---- edge guard: a soldier on a planned route who is sliding toward a drop of 3+ blocks that his route doesn't take
+// (momentum from a push, a hop, a shove) is stopped at the edge. Drops the route really takes are left alone.
+system.runInterval(() => {
+  for (const e of allOf(SOLDIER)) {
+    try {
+      if (climbing.has(e.id) || downed.has(e.id) || isRiding(e)) continue;
+      const v = e.getVelocity(), sp = Math.hypot(v.x, v.z);
+      if (sp < 0.03) continue;
+      const r = routeOf(e);
+      if (!r) continue;
+      const l = e.location, fy = Math.floor(l.y + 0.01);
+      const pts = r.pts, i = r.idx;
+      // a drop: nothing at his feet there (not a step up) and open air 3 deep below it
+      const dropAt = (x, z) => {
+        if (Math.floor(x) === Math.floor(l.x) && Math.floor(z) === Math.floor(l.z)) return false;
+        const f = tBlock(e.dimension, x, fy, z);
+        if (!f || !(f.isAir || passable(f))) return false;
+        return [1, 2, 3].every((k) => { const b = tBlock(e.dimension, x, fy - k, z); return !!b && (b.isAir || passable(b)) && !isClimb(b) && !b.typeId.includes("water"); });
+      };
+      const intended = (x, z) => { for (let k = Math.max(0, i - 1); k < Math.min(pts.length, i + 5); k++) if (pts[k].y <= fy - 2 && Math.hypot(pts[k].x - x, pts[k].z - z) < 2.5) return true; return false; };
+      // only the part of his momentum that points at the drop is cancelled; he keeps moving along the edge
+      let cx = 0, cz = 0;
+      if (Math.abs(v.x) > 0.02) { const x = l.x + Math.sign(v.x) * 0.45 + v.x * 2; if (dropAt(x, l.z) && !intended(x, l.z)) cx = -v.x; }
+      if (Math.abs(v.z) > 0.02) { const z = l.z + Math.sign(v.z) * 0.45 + v.z * 2; if (dropAt(l.x, z) && !intended(l.x, z)) cz = -v.z; }
+      if (cx || cz) { e.applyImpulse({ x: cx, y: 0, z: cz }); note(e, "stopped at the edge"); }
+    } catch {}
+  }
+}, 1);

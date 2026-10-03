@@ -1,0 +1,107 @@
+{
+  "format_version": "1.10.0",
+  "animation_controllers": {
+    "controller.animation.war.gun_fire": {
+      "initial_state": "idle",
+      "states": {
+        "idle": {
+          "transitions": [
+            {
+              "firing": "q.property('war:firing')"
+            }
+          ]
+        },
+        "firing": {
+          "animations": [
+            {
+              "gs_m1903": "q.property('war:gun') == 1"
+            },
+            {
+              "gs_garand": "q.property('war:gun') == 2"
+            },
+            {
+              "gs_thompson": "q.property('war:gun') == 3"
+            },
+            {
+              "gs_bar": "q.property('war:gun') == 4"
+            },
+            {
+              "gs_model1912": "q.property('war:gun') == 5"
+            },
+            {
+              "gs_bazooka": "q.property('war:gun') == 6"
+            },
+            {
+              "gs_m1911": "q.property('war:gun') == 7"
+            },
+            {
+              "gs_kar98": "q.property('war:gun') == 8"
+            },
+            {
+              "gs_g43": "q.property('war:gun') == 9"
+            },
+            {
+              "gs_mp40": "q.property('war:gun') == 10"
+            },
+            {
+              "gs_mg42": "q.property('war:gun') == 11"
+            },
+            {
+              "gs_pzb39": "q.property('war:gun') == 12"
+            },
+            {
+              "gs_p08": "q.property('war:gun') == 13"
+            },
+            {
+              "gs_mosin": "q.property('war:gun') == 14"
+            },
+            {
+              "gs_svt38": "q.property('war:gun') == 15"
+            },
+            {
+              "gs_ppsh41d": "q.property('war:gun') == 16"
+            },
+            {
+              "gs_dp28": "q.property('war:gun') == 17"
+            },
+            {
+              "gs_tt33": "q.property('war:gun') == 18"
+            },
+            {
+              "gs_type99": "q.property('war:gun') == 19"
+            },
+            {
+              "gs_type100": "q.property('war:gun') == 20"
+            },
+            {
+              "gs_type96": "q.property('war:gun') == 21"
+            },
+            {
+              "gs_nagant": "q.property('war:gun') == 22"
+            },
+            {
+              "gs_mab38": "q.property('war:gun') == 23"
+            },
+            {
+              "gs_lewis": "q.property('war:gun') == 24"
+            },
+            {
+              "gs_mas35": "q.property('war:gun') == 25"
+            },
+            {
+              "gs_m1903s": "q.property('war:gun') == 26"
+            },
+            {
+              "gs_kar98s": "q.property('war:gun') == 27"
+            }
+          ],
+          "transitions": [
+            {
+              "idle": "!q.property('war:firing') && q.all_animations_finished"
+            }
+          ]
+        }
+      }
+    }
+  }
+}

@@ -1,0 +1,559 @@
+{
+  "format_version": "1.10.0",
+  "minecraft:client_entity": {
+    "description": {
+      "identifier": "war:soldier",
+      "materials": {
+        "default": "entity_alphatest"
+      },
+      "textures": {
+        "f1": "textures/entity/war_soldier/faction_01",
+        "m1": "textures/entity/war_soldier/medic_01",
+        "c1": "textures/entity/war_soldier/cav_01",
+        "f2": "textures/entity/war_soldier/faction_02",
+        "m2": "textures/entity/war_soldier/medic_02",
+        "c2": "textures/entity/war_soldier/cav_02",
+        "f3": "textures/entity/war_soldier/faction_03",
+        "m3": "textures/entity/war_soldier/medic_03",
+        "c3": "textures/entity/war_soldier/cav_03",
+        "f4": "textures/entity/war_soldier/faction_04",
+        "m4": "textures/entity/war_soldier/medic_04",
+        "c4": "textures/entity/war_soldier/cav_04",
+        "f5": "textures/entity/war_soldier/faction_05",
+        "m5": "textures/entity/war_soldier/medic_05",
+        "c5": "textures/entity/war_soldier/cav_05",
+        "f6": "textures/entity/war_soldier/faction_06",
+        "m6": "textures/entity/war_soldier/medic_06",
+        "c6": "textures/entity/war_soldier/cav_06",
+        "f7": "textures/entity/war_soldier/faction_07",
+        "m7": "textures/entity/war_soldier/medic_07",
+        "c7": "textures/entity/war_soldier/cav_07",
+        "f8": "textures/entity/war_soldier/faction_08",
+        "m8": "textures/entity/war_soldier/medic_08",
+        "c8": "textures/entity/war_soldier/cav_08",
+        "f9": "textures/entity/war_soldier/faction_09",
+        "m9": "textures/entity/war_soldier/medic_09",
+        "c9": "textures/entity/war_soldier/cav_09",
+        "f10": "textures/entity/war_soldier/faction_10",
+        "m10": "textures/entity/war_soldier/medic_10",
+        "c10": "textures/entity/war_soldier/cav_10",
+        "f11": "textures/entity/war_soldier/faction_11",
+        "m11": "textures/entity/war_soldier/medic_11",
+        "c11": "textures/entity/war_soldier/cav_11",
+        "f12": "textures/entity/war_soldier/faction_12",
+        "m12": "textures/entity/war_soldier/medic_12",
+        "c12": "textures/entity/war_soldier/cav_12",
+        "f13": "textures/entity/war_soldier/faction_13",
+        "m13": "textures/entity/war_soldier/medic_13",
+        "c13": "textures/entity/war_soldier/cav_13",
+        "f14": "textures/entity/war_soldier/faction_14",
+        "m14": "textures/entity/war_soldier/medic_14",
+        "c14": "textures/entity/war_soldier/cav_14",
+        "f15": "textures/entity/war_soldier/faction_15",
+        "m15": "textures/entity/war_soldier/medic_15",
+        "c15": "textures/entity/war_soldier/cav_15",
+        "f16": "textures/entity/war_soldier/faction_16",
+        "m16": "textures/entity/war_soldier/medic_16",
+        "c16": "textures/entity/war_soldier/cav_16",
+        "f17": "textures/entity/war_soldier/faction_17",
+        "m17": "textures/entity/war_soldier/medic_17",
+        "c17": "textures/entity/war_soldier/cav_17",
+        "f18": "textures/entity/war_soldier/faction_18",
+        "m18": "textures/entity/war_soldier/medic_18",
+        "c18": "textures/entity/war_soldier/cav_18",
+        "f19": "textures/entity/war_soldier/faction_19",
+        "m19": "textures/entity/war_soldier/medic_19",
+        "c19": "textures/entity/war_soldier/cav_19",
+        "f20": "textures/entity/war_soldier/faction_20",
+        "m20": "textures/entity/war_soldier/medic_20",
+        "c20": "textures/entity/war_soldier/cav_20",
+        "s1": "textures/war_skins/skin_01",
+        "s2": "textures/war_skins/skin_02",
+        "s3": "textures/war_skins/skin_03",
+        "s4": "textures/war_skins/skin_04",
+        "s5": "textures/war_skins/skin_05",
+        "s6": "textures/war_skins/skin_06",
+        "s7": "textures/war_skins/skin_07",
+        "s8": "textures/war_skins/skin_08",
+        "s9": "textures/war_skins/skin_09",
+        "s10": "textures/war_skins/skin_10",
+        "s11": "textures/war_skins/skin_11",
+        "s12": "textures/war_skins/skin_12",
+        "s13": "textures/war_skins/skin_13",
+        "s14": "textures/war_skins/skin_14",
+        "s15": "textures/war_skins/skin_15",
+        "s16": "textures/war_skins/skin_16",
+        "s17": "textures/war_skins/skin_17",
+        "s18": "textures/war_skins/skin_18",
+        "s19": "textures/war_skins/skin_19",
+        "s20": "textures/war_skins/skin_20",
+        "s21": "textures/war_skins/skin_21",
+        "s22": "textures/war_skins/skin_22",
+        "s23": "textures/war_skins/skin_23",
+        "s24": "textures/war_skins/skin_24",
+        "s25": "textures/war_skins/skin_25",
+        "s26": "textures/war_skins/skin_26",
+        "s27": "textures/war_skins/skin_27",
+        "s28": "textures/war_skins/skin_28",
+        "s29": "textures/war_skins/skin_29",
+        "s30": "textures/war_skins/skin_30",
+        "s31": "textures/war_skins/skin_31",
+        "s32": "textures/war_skins/skin_32",
+        "gt_m1903": "textures/entity/guns/M1903",
+        "gt_garand": "textures/entity/guns/Garand",
+        "gt_thompson": "textures/entity/guns/Thompson",
+        "gt_bar": "textures/entity/guns/Bar",
+        "gt_model1912": "textures/entity/guns/Model1912",
+        "gt_bazooka": "textures/entity/guns/Bazooka",
+        "gt_m1911": "textures/entity/guns/M1911",
+        "gt_kar98": "textures/entity/guns/Kar98",
+        "gt_g43": "textures/entity/guns/G43",
+        "gt_mp40": "textures/entity/guns/Mp40",
+        "gt_mg42": "textures/entity/guns/Mg42",
+        "gt_pzb39": "textures/entity/guns/Pzb39",
+        "gt_p08": "textures/entity/guns/P08",
+        "gt_mosin": "textures/entity/guns/Mosin",
+        "gt_svt38": "textures/entity/guns/Svt38",
+        "gt_ppsh41d": "textures/entity/guns/Ppsh41d",
+        "gt_dp28": "textures/entity/guns/Dp28",
+        "gt_tt33": "textures/entity/guns/Tt33",
+        "gt_type99": "textures/entity/guns/Type99",
+        "gt_type100": "textures/entity/guns/Type100",
+        "gt_type96": "textures/entity/guns/Type96",
+        "gt_nagant": "textures/entity/guns/Nagant",
+        "gt_mab38": "textures/entity/guns/Mab38",
+        "gt_lewis": "textures/entity/guns/Lewis",
+        "gt_mas35": "textures/entity/guns/Mas35",
+        "gt_m1903s": "textures/entity/guns/M1903s",
+        "gt_kar98s": "textures/entity/guns/Kar98s"
+      },
+      "geometry": {
+        "default": "geometry.humanoid.custom",
+        "cav": "geometry.war_cav",
+        "g_m1903": "geometry.m1903",
+        "g_garand": "geometry.garand",
+        "g_thompson": "geometry.thompson",
+        "g_bar": "geometry.bar",
+        "g_model1912": "geometry.model1912",
+        "g_bazooka": "geometry.bazooka",
+        "g_m1911": "geometry.m1911",
+        "g_kar98": "geometry.kar98",
+        "g_g43": "geometry.g43",
+        "g_mp40": "geometry.mp40",
+        "g_mg42": "geometry.mg42",
+        "g_pzb39": "geometry.pzb39",
+        "g_p08": "geometry.P08",
+        "g_mosin": "geometry.mosin",
+        "g_svt38": "geometry.svt38",
+        "g_ppsh41d": "geometry.ppsh41d",
+        "g_dp28": "geometry.dp28",
+        "g_tt33": "geometry.tt33",
+        "g_type99": "geometry.type99",
+        "g_type100": "geometry.type100",
+        "g_type96": "geometry.type96",
+        "g_nagant": "geometry.nagant",
+        "g_mab38": "geometry.mab38",
+        "g_lewis": "geometry.lewis",
+        "g_mas35": "geometry.mas35",
+        "g_m1903s": "geometry.m1903s",
+        "g_kar98s": "geometry.kar98s"
+      },
+      "render_controllers": [
+        "controller.render.war_soldier",
+        {
+          "controller.render.war_gun_m1903": "q.property('war:gun') == 1 && !q.property('war:cav')"
+        },
+        {
+          "controller.render.war_gun_garand": "q.property('war:gun') == 2 && !q.property('war:cav')"
+        },
+        {
+          "controller.render.war_gun_thompson": "q.property('war:gun') == 3 && !q.property('war:cav')"
+        },
+        {
+          "controller.render.war_gun_bar": "q.property('war:gun') == 4 && !q.property('war:cav')"
+        },
+        {
+          "controller.render.war_gun_model1912": "q.property('war:gun') == 5 && !q.property('war:cav')"
+        },
+        {
+          "controller.render.war_gun_bazooka": "q.property('war:gun') == 6 && !q.property('war:cav')"
+        },
+        {
+          "controller.render.war_gun_m1911": "q.property('war:gun') == 7 && !q.property('war:cav')"
+        },
+        {
+          "controller.render.war_gun_kar98": "q.property('war:gun') == 8 && !q.property('war:cav')"
+        },
+        {
+          "controller.render.war_gun_g43": "q.property('war:gun') == 9 && !q.property('war:cav')"
+        },
+        {
+          "controller.render.war_gun_mp40": "q.property('war:gun') == 10 && !q.property('war:cav')"
+        },
+        {
+          "controller.render.war_gun_mg42": "q.property('war:gun') == 11 && !q.property('war:cav')"
+        },
+        {
+          "controller.render.war_gun_pzb39": "q.property('war:gun') == 12 && !q.property('war:cav')"
+        },
+        {
+          "controller.render.war_gun_p08": "q.property('war:gun') == 13 && !q.property('war:cav')"
+        },
+        {
+          "controller.render.war_gun_mosin": "q.property('war:gun') == 14 && !q.property('war:cav')"
+        },
+        {
+          "controller.render.war_gun_svt38": "q.property('war:gun') == 15 && !q.property('war:cav')"
+        },
+        {
+          "controller.render.war_gun_ppsh41d": "q.property('war:gun') == 16 && !q.property('war:cav')"
+        },
+        {
+          "controller.render.war_gun_dp28": "q.property('war:gun') == 17 && !q.property('war:cav')"
+        },
+        {
+          "controller.render.war_gun_tt33": "q.property('war:gun') == 18 && !q.property('war:cav')"
+        },
+        {
+          "controller.render.war_gun_type99": "q.property('war:gun') == 19 && !q.property('war:cav')"
+        },
+        {
+          "controller.render.war_gun_type100": "q.property('war:gun') == 20 && !q.property('war:cav')"
+        },
+        {
+          "controller.render.war_gun_type96": "q.property('war:gun') == 21 && !q.property('war:cav')"
+        },
+        {
+          "controller.render.war_gun_nagant": "q.property('war:gun') == 22 && !q.property('war:cav')"
+        },
+        {
+          "controller.render.war_gun_mab38": "q.property('war:gun') == 23 && !q.property('war:cav')"
+        },
+        {
+          "controller.render.war_gun_lewis": "q.property('war:gun') == 24 && !q.property('war:cav')"
+        },
+        {
+          "controller.render.war_gun_mas35": "q.property('war:gun') == 25 && !q.property('war:cav')"
+        },
+        {
+          "controller.render.war_gun_m1903s": "q.property('war:gun') == 26 && !q.property('war:cav')"
+        },
+        {
+          "controller.render.war_gun_kar98s": "q.property('war:gun') == 27 && !q.property('war:cav')"
+        }
+      ],
+      "scripts": {
+        "initialize": [
+          "variable.gliding_speed_value = 1.0;"
+        ],
+        "pre_animation": [
+          "variable.tcos0 = (math.cos(query.modified_distance_moved * 38.17) * query.modified_move_speed / variable.gliding_speed_value) * 57.3;"
+        ],
+        "animate": [
+          "look_at_target",
+          {
+            "attack_rotations": "q.property('war:gun') == 0"
+          },
+          {
+            "move": "!q.property('war:cav') && !q.is_riding && q.property('war:gun') == 0"
+          },
+          {
+            "move_legs": "!q.property('war:cav') && !q.is_riding && q.property('war:gun') > 0"
+          },
+          {
+            "bob": "!q.property('war:cav') && q.property('war:gun') == 0"
+          },
+          {
+            "gh_m1903": "q.property('war:gun') == 1 && !q.property('war:cav') && !q.property('war:aiming')"
+          },
+          {
+            "ga_m1903": "q.property('war:gun') == 1 && !q.property('war:cav') && q.property('war:aiming')"
+          },
+          {
+            "gh_garand": "q.property('war:gun') == 2 && !q.property('war:cav') && !q.property('war:aiming')"
+          },
+          {
+            "ga_garand": "q.property('war:gun') == 2 && !q.property('war:cav') && q.property('war:aiming')"
+          },
+          {
+            "gh_thompson": "q.property('war:gun') == 3 && !q.property('war:cav') && !q.property('war:aiming')"
+          },
+          {
+            "ga_thompson": "q.property('war:gun') == 3 && !q.property('war:cav') && q.property('war:aiming')"
+          },
+          {
+            "gh_bar": "q.property('war:gun') == 4 && !q.property('war:cav') && !q.property('war:aiming')"
+          },
+          {
+            "ga_bar": "q.property('war:gun') == 4 && !q.property('war:cav') && q.property('war:aiming')"
+          },
+          {
+            "gh_model1912": "q.property('war:gun') == 5 && !q.property('war:cav') && !q.property('war:aiming')"
+          },
+          {
+            "ga_model1912": "q.property('war:gun') == 5 && !q.property('war:cav') && q.property('war:aiming')"
+          },
+          {
+            "gh_bazooka": "q.property('war:gun') == 6 && !q.property('war:cav') && !q.property('war:aiming')"
+          },
+          {
+            "ga_bazooka": "q.property('war:gun') == 6 && !q.property('war:cav') && q.property('war:aiming')"
+          },
+          {
+            "gh_m1911": "q.property('war:gun') == 7 && !q.property('war:cav') && !q.property('war:aiming')"
+          },
+          {
+            "ga_m1911": "q.property('war:gun') == 7 && !q.property('war:cav') && q.property('war:aiming')"
+          },
+          {
+            "gh_kar98": "q.property('war:gun') == 8 && !q.property('war:cav') && !q.property('war:aiming')"
+          },
+          {
+            "ga_kar98": "q.property('war:gun') == 8 && !q.property('war:cav') && q.property('war:aiming')"
+          },
+          {
+            "gh_g43": "q.property('war:gun') == 9 && !q.property('war:cav') && !q.property('war:aiming')"
+          },
+          {
+            "ga_g43": "q.property('war:gun') == 9 && !q.property('war:cav') && q.property('war:aiming')"
+          },
+          {
+            "gh_mp40": "q.property('war:gun') == 10 && !q.property('war:cav') && !q.property('war:aiming')"
+          },
+          {
+            "ga_mp40": "q.property('war:gun') == 10 && !q.property('war:cav') && q.property('war:aiming')"
+          },
+          {
+            "gh_mg42": "q.property('war:gun') == 11 && !q.property('war:cav') && !q.property('war:aiming')"
+          },
+          {
+            "ga_mg42": "q.property('war:gun') == 11 && !q.property('war:cav') && q.property('war:aiming')"
+          },
+          {
+            "gh_pzb39": "q.property('war:gun') == 12 && !q.property('war:cav') && !q.property('war:aiming')"
+          },
+          {
+            "ga_pzb39": "q.property('war:gun') == 12 && !q.property('war:cav') && q.property('war:aiming')"
+          },
+          {
+            "gh_p08": "q.property('war:gun') == 13 && !q.property('war:cav') && !q.property('war:aiming')"
+          },
+          {
+            "ga_p08": "q.property('war:gun') == 13 && !q.property('war:cav') && q.property('war:aiming')"
+          },
+          {
+            "gh_mosin": "q.property('war:gun') == 14 && !q.property('war:cav') && !q.property('war:aiming')"
+          },
+          {
+            "ga_mosin": "q.property('war:gun') == 14 && !q.property('war:cav') && q.property('war:aiming')"
+          },
+          {
+            "gh_svt38": "q.property('war:gun') == 15 && !q.property('war:cav') && !q.property('war:aiming')"
+          },
+          {
+            "ga_svt38": "q.property('war:gun') == 15 && !q.property('war:cav') && q.property('war:aiming')"
+          },
+          {
+            "gh_ppsh41d": "q.property('war:gun') == 16 && !q.property('war:cav') && !q.property('war:aiming')"
+          },
+          {
+            "ga_ppsh41d": "q.property('war:gun') == 16 && !q.property('war:cav') && q.property('war:aiming')"
+          },
+          {
+            "gh_dp28": "q.property('war:gun') == 17 && !q.property('war:cav') && !q.property('war:aiming')"
+          },
+          {
+            "ga_dp28": "q.property('war:gun') == 17 && !q.property('war:cav') && q.property('war:aiming')"
+          },
+          {
+            "gh_tt33": "q.property('war:gun') == 18 && !q.property('war:cav') && !q.property('war:aiming')"
+          },
+          {
+            "ga_tt33": "q.property('war:gun') == 18 && !q.property('war:cav') && q.property('war:aiming')"
+          },
+          {
+            "gh_type99": "q.property('war:gun') == 19 && !q.property('war:cav') && !q.property('war:aiming')"
+          },
+          {
+            "ga_type99": "q.property('war:gun') == 19 && !q.property('war:cav') && q.property('war:aiming')"
+          },
+          {
+            "gh_type100": "q.property('war:gun') == 20 && !q.property('war:cav') && !q.property('war:aiming')"
+          },
+          {
+            "ga_type100": "q.property('war:gun') == 20 && !q.property('war:cav') && q.property('war:aiming')"
+          },
+          {
+            "gh_type96": "q.property('war:gun') == 21 && !q.property('war:cav') && !q.property('war:aiming')"
+          },
+          {
+            "ga_type96": "q.property('war:gun') == 21 && !q.property('war:cav') && q.property('war:aiming')"
+          },
+          {
+            "gh_nagant": "q.property('war:gun') == 22 && !q.property('war:cav') && !q.property('war:aiming')"
+          },
+          {
+            "ga_nagant": "q.property('war:gun') == 22 && !q.property('war:cav') && q.property('war:aiming')"
+          },
+          {
+            "gh_mab38": "q.property('war:gun') == 23 && !q.property('war:cav') && !q.property('war:aiming')"
+          },
+          {
+            "ga_mab38": "q.property('war:gun') == 23 && !q.property('war:cav') && q.property('war:aiming')"
+          },
+          {
+            "gh_lewis": "q.property('war:gun') == 24 && !q.property('war:cav') && !q.property('war:aiming')"
+          },
+          {
+            "ga_lewis": "q.property('war:gun') == 24 && !q.property('war:cav') && q.property('war:aiming')"
+          },
+          {
+            "gh_mas35": "q.property('war:gun') == 25 && !q.property('war:cav') && !q.property('war:aiming')"
+          },
+          {
+            "ga_mas35": "q.property('war:gun') == 25 && !q.property('war:cav') && q.property('war:aiming')"
+          },
+          {
+            "gh_m1903s": "q.property('war:gun') == 26 && !q.property('war:cav') && !q.property('war:aiming')"
+          },
+          {
+            "ga_m1903s": "q.property('war:gun') == 26 && !q.property('war:cav') && q.property('war:aiming')"
+          },
+          {
+            "gh_kar98s": "q.property('war:gun') == 27 && !q.property('war:cav') && !q.property('war:aiming')"
+          },
+          {
+            "ga_kar98s": "q.property('war:gun') == 27 && !q.property('war:cav') && q.property('war:aiming')"
+          },
+          "gun_fire",
+          {
+            "downed": "q.property('war:down')"
+          },
+          {
+            "riding_arms": "q.is_riding && !q.property('war:cav') && !q.property('war:nest')"
+          },
+          {
+            "riding_legs": "q.is_riding && !q.property('war:cav') && !q.property('war:nest')"
+          },
+          {
+            "on_mg": "q.property('war:nest')"
+          },
+          {
+            "cav_walk": "q.property('war:cav')"
+          },
+          {
+            "cav_idle": "q.property('war:cav')"
+          },
+          {
+            "bow_and_arrow": "q.property('war:ranged') && q.property('war:gun') == 0 && q.has_target"
+          },
+          {
+            "kneel": "q.property('war:pose') == 1 && !q.property('war:down') && !q.is_riding && !q.property('war:cav')"
+          },
+          {
+            "prone": "q.property('war:pose') == 2 && !q.property('war:down') && !q.is_riding && !q.property('war:cav')"
+          }
+        ]
+      },
+      "animations": {
+        "look_at_target": "animation.humanoid.look_at_target.default",
+        "move": "animation.humanoid.move",
+        "attack_rotations": "animation.humanoid.attack.rotations",
+        "bob": "animation.humanoid.bob",
+        "bow_and_arrow": "animation.humanoid.bow_and_arrow",
+        "cav_walk": "animation.war.cav_walk",
+        "cav_idle": "animation.war.cav_idle",
+        "move_legs": "animation.player.move.legs",
+        "downed": "animation.war.downed",
+        "on_mg": "animation.war.on_mg",
+        "riding_arms": "animation.humanoid.riding.arms",
+        "riding_legs": "animation.humanoid.riding.legs",
+        "gh_m1903": "animation.m1903_hold.third_person",
+        "ga_m1903": "animation.m1903_aim.third_person",
+        "gs_m1903": "animation.m1903.shoot",
+        "gh_garand": "animation.garand_hold.third_person",
+        "ga_garand": "animation.garand_aim.third_person",
+        "gs_garand": "animation.garand.shoot",
+        "gh_thompson": "animation.thompson_hold.third_person",
+        "ga_thompson": "animation.thompson_aim.third_person",
+        "gs_thompson": "animation.thompson.shoot",
+        "gh_bar": "animation.bar_hold.third_person",
+        "ga_bar": "animation.bar_aim.third_person",
+        "gs_bar": "animation.bar.shoot",
+        "gh_model1912": "animation.model1912_hold.third_person",
+        "ga_model1912": "animation.model1912_aim.third_person",
+        "gs_model1912": "animation.model1912.shoot",
+        "gh_bazooka": "animation.bazooka_hold.third_person",
+        "ga_bazooka": "animation.bazooka_aim.third_person",
+        "gs_bazooka": "animation.bazooka.shoot",
+        "gh_m1911": "animation.m1911_hold.third_person",
+        "ga_m1911": "animation.m1911_aim.third_person",
+        "gs_m1911": "animation.m1911.shoot",
+        "gh_kar98": "animation.kar98_hold.third_person",
+        "ga_kar98": "animation.kar98_aim.third_person",
+        "gs_kar98": "animation.kar98.shoot",
+        "gh_g43": "animation.g43_hold.third_person",
+        "ga_g43": "animation.g43_aim.third_person",
+        "gs_g43": "animation.g43.shoot",
+        "gh_mp40": "animation.mp40_hold.third_person",
+        "ga_mp40": "animation.mp40_aim.third_person",
+        "gs_mp40": "animation.mp40.shoot",
+        "gh_mg42": "animation.mg42_hold.third_person",
+        "ga_mg42": "animation.mg42_aim.third_person",
+        "gs_mg42": "animation.mg42.shoot",
+        "gh_pzb39": "animation.pzb39_hold.third_person",
+        "ga_pzb39": "animation.pzb39_aim.third_person",
+        "gs_pzb39": "animation.pzb39.shoot",
+        "gh_p08": "animation.p08_hold.third_person",
+        "ga_p08": "animation.p08_aim.third_person",
+        "gs_p08": "animation.p08.shoot",
+        "gh_mosin": "animation.mosin_hold.third_person",
+        "ga_mosin": "animation.mosin_aim.third_person",
+        "gs_mosin": "animation.mosin.shoot",
+        "gh_svt38": "animation.svt38_hold.third_person",
+        "ga_svt38": "animation.svt38_aim.third_person",
+        "gs_svt38": "animation.svt38.shoot",
+        "gh_ppsh41d": "animation.ppsh41d_hold.third_person",
+        "ga_ppsh41d": "animation.ppsh41d_aim.third_person",
+        "gs_ppsh41d": "animation.ppsh41d.shoot",
+        "gh_dp28": "animation.dp28_hold.third_person",
+        "ga_dp28": "animation.dp28_aim.third_person",
+        "gs_dp28": "animation.dp28.shoot",
+        "gh_tt33": "animation.tt33_hold.third_person",
+        "ga_tt33": "animation.tt33_aim.third_person",
+        "gs_tt33": "animation.tt33.shoot",
+        "gh_type99": "animation.type99_hold.third_person",
+        "ga_type99": "animation.type99_aim.third_person",
+        "gs_type99": "animation.type99.shoot",
+        "gh_type100": "animation.type100_hold.third_person",
+        "ga_type100": "animation.type100_aim.third_person",
+        "gs_type100": "animation.type100.shoot",
+        "gh_type96": "animation.type96_hold.third_person",
+        "ga_type96": "animation.type96_aim.third_person",
+        "gs_type96": "animation.type96.shoot",
+        "gh_nagant": "animation.nagant_hold.third_person",
+        "ga_nagant": "animation.nagant_aim.third_person",
+        "gs_nagant": "animation.nagant.shoot",
+        "gh_mab38": "animation.mab38_hold.third_person",
+        "ga_mab38": "animation.mab38_aim.third_person",
+        "gs_mab38": "animation.mab38.shoot",
+        "gh_lewis": "animation.lewis_hold.third_person",
+        "ga_lewis": "animation.lewis_aim.third_person",
+        "gs_lewis": "animation.lewis.shoot",
+        "gh_mas35": "animation.mas35_hold.third_person",
+        "ga_mas35": "animation.mas35_aim.third_person",
+        "gs_mas35": "animation.mas35.shoot",
+        "gh_m1903s": "animation.m1903s_hold.third_person",
+        "ga_m1903s": "animation.m1903s_aim.third_person",
+        "gs_m1903s": "animation.m1903s.shoot",
+        "gh_kar98s": "animation.kar98s_hold.third_person",
+        "ga_kar98s": "animation.kar98s_aim.third_person",
+        "gs_kar98s": "animation.kar98s.shoot",
+        "gun_fire": "controller.animation.war.gun_fire",
+        "kneel": "animation.war.kneel",
+        "prone": "animation.war.prone"
+      },
+      "enable_attachables": true
+    }
+  }
+}
