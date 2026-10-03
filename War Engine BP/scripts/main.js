@@ -3671,8 +3671,26 @@ const marchActive = (e) => !downed.has(e.id) && !pows.has(e.id) && !isRiding(e) 
 function onStairs(dim, p) { try { const b = tBlock(dim, p.x, Math.floor(p.y + 0.01) - 1, p.z), c = tBlock(dim, p.x, Math.floor(p.y + 0.01), p.z); return [b, c].some((x) => !!x && (x.typeId.includes("stairs") || x.typeId.includes("slab"))); } catch { return false; } }
 function tightAt(dim, pts, i, loc) {
   if (isIndoorsAt(dim, loc) || onStairs(dim, loc)) return true;
-  for (let k = Math.max(0, i - 1); k < Math.min(pts.length - 1, i + 4); k++) if (isGate(pts[k], pts[k + 1]) || onStairs(dim, pts[k + 1])) return true;   // a ladder, a door, a drop, stairs (a step up a hill isn't)
+  for (let k = Math.max(0, i - 1); k < Math.min(pts.length - 1, i + 4); k++) if (isGate(pts[k], pts[k + 1]) || onStairs(dim, pts[k + 1]) || edgeAt(dim, pts[k + 1])) return true;   // a ladder, a door, a drop, stairs, v6.0: a bridge / ledge (a step up a hill isn't)
   return false;
+}
+// v6.0: a route point with a drop of 2+ blocks right beside it (a plank bridge over a trench, a wall-top, a ledge, a
+// narrow path along a cliff): Minecraft's walking cuts corners there and falls in. Remembered per spot.
+const EDGE = new Map();
+function edgeAt(dim, p) {
+  const x = Math.floor(p.x), y = Math.floor(p.y + 0.01), z = Math.floor(p.z), k = bkey(dim.id, x, y, z), now = tick();
+  const c = EDGE.get(k);
+  if (c && now - c.t < 600) return c.v;
+  let v = false;
+  try {
+    for (const [dx, dz] of [[1, 0], [-1, 0], [0, 1], [0, -1]]) {
+      const f1 = tBlock(dim, x + dx + 0.5, y - 1, z + dz + 0.5), f2 = tBlock(dim, x + dx + 0.5, y - 2, z + dz + 0.5), at = tBlock(dim, x + dx + 0.5, y, z + dz + 0.5);
+      if (at && passable(at) && f1 && passable(f1) && !f1.isLiquid && f2 && passable(f2) && !f2.isLiquid) { v = true; break; }
+    }
+  } catch {}
+  EDGE.set(k, { v, t: now });
+  if (EDGE.size > 20000) EDGE.clear();
+  return v;
 }
 system.runInterval(() => {
   const ms = getMarches();
@@ -3704,7 +3722,9 @@ system.runInterval(() => {
     let cx = 0, cy = 0, cz = 0;
     for (const e of members) { cx += e.location.x; cy += e.location.y; cz += e.location.z; }
     const c = { x: cx / members.length, y: cy / members.length, z: cz / members.length };
-    const fighting = members.some((e) => gdp(e, "war:ordergoal") !== undefined);
+    // (v6.0: really fighting: following something else than his march marker. Walking to his catch-up/formation marker
+    // also parks the order goal, and counting that as fighting kept the march's stall detector from ever firing)
+    const fighting = members.some((e) => gdp(e, "war:ordergoal") !== undefined && Number(gdp(e, "war:goal") ?? 0) !== Number(gdp(e, "war:catchup") ?? -1));
     const contact = members.some((e) => combatLock.has(e.id));      // v6.0: someone's locked in a fight: the squad holds together here
     // the front of the group sets the pace (60th percentile of the members who are up and moving)
     const progOf = new Map(members.map((e) => [e.id, routeProgress(m, e.location, e.id)]));
@@ -3712,6 +3732,7 @@ system.runInterval(() => {
     const lead = prog[Math.floor((prog.length - 1) * 0.4)];
     let j = lead, len = 0;                                       // ~6 blocks of route ahead of the lead, gates or not
     while (j < m.path.length - 1 && len < 6) { const a = m.path[j], b = m.path[j + 1]; len += Math.hypot(b.x - a.x, b.z - a.z) + Math.abs(b.y - a.y); j++; }
+    if (j >= m.path.length - 4) j = m.path.length - 1;               // v6.0: the last few points: straight to the end of the stretch
     if (!contact) m.idx = Math.min(m.path.length - 1, Math.max(m.idx ?? 0, j));
     if (lead > (m.bestIdx ?? 0) || fighting || contact) { m.bestIdx = Math.max(m.bestIdx ?? 0, lead); m.progT = now; }
     // who follows the route himself: anyone in a tight stretch, and anyone well behind the guide. v5.9: once he
@@ -3734,7 +3755,9 @@ system.runInterval(() => {
       } else formMode.add(e.id);                                  // (his formation spot is placed below)
     }
     const last = m.path[m.path.length - 1];
-    const atEnd = m.idx >= m.path.length - 1 && flat(last, c) < 8;
+    // (v6.0: the squad stops ~3 blocks short of its markers: "at the end" when the front is within a few points of it;
+    // waiting for the exact last point froze long marches at the end of a leg)
+    const atEnd = m.idx >= m.path.length - 1 && (flat(last, c) < 8 || prog[0] >= m.path.length - 4);
     if (atEnd) {
       const lt = m.legT ?? { x: m.dest.x, z: m.dest.z, final: true };
       const atDest = Math.hypot(m.dest.x - last.x, m.dest.z - last.z) <= 6 && (!Number.isFinite(m.dest.y) || Math.abs(m.dest.y - last.y) <= 2) && !last.climb;
@@ -5871,6 +5894,8 @@ system.runInterval(() => {
       // progress: on a march, getting further along its route (pacing up and down a trench isn't progress); otherwise moving
       const pi = m0?.path && !m0.final ? routeProgress(m0, l, e.id) : undefined;
       if (!mk || (pi !== undefined ? pi >= (mk.pi ?? -1) + 3 || pi < (mk.pi ?? 0) - 10 : Math.hypot(l.x - mk.x, l.z - mk.z) > 3 || Math.abs(l.y - mk.y) > 2)) { mk = { x: l.x, y: l.y, z: l.z, t: now, pi }; rescueMark.set(e.id, mk); }
+      const busy = combatLock.has(e.id) || !!perc.get(e.id)?.threat || gdp(e, "war:ordergoal") !== undefined && Number(gdp(e, "war:goal") ?? 0) !== Number(gdp(e, "war:catchup") ?? -1) || (m0 && m0.members.some((id) => combatLock.has(id)));
+      if (busy) mk.t = now;                                           // fighting (or his squad is): that's not being stuck
       if (now - (rescueT.get(e.id) ?? -99999) < 1200) continue;     // one rescue a minute at most
       // 1. inside a block
       if (!climbing.has(e.id) && insideBlock(e)) {
@@ -6112,19 +6137,23 @@ system.runInterval(() => {
       // in single file, at walking pace (Minecraft's own walking stays idle: it was what got lost on stairs and in
       // doorways). Open ground: the marker runs ahead and Minecraft walks him at full pace.
       stepping.add(e.id);
-      const tight = !pts.guess && (glideBan.get(e.id) ?? 0) <= now && tightAt(e.dimension, pts, i, e.location);
+      // v6.0: on open ground Minecraft walks him in a straight line to his marker, so the marker only goes as far ahead
+      // as a straight walk is safe (no trench, gap or drop on the way); not even the next point: he's carried
+      let ahead = -1;
+      if (!pts.guess) for (let k = Math.min(pts.length - 1, driveAhead(pts, i, 7)); k > i; k--) if (straightReach(e.dimension, e.location, pts[k])) { ahead = k; break; }
+      const tight = !pts.guess && (glideBan.get(e.id) ?? 0) <= now && (ahead < 0 || tightAt(e.dimension, pts, i, e.location));
       if (tight) {
         const g = gliders.get(e.id);
         const queued = queuedBehind(e, pts, i);
         const wait = queued ? (g?.wait ?? 0) + 4 : 0;
         const k = g && g.pts === pts ? g.k : glideStart(pts, i, e.location);
-        gliders.set(e.id, { pts, k, t: now, paused: queued && wait < 50, wait });   // never waits more than 2.5 s for anyone (no deadlocks)
+        gliders.set(e.id, { pts, k, t: now, paused: queued && wait < 50 && floorUnder(e.dimension, e.location.x, e.location.y, e.location.z), wait });   // (never paused over a gap)   // never waits more than 2.5 s for anyone (no deadlocks)
         myMarker(e, e.location);
         note(e, queued && wait < 50 ? "waiting his turn" : "on the way through");
         continue;
       }
       gliders.delete(e.id);
-      const tgt = pts[driveAhead(pts, i, 7)];
+      const tgt = pts[ahead >= 0 ? ahead : driveAhead(pts, i, 7)];
       myMarker(e, tgt);
       if (dist(tgt, e.location) <= 3.3) stepAlong(e, pts, i);
     } catch {}
@@ -6479,6 +6508,13 @@ function glideFree(dim, x, y, z) {
     return cellOpen(tBlock(dim, x, fy, z)) && cellOpen(tBlock(dim, x, fy + 1, z));
   } catch { return true; }
 }
+function floorUnder(dim, x, y, z) {
+  try {
+    const fy = Math.floor(y + 0.01), here = tBlock(dim, x, fy, z), under = tBlock(dim, x, fy - 1, z);
+    if (here && !here.isAir && (TI(here.typeId).stairs || TI(here.typeId).climb)) return true;   // on a stair / slab / ladder
+    return !!under && !under.isAir && (!passable(under) || TI(under.typeId).climb || TI(under.typeId).stairs) || !!under?.isLiquid;
+  } catch { return true; }
+}
 function glideStart(pts, i, loc) {
   let k = Math.min(pts.length - 1, i + 1);
   if (i < pts.length && Math.hypot(pts[i].x - loc.x, pts[i].z - loc.z) > 0.3 && r3(pts[i], loc) < r3(pts[k], loc)) k = i;   // not at his point yet: that one first
@@ -6504,18 +6540,26 @@ system.runInterval(() => {
       const seg = Math.hypot(b.x - a.x, b.z - a.z) || 1;
       const f = 1 - Math.hypot(b.x - nx, b.z - nz) / seg;
       let y = b.climb ? p.y : b.y > a.y ? (f >= 0.3 ? b.y : a.y) : b.y < a.y ? (f >= 0.6 ? b.y : a.y) : b.y;   // (to a ladder: on his own level)
+      if (y > p.y + 1.1) { g.blocked = (g.blocked ?? 0) + 1; if (g.blocked > 10) { gliders.delete(id); glideBan.set(id, now + 60); personal.delete(id); travelTo.delete(id); } continue; }   // v6.0: he's below his route (fell off it): never lifted up to it
       if (!glideFree(e.dimension, nx, y, nz)) {                    // v6.0: up a full step as he reaches it, down only once he's over the drop
-        for (const yy of [b.y, a.y, p.y]) if (yy !== y && glideFree(e.dimension, nx, yy, nz)) { y = yy; break; }
+        for (const yy of [b.y, a.y, p.y]) if (yy !== y && yy <= p.y + 1.1 && glideFree(e.dimension, nx, yy, nz)) { y = yy; break; }   // (never lifted more than a step)
       }
       const nb = pts[Math.min(pts.length - 1, g.k + 1)];
       // v5.9: never into a wall. The step must be open at his feet and head (corners cut between two route points,
       // a door shut behind someone, a block placed since the route was planned): slide along the wall if one axis is
       // free; blocked for a moment: off the glider, and a personal route is worked out again from where he stands.
+      // v6.0: and never out over thin air (a diagonal across the corner of a trench or a gap beside a bridge): the step
+      // must have ground under it, unless the route itself drops there (or swims)
+      const dropOk = b.y < a.y - 0.5 || b.w || a.w;
+      const ok = (x, z) => glideFree(e.dimension, x, y, z) && (dropOk || floorUnder(e.dimension, x, y, z));
       let tx = nx, tz = nz;
-      if (!glideFree(e.dimension, tx, y, tz)) {
-        if (glideFree(e.dimension, nx, y, p.z)) tz = p.z;
-        else if (glideFree(e.dimension, p.x, y, nz)) tx = p.x;
-        else {
+      if (!ok(tx, tz)) {
+        if (ok(nx, p.z)) tz = p.z;
+        else if (ok(p.x, nz)) tx = p.x;
+        else if (L <= 1.6 && b.y <= p.y + 1.1 && glideFree(e.dimension, b.x, b.y, b.z) && floorUnder(e.dimension, b.x, b.y, b.z)) {   // right by the point: one step onto it
+          e.teleport({ x: b.x, y: b.y, z: b.z }, { facingLocation: { x: nb.x, y: b.y + 1.5, z: nb.z } });
+          g.k++; g.blocked = 0; continue;
+        } else {
           g.blocked = (g.blocked ?? 0) + 1;
           if (g.blocked > 10) { gliders.delete(id); glideBan.set(id, now + 60); personal.delete(id); travelTo.delete(id); }   // (the brain / settle work out a new way)
           continue;

@@ -107,7 +107,7 @@ const origPush = SIM.shots.push.bind(SIM.shots);
 SIM.shots.push = (x) => { try { const o = x.owner; let bd = 1e9; for (const e of alive()) if (e !== o && !W.isDowned(e) && e.props.get("war:faction") !== o.props.get("war:faction")) bd = Math.min(bd, Math.hypot(e._loc.x - o._loc.x, e._loc.z - o._loc.z)); x.dist = bd; const gs = W.gunState.get(o.id); x.supp = !!(gs && !gs.target && gs.supp && gs.supp.until > SIM.tick); } catch {} return origPush(x); };
 // v6.0: teleports of more than 2.5 blocks (rescues / anything that jumps a soldier)
 let bigTp = 0;
-{ const tp0 = MC.Entity.prototype.teleport; MC.Entity.prototype.teleport = function (loc, o) { if (this.typeId === SOLDIER && this._loc && Math.hypot(loc.x - this._loc.x, loc.y - this._loc.y, loc.z - this._loc.z) > 2.5) bigTp++; return tp0.call(this, loc, o); }; }
+{ const tp0 = MC.Entity.prototype.teleport; MC.Entity.prototype.teleport = function (loc, o) { if (this.typeId === SOLDIER && this._loc && Math.hypot(loc.x - this._loc.x, loc.y - this._loc.y, loc.z - this._loc.z) > 2.5) { bigTp++; if (opt.tplog) console.error("TP", SIM.tick, JSON.stringify(this._loc), "->", JSON.stringify(loc), W.notes?.get?.(this.id)?.text); } return tp0.call(this, loc, o); }; }
 // v5.9: no-clip watch: soldier samples (every 5 ticks) with a solid full block at his feet or head
 let clips = 0;
 const fullSolid = (x, y, z) => { const id = MC.idAt(x, y, z); return !MC.passCell(x, y, z) && !id.includes("stairs") && !id.includes("slab") && !id.includes("ladder") && !id.includes("door"); };
@@ -377,7 +377,7 @@ const S = {
     await order(1, dest);
     const t0 = SIM.tick; let arrived = -1;
     const FIGHT = /firing|clear shot|hunting|searching for the enemy|engaging|closing in|taking cover|advancing|assault|flank|suppress|peek|cover|position|shifting/;
-    const MARCH = /marching|catching up|on the way through|waiting his turn|on the move/;
+    const MARCH = /marching|catching up|on the way through|waiting his turn/;
     const last = new Map(), flips = new Map();
     for (let t = 0; t < Number(opt.ticks ?? 4000) && arrived < 0; t += 10) {
       step(10); sample(1);
@@ -396,35 +396,38 @@ const S = {
   // v6.0: a long march across a cluttered battlefield (seeded): hills, trenches with two crossings, walls with gaps,
   // a pond, ruined houses, tree clumps, shell craters. Does the whole squad get there?
   async battlefield() {
-    SIM.bounds = { x0: -90, x1: 90, z0: -30, z1: 260, y0: -12, y1: 60 };
+    const LEN = Number(opt.len ?? 245), K = LEN / 245;
+    SIM.bounds = { x0: -90, x1: 90, z0: -30, z1: LEN + 15, y0: -12, y1: 60 };
     let rs = Number(opt.seed ?? 7) * 2654435761 >>> 0 || 1; const R = () => { rs ^= rs << 13; rs >>>= 0; rs ^= rs >>> 17; rs ^= rs << 5; rs >>>= 0; return rs / 4294967296; };
     const ri = (a, b) => a + Math.floor(R() * (b - a + 1));
-    for (let k = 0; k < 4; k++) hill(ri(-60, 60), ri(30, 220), ri(8, 18), ri(3, 9));
-    for (const tz of [70, 160]) {                                   // trenches: 2 deep, 2 wide, across the field; two plank crossings
+    for (let k = 0; k < Math.round(4 * K); k++) hill(ri(-60, 60), ri(30, LEN - 25), ri(8, 18), ri(3, 9));
+    for (const tz of (K > 1.2 ? [70, 160, 250, 340] : [70, 160]).filter((z) => z < LEN - 30)) {                                   // trenches: 2 deep, 2 wide, across the field; two plank crossings
       fill(-90, -2, tz, 90, -1, tz + 1, "air");
       for (const bx of [ri(-60, -10), ri(10, 60)]) fill(bx, -1, tz, bx + 2, -1, tz + 1, "oak_planks");
     }
-    for (let k = 0; k < 6; k++) { const x = ri(-70, 50), z = ri(20, 230), L = ri(8, 24); fill(x, 0, z, x + L, 2, z, "stone_bricks"); const g = ri(2, L - 3); fill(x + g, 0, z, x + g + 1, 2, z, "air"); }   // walls with a gap
+    for (let k = 0; k < Math.round(6 * K); k++) { const x = ri(-70, 50), z = ri(20, LEN - 15), L = ri(8, 24); fill(x, 0, z, x + L, 2, z, "stone_bricks"); const g = ri(2, L - 3); fill(x + g, 0, z, x + g + 1, 2, z, "air"); }   // walls with a gap
     { const x = ri(-50, 30), z = ri(90, 140); fill(x, -2, z, x + 10, -1, z + 7, "water"); }                                                                  // a pond
-    for (let k = 0; k < 2; k++) { const b = building(ri(-70, 40), ri(40, 200), { windows: true }); fill(b.x0 + 3, 5, b.z0 + 3, b.x0 + 8, 15, b.z0 + 8, "air"); }  // ruined houses
-    for (let k = 0; k < 8; k++) { const x = ri(-80, 80), z = ri(10, 240); fill(x, 0, z, x, 3, z, "oak_log"); fill(x - 2, 3, z - 2, x + 2, 5, z + 2, "oak_leaves"); }   // trees
-    for (let k = 0; k < 14; k++) { const x = ri(-70, 70), z = ri(10, 240), r = ri(1, 3); for (let dx = -r; dx <= r; dx++) for (let dz = -r; dz <= r; dz++) if (Math.hypot(dx, dz) <= r) fill(x + dx, -Math.max(1, r - Math.round(Math.hypot(dx, dz))), z + dz, x + dx, -1, z + dz, "air"); }   // craters
+    for (let k = 0; k < Math.round(2 * K); k++) { const b = building(ri(-70, 40), ri(40, LEN - 45), { windows: true }); fill(b.x0 + 3, 5, b.z0 + 3, b.x0 + 8, 15, b.z0 + 8, "air"); }  // ruined houses
+    for (let k = 0; k < Math.round(8 * K); k++) { const x = ri(-80, 80), z = ri(10, LEN - 5); fill(x, 0, z, x, 3, z, "oak_log"); fill(x - 2, 3, z - 2, x + 2, 5, z + 2, "oak_leaves"); }   // trees
+    for (let k = 0; k < Math.round(14 * K); k++) { const x = ri(-70, 70), z = ri(10, LEN - 5), r = ri(1, 3); for (let dx = -r; dx <= r; dx++) for (let dz = -r; dz <= r; dz++) if (Math.hypot(dx, dz) <= r) fill(x + dx, -Math.max(1, r - Math.round(Math.hypot(dx, dz))), z + dz, x + dx, -1, z + dz, "air"); }   // craters
     fill(-8, -3, -6, 8, -1, 8, "grass_block"); fill(-8, 0, -6, 8, 6, 8, "air");                                                                 // a clear start area
     spawnPlayer({ x: 0, y: 0, z: -25 });
     const N = Number(opt.n ?? 12);
     for (let i = 0; i < N; i++) soldier(1, { x: (i % 4) * 2 - 3 + 0.5, y: 0, z: Math.floor(i / 4) * 2 + 0.5 }, "rifle");
     step(20);
-    const dest = { x: ri(-30, 30), y: 0, z: 245 };
+    const dest = { x: ri(-30, 30), y: 0, z: LEN };
     fill(dest.x - 6, -3, dest.z - 6, dest.x + 6, -1, dest.z + 6, "grass_block"); fill(dest.x - 6, 0, dest.z - 6, dest.x + 6, 8, dest.z + 6, "air");
     await order(1, dest);
     const t0 = SIM.tick; let arrived = -1; const stillT = new Map(); let worstStill = 0;
     for (let t = 0; t < Number(opt.ticks ?? 7000) && arrived < 0; t += 10) {
+      if (opt.watch !== undefined && SIM.tick >= Number(opt.from ?? 0) - 10 && SIM.tick <= Number(opt.to ?? 1e9)) { for (let q = 0; q < 10; q++) { step(1); const e = alive(1)[Number(opt.watch)]; const g = W.gliders.get(e.id); console.error("W", SIM.tick, e._loc.x.toFixed(2), e._loc.y.toFixed(2), e._loc.z.toFixed(2), g ? `g k${g.k} p${g.paused ? 1 : 0} b${g.blocked ?? 0}` : "-", "ban", Math.max(0, (W.glideBan.get(e.id) ?? 0) - SIM.tick), W.driveOn.has(e.id) ? "D" : "F", W.notes.get(e.id)?.text, "walk", e.walk ? `${e.walk.x.toFixed(2)},${e.walk.z.toFixed(2)}` : "", "nav", e.navGoal ? `${e.navGoal.x.toFixed(1)},${e.navGoal.y},${e.navGoal.z.toFixed(1)}` : "", (() => { const m = Object.values(W.getMarches())[0]; if (!m?.path) return ""; const pi = W.routeProgress(m, e._loc, e.id); return `pi ${pi} tight ${W.tightAt(overworld, m.path, pi, e._loc)} pts ${JSON.stringify(m.path.slice(pi, pi + 4).map((q) => [q.x, q.y, q.z]))}`; })()); } } else
       step(10); sample(1);
-      if (opt.mtrace && SIM.tick % 100 === 0) { const m = Object.values(W.getMarches())[0]; console.error("MT", SIM.tick, "idx", m?.idx, "p", JSON.stringify(m?.path?.[m.idx]), "shape", m?.shape, alive(1).map((e) => `${e._loc.x.toFixed(0)},${e._loc.z.toFixed(0)}${e.dyn.get("war:catchup") === e.dyn.get("war:fmk") ? "F" : "D"}${e.dyn.get("war:goal") === e.dyn.get("war:catchup") ? "" : "!"}`).join(" ")); }
+      if (opt.mtrace && SIM.tick % Number(opt.every ?? 100) === 0 && SIM.tick >= Number(opt.from ?? 0)) { const m = Object.values(W.getMarches())[0]; console.error("MT", SIM.tick, "idx", m?.idx, "p", JSON.stringify(m?.path?.[m.idx]), "shape", m?.shape, alive(1).map((e) => `${e._loc.x.toFixed(0)},${e._loc.y.toFixed(0)},${e._loc.z.toFixed(0)}${e.dyn.get("war:catchup") === e.dyn.get("war:fmk") ? "F" : "D"}${W.gliders.has(e.id) ? "g" : ""}${e.dyn.get("war:goal") === e.dyn.get("war:catchup") ? "" : "!"}`).join(" ")); }
       for (const e of alive(1)) { const near = Math.hypot(e._loc.x - dest.x, e._loc.z - dest.z) < 12; const st = near ? 0 : (e.__still ?? 0); worstStill = Math.max(worstStill, st); }
       if (alive(1).filter((e) => Math.hypot(e._loc.x - dest.x, e._loc.z - dest.z) < 12).length >= N - 1) arrived = SIM.tick - t0;
     }
     const there = alive(1).filter((e) => Math.hypot(e._loc.x - dest.x, e._loc.z - dest.z) < 12).length;
+    if (opt.route) { const m = Object.values(W.getMarches())[0]; console.error("ROUTE", JSON.stringify((m?.path ?? []).filter((q) => Math.abs(q.z - Number(opt.route)) < 8).map((q) => [q.x, q.y, q.z, q.climb ? "C" : ""]))); console.error("LEGS", JSON.stringify(m?.legs), "legT", JSON.stringify(m?.legT)); }
     if (opt.blocks) { const [bx, bz] = opt.blocks.split(",").map(Number); for (let z = bz - 2; z <= bz + 4; z++) console.error("COL z", z, [-3, -2, -1, 0, 1, 2].map((y) => `${y}:${MC.idAt(bx, y, z).replace("minecraft:", "")}`).join(" ")); }
     if (opt.dump) for (const [id, m] of Object.entries(W.getMarches())) console.error("MARCH", id, "idx", m.idx, "len", m.path?.length, "planning", m.planning, "final", m.final, "replans", m.replans, "legs", m.legs?.length, "dead", JSON.stringify(m.dead), "progT", SIM.tick - m.progT, "pathEnd", JSON.stringify(m.path?.[m.path.length - 1]), "guess", !!m.path?.guess, "path@idx", JSON.stringify(m.path?.slice(Math.max(0, (m.idx ?? 0) - 2), (m.idx ?? 0) + 3)));
     if (opt.dump) for (const e of alive(1)) if (Math.hypot(e._loc.x - dest.x, e._loc.z - dest.z) >= 12) { const m = Object.values(W.getMarches())[0]; const g = W.gliders.get(e.id); const mk = W.marker(Number(e.dyn.get("war:catchup") ?? 0)); const pi = m?.path ? W.routeProgress(m, e._loc, e.id) : -1; console.error("DBG", e.id, "glider", g ? JSON.stringify({ k: g.k, paused: g.paused, wait: g.wait, blocked: g.blocked, t: SIM.tick - g.t }) : "-", "ban", (W.glideBan.get(e.id) ?? 0) - SIM.tick, "drive", JSON.stringify(W.driveOn.get(e.id)), "mk", mk ? JSON.stringify(mk._loc) : "-", "pi", pi, "tight", m?.path ? W.tightAt(overworld, m.path, pi, e._loc) : "-", "pts", JSON.stringify(m?.path?.slice(Math.max(0, pi - 1), pi + 3).map((p) => [p.x, p.y, p.z])), "nav", JSON.stringify(e.navGoal), "walk", JSON.stringify(e.walk), "vel", JSON.stringify(e.vel)); }
