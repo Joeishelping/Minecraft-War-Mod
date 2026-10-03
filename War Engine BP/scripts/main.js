@@ -3265,6 +3265,8 @@ function updateLock(e, d, s, now) {
     }
   }
   if (!L) return undefined;
+  const mo = marchOfE(e);
+  if (mo?.dest && Math.hypot(L.at.x - mo.dest.x, L.at.z - mo.dest.z) < 35) { combatLock.delete(e.id); return undefined; }   // the enemy IS the objective: pressing on there is the fight
   const S = squads.get(squadKey(e, d)), q = S?.known?.get(L.id);
   if (q && now - q.t < 40 && q.t > (L.seenT ?? 0)) { L.seenT = q.t; L.at = { x: q.x, y: q.y, z: q.z }; }   // a mate still sees him
   const ent = L.ent;
@@ -3733,8 +3735,12 @@ system.runInterval(() => {
     let j = lead, len = 0;                                       // ~6 blocks of route ahead of the lead, gates or not
     while (j < m.path.length - 1 && len < 6) { const a = m.path[j], b = m.path[j + 1]; len += Math.hypot(b.x - a.x, b.z - a.z) + Math.abs(b.y - a.y); j++; }
     if (j >= m.path.length - 4) j = m.path.length - 1;               // v6.0: the last few points: straight to the end of the stretch
-    if (!contact) m.idx = Math.min(m.path.length - 1, Math.max(m.idx ?? 0, j));
-    if (lead > (m.bestIdx ?? 0) || fighting || contact) { m.bestIdx = Math.max(m.bestIdx ?? 0, lead); m.progT = now; }
+    // v6.0: under fire the march bounds: ~3 s forward, ~3 s down and firing, instead of walking steadily into the guns
+    const underFire = members.some((e) => now - (hurtBy.get(e.id)?.t ?? -999) < 60 || (shotsAtMe.get(e.id) ?? []).some((t) => now - t < 40));
+    if (underFire) m.fireT = now;
+    const bounding = now - (m.fireT ?? -999) < 200 && Math.floor(now / 60) % 2 === 1;
+    if (!contact && !bounding) m.idx = Math.min(m.path.length - 1, Math.max(m.idx ?? 0, j));
+    if (lead > (m.bestIdx ?? 0) || fighting || contact || bounding) { m.bestIdx = Math.max(m.bestIdx ?? 0, lead); m.progT = now; }
     // who follows the route himself: anyone in a tight stretch, and anyone well behind the guide. v5.9: once he
     // drives he keeps driving until he's been clear and caught up for 1.5 s (no flip-flopping between the two); everyone
     // else walks to his OWN formation spot (v5.4-5.8: up to four men shared one lane marker and jostled for it)
