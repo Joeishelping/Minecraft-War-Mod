@@ -120,7 +120,7 @@ let bigTp = 0;
 let clips = 0;
 const fullSolid = (x, y, z) => { const id = MC.idAt(x, y, z); return !MC.passCell(x, y, z) && !id.includes("stairs") && !id.includes("slab") && !id.includes("ladder") && !id.includes("door"); };
 MC.system.runInterval(() => { for (const e of alive()) { const l = e._loc; if (fullSolid(l.x, l.y + 0.05, l.z) || fullSolid(l.x, l.y + 1.2, l.z)) clips++; } }, 5);
-const report = (o) => { console.log(JSON.stringify({ scenario, ...o, clips, bigTp, lava: SIM.lavaIds?.size ?? 0, errors: SIM.errors.slice(0, 5), errorCount: SIM.errors.length })); };
+const report = (o) => { if (opt.voices) console.error((SIM.voices ?? []).join("\n")); console.log(JSON.stringify({ scenario, ...o, voiceCount: SIM.voices?.length ?? 0, clips, bigTp, lava: SIM.lavaIds?.size ?? 0, errors: SIM.errors.slice(0, 5), errorCount: SIM.errors.length })); };
 
 // ---------------------------------------------------------------- scenarios
 const S = {

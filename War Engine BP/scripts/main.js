@@ -1,4 +1,4 @@
-// War Engine v6.4: faction NPC war framework
+// War Engine v6.5: faction NPC war framework
 import { world, system, Player, ItemStack, EquipmentSlot, GameMode } from "@minecraft/server";
 import { ActionFormData, ModalFormData, FormCancelationReason } from "@minecraft/server-ui";
 import { SKINS } from "./skins.js";
@@ -1056,7 +1056,8 @@ world.beforeEvents.entityHurt.subscribe((ev) => {
       const h = v.getComponent("minecraft:health");
       if (h && ev.damage >= h.currentValue && cause !== "void" && !dying.has(v.id)) {
         ev.cancel = true;                                            // falls wounded instead of dying
-        system.run(() => { try { if (v.isValid) { const hh = v.getComponent("minecraft:health"); if (hh) hh.setCurrentValue(1); goDown(v); } } catch {} });
+        let killer; try { killer = ev.damageSource?.damagingEntity; } catch {}
+        system.run(() => { try { if (v.isValid) { const hh = v.getComponent("minecraft:health"); if (hh) hh.setCurrentValue(1); goDown(v, killer); } } catch {} });
         return;
       }
     }
@@ -2211,9 +2212,10 @@ async function warTable(player, pre) {
   } else if (r.selection === 7) {
     await warArchive(player);
   } else if (r.selection === 5) {
-    const which = await show(new ActionFormData().title("Settings").button("General").button("Gun loadouts (per faction)").button("Realism (battle tuning)").button("Faction skins").button("« Back"), player);
+    const which = await show(new ActionFormData().title("Settings").button("General").button("Gun loadouts (per faction)").button("Realism (battle tuning)").button("Faction skins").button("Callout language (per faction)").button("« Back"), player);
     if (!which || which.canceled || which.selection === undefined) return;
-    if (which.selection === 4) return warTable(player);
+    if (which.selection === 5) return warTable(player);
+    if (which.selection === 4) { await voiceMenu(player); return warTable(player, 5); }   // (v6.5)
     if (which.selection === 1) { await loadoutMenu(player); return warTable(player, 5); }
     if (which.selection === 3) { await factionSkinMenu(player); return warTable(player, 5); }
     if (which.selection === 2) {
@@ -3783,6 +3785,7 @@ function startMarch(player, pool, dest, then) {
   try { if (first && !isIndoorsAt(dim, from) && Math.abs(first.y - cy) <= 1 && localReach(dim, from, first)) { placeLanes(m, dim, first, m.heading, "line"); m.early = true; m.earlyAt = { x: first.x, y: first.y, z: first.z }; } } catch {}   // v5.4: no standing around (outdoors)
   requestPlan(id, m, from);
   saveMarches();
+  callout(pool[Math.floor(Math.random() * pool.length)], "Follow me!");   // (v6.5)
   return { id, lanes: m.lanes };
 }
 // Long or blocked routes: first a coarse map (4-block cells, ~420 blocks around) finds which WAY works
@@ -4009,6 +4012,7 @@ system.runInterval(() => {
         m.final = true; m.finalT = now; m.dest.y = last.y; m.pos = { x: last.x, y: last.y, z: last.z };
         placeLanes(m, dim, m.pos, m.heading, "line");
         factionMsg(m.fac, `§a${squadLabel(m)} in position at (${Math.round(last.x)}, ${Math.round(last.z)})`);
+        if (all[0]) callout(all[Math.floor(Math.random() * all.length)], "Hold position!");
         for (const e of all) sdp(e, "war:catchup", undefined);   // stragglers now just join the formation
       } else if (!lt.final && Math.hypot(lt.x - last.x, lt.z - last.z) <= 8) {
         m.legs?.shift();                                         // leg done: plan the next one
@@ -4898,7 +4902,7 @@ system.runInterval(() => {
       const oc = { x: 0, y: 0, z: 0 }; for (const e of ours) { oc.x += e.location.x; oc.y += e.location.y; oc.z += e.location.z; }
       oc.x /= ours.length; oc.y /= ours.length; oc.z /= ours.length; S.ourC = oc;
       if (!known.length) {
-        if (S.contactT >= 0) { radio(ours[0], "area clear, carrying on", true); learnEnd(S, ours.length, now); }   // v5.4: no regroup halt (it waited on the downed)
+        if (S.contactT >= 0) { radio(ours[0], "area clear, carrying on", true); learnEnd(S, ours.length, now); callout(ours[Math.floor(Math.random() * ours.length)], "Clear!"); }   // v5.4: no regroup halt (it waited on the downed)
         if (S.plan !== "advance") { S.plan = "advance"; S.flankers.clear(); S.suppressors.clear(); S.flankPt = undefined; S.contactT = -1; }
         helpCall.delete(k); continue;
       }
@@ -5429,35 +5433,55 @@ world.afterEvents.entityHurt.subscribe((ev) => {
   }
 });
 
-// ---- battle chatter: short callouts in each faction's voice (War Table -> Settings -> Callout flavor)
-const VOICES = { us: "mob.us.idle", soviet: "mob.soviet.idle", jap: "mob.jap.idle", french: "mob.french.idle", german: "mob.german.hurt" };
-const VOICE_KEYS = ["none", "us", "soviet", "jap", "french", "german"];
-const VOICE_NAMES = ["None (silent)", "American", "Soviet", "Japanese", "French", "German"];
-const LOADOUT_VOICE = { american: "us", german: "german", soviet: "soviet", japanese: "jap", western: "french" };
-// v4.7's menu saved "None" for every faction: cleared once, lazily (world data can't be touched while the script loads)
-let voicesChecked = false;
-function voiceOf(f) {
-  if (!voicesChecked) {
-    voicesChecked = true;
-    try { if (!gdp(world, "war:voices_v2")) { sdp(world, "war:voices", undefined); sdp(world, "war:voices_v2", true); } } catch {}
-  }
-  return getJSON(world, "war:voices", {})[f] ?? LOADOUT_VOICE[loadoutOf(f)] ?? "us";
+// ---- v6.5: battle chatter, spoken. Each faction's soldiers shout in its language (War Table -> Settings -> Callout
+// language); what you read on screen stays English. Recorded lines live in the resource pack (sounds/war_voice/<lang>/),
+// one sound event per line: war.voice.<lang>.<line>. A language with no recordings yet just stays silent.
+const VOICE_KEYS = ["none", "en_us", "en_gb", "greek", "korean", "spanish"];
+const VOICE_NAMES = ["None (silent)", "US English", "British English", "Greek", "Korean", "Spanish"];
+function voiceOf(f) { const v = getJSON(world, "war:vlang", {})[f]; return VOICE_KEYS.includes(v) ? v : "en_us"; }
+// the English line (as the code calls it) -> the recorded line. Lines with no recording (Reloading, Grenade, On the gun) are silent
+const CALL_KEY = { "Enemy spotted!": "spotted", "Contact!": "contact", "Flanking!": "flanking", "Charge!": "charge", "Go, go, go!": "gogogo",
+  "Moving up!": "moving_up", "Suppressing!": "suppressing", "I'm hit!": "hit", "Man down!": "man_down", "You're okay!": "okay", "Fall back!": "fall_back",
+  "Cover me!": "cover_me", "Target down!": "target_down", "Clear!": "clear", "Hold position!": "hold", "Follow me!": "follow" };
+const CALL_ALL = Object.values(CALL_KEY);
+const lastCall = new Map(); // soldier id / squad line -> tick
+let callSec = -1, callsThisSec = 0;
+function callout(e, text) {
+  try {
+    if (!e?.isValid || held.has(e.id) || (downed.has(e.id) && text !== "I'm hit!")) return;
+    const test = text === "Testing!";
+    const key = test ? CALL_ALL[Math.floor(Math.random() * CALL_ALL.length)] : CALL_KEY[text];
+    if (!key) return;
+    const f = Number(P(e, "war:faction") ?? 0), lang = voiceOf(f);
+    if (!lang || lang === "none") return;
+    const now = tick();
+    if (!test) {
+      if (now - (lastCall.get(e.id) ?? -9999) < 160) return;                    // one shout per man every ~8 s
+      const sk = `${f}:${sd(e).squad}:${key}`;
+      if (now - (lastCall.get(sk) ?? -9999) < 60) return;                       // squad mates don't all yell the same line
+      const sec = Math.floor(now / 20); if (sec !== callSec) { callSec = sec; callsThisSec = 0; }
+      if (callsThisSec >= 3 || !playerNear(e, 32)) return;                      // a battle never becomes a wall of noise; nobody near: no sound
+      lastCall.set(sk, now);
+    }
+    lastCall.set(e.id, now); callsThisSec++;
+    if (lastCall.size > 4000) lastCall.clear();
+    const pitch = 0.92 + ((e.id.charCodeAt(e.id.length - 1) * 7) % 17) / 100;   // each man his own voice, always the same one
+    e.dimension.playSound(`war.voice.${lang}.${key}`, headLoc(e), { volume: 1.0, pitch });
+  } catch {}
 }
-const lastCall = new Map(); // soldier id / squad key -> tick
-function callout(e, text) { /* callouts removed (v5.0) */ }
 async function voiceMenu(player) {
-  const pick = await show(new ActionFormData().title("Callout flavor").button("Set voices per faction").button("Test callouts (soldiers near you)").button("« Back"), player);
+  const pick = await show(new ActionFormData().title("Callout language").button("Set the language per faction").button("Test callouts (soldiers near you)").button("« Back"), player);
   if (!pick || pick.canceled || pick.selection === undefined) return;
   if (pick.selection === 1) { testCallouts(player); return; }
   if (pick.selection === 2) return;
-  const all = getJSON(world, "war:voices", {});
-  const f = new ModalFormData().title("Callout flavor");
+  const all = getJSON(world, "war:vlang", {});
+  const f = new ModalFormData().title("Callout language");
   COLORS.forEach((_, i) => f.dropdown(factionLabel(i + 1), VOICE_NAMES, { defaultValueIndex: Math.max(0, VOICE_KEYS.indexOf(voiceOf(i + 1))) }));
   const r = await show(f, player);
   if (!r || r.canceled || !r.formValues) return;
   r.formValues.forEach((v, i) => { all[i + 1] = VOICE_KEYS[Number(v)]; });
-  setJSON(world, "war:voices", all);
-  player.sendMessage("§aCallout flavor saved.");
+  setJSON(world, "war:vlang", all);
+  player.sendMessage("§aCallout languages saved.");
 }
 
 // ---- test battle: two balanced squads in front of you, ordered to fight
@@ -5507,8 +5531,13 @@ async function testBattle(player) {
 const downed = new Map(); // id -> until tick
 const isDowned = (e) => downed.has(e.id);
 const downPos = new Map(); // id -> where he fell
-function goDown(e) {
+function goDown(e, killer) {
   const now = tick();
+  try {                                                          // (v6.5) the man who dropped him calls it
+    let ke = killer?.isValid ? killer : undefined;
+    if (!ke) { const k = hurtBy.get(e.id); if (k && now - k.t < 40) ke = world.getEntity(k.id); }
+    if (ke?.typeId === SOLDIER) callout(ke, "Target down!");
+  } catch {}
   downed.set(e.id, now + 600);
   downPos.set(e.id, { ...e.location });
   sdp(e, "war:downed", now + 600);
@@ -6734,6 +6763,7 @@ function drillMove(e, d, now, melee, anchor, leash) {
       const w = walkableNear(e.dimension, sx, sz, e.location.y);
       if (w && Math.abs(w.y - e.location.y) <= 0.6) push(e, { x: (-dz / L) * side * 0.14, y: 0, z: (dx / L) * side * 0.14 }, 2);   // weave, never off a ledge
       note(e, S.plan === "assault" ? "assaulting (bounding)" : "advancing (bounding)");
+      if (Math.random() < 0.15) callout(e, "Cover me!");
     }
   }
   return mv;

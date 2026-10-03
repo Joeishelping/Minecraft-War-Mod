@@ -258,7 +258,7 @@ export class Dimension {
     return e;
   }
   spawnParticle() { count("spawnParticle"); }
-  playSound() { count("playSound"); }
+  playSound(id) { count("playSound"); if (typeof id === "string" && id.startsWith("war.voice")) (SIM.voices ??= []).push(`${SIM.tick} ${id}`); }
   createExplosion(loc, power, opts) {
     count("createExplosion");
     for (const e of [...SIM.entities.values()]) { if (!e._valid || e.static || e.isBullet) continue; const d = Math.hypot(e._loc.x - loc.x, e._loc.y - loc.y, e._loc.z - loc.z); if (d < power * 2) damage(e, Math.round(power * 4 * (1 - d / (power * 2))), opts?.source, "entityExplosion"); }

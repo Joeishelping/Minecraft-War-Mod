@@ -1,5 +1,37 @@
 # War Engine changelog
 
+## v6.5 (spoken callouts: test build with 5 languages)
+
+- **Soldiers shout again, in their faction's language.** War Table -> Settings -> Callout language (per faction):
+  US English, British English, Greek, Korean, Spanish, or None. Each faction defaults to US English. What you read
+  on screen stays English. The recordings are your ElevenLabs takes, cut into separate lines, trimmed, matched in
+  volume and converted to .ogg. Each soldier gets his own slightly higher or lower voice, so a squad doesn't sound
+  like one man. Korean has two versions of "Clear!" and picks one at random.
+- **The 16 lines and when they're shouted:**
+  - Enemy spotted: he first sees an enemy.
+  - Contact: his squad first makes contact.
+  - Flanking: the squad sends men round the side.
+  - Charge: the squad assaults.
+  - Go, go, go: the flankers are in place.
+  - Moving up: he's sent to reinforce.
+  - Suppressing: a machine gunner opens up.
+  - I'm hit: he's wounded.
+  - Man down: a squad mate falls nearby.
+  - You're okay: a medic revives someone.
+  - Fall back: he's shaken and pulls back.
+  - Cover me: (new) he moves while his mates cover him.
+  - Target down: (new) the man he shot goes down.
+  - Clear: (new) the fight's over.
+  - Hold position: (new) the march arrives.
+  - Follow me: (new) a march starts.
+  - "Reloading", "Grenade" and "On the gun" have no recording, so they stay silent.
+- **Never spammy.**
+  - One shout per soldier every ~8 s, and squad mates don't yell the same line within 3 s of each other.
+  - At most 3 shouts a second in the whole world, and only near a player: heard up to ~32 blocks.
+  - In the test fight, a whole battle was about 10 shouts. The volume follows the "Hostile creatures" slider.
+- **Test button.** War Table -> Settings -> Callout language -> "Test callouts": every soldier near you shouts a
+  random line.
+
 ## v6.4 (water, wall-top defenders, learning the map, shaking loose)
 
 - **Water.**
