@@ -5966,6 +5966,7 @@ system.runInterval(() => { for (const e of allOf(SOLDIER)) { try { if (personal.
 const ladderFail = new Map(); // id -> tick a climb gave up
 const rescueMark = new Map(); // id -> { x, y, z, t } where/when he last made real progress
 const rescueT = new Map();    // id -> tick of his last rescue
+const pressing = new Map();   // id -> { x, y, z, t, n } (v6.2: going nowhere while wanting to walk)
 const insideN = new Map();    // id -> checks in a row inside a block
 // his body (mid and head, not his feet: path blocks, soul sand and the like sit his feet a little inside the block)
 function insideBlock(e) {
@@ -5997,14 +5998,14 @@ function rescueTo(e, why, now) {
   if (!best) return false;
   const l = best.location, b = best.getViewDirection?.() ?? { x: 0, z: 0 };
   // a free spot by him (behind him first), never on top of anyone
-  const occupied = (q) => nearSnap(e.dimension.id, q, 1.2).some((c) => c.id !== e.id && c.type === SOLDIER && Math.abs(c.y - q.y) < 1.5);
+  const occupied = (q) => nearSnap(e.dimension.id, q, 1.5).some((c) => c.id !== e.id && c.type === SOLDIER && Math.abs(c.y - q.y) < 1.5) || claimedByOther(q, e.id, now) || dangerNear(e.dimension, q);   // (v6.2: 1.5 from everyone, never by a drop / lava)
   let to;
   for (const [ox, oz] of [[-(b.x ?? 0) * 1.5, -(b.z ?? 0) * 1.5], [1.5, 0], [-1.5, 0], [0, 1.5], [0, -1.5], [1.5, 1.5], [-1.5, -1.5], [1.5, -1.5], [-1.5, 1.5]]) {
     const q = { x: Math.floor(l.x + ox) + 0.5, y: Math.floor(l.y + 0.01), z: Math.floor(l.z + oz) + 0.5 };
     if (standAt(e.dimension, Math.floor(q.x), q.y, Math.floor(q.z), now) && glideFree(e.dimension, q.x, q.y, q.z) && !occupied(q) && localReach(e.dimension, l, q, 60)) { to = q; break; }
   }
   if (!to) return false;
-  try { e.teleport(to, { dimension: best.dimension }); } catch { return false; }
+  try { e.teleport(to, { dimension: best.dimension }); claimSpot(e, to, now); } catch { return false; }
   afterRescue(e, now, why);
   return true;
 }
@@ -6029,6 +6030,23 @@ system.runInterval(() => {
       if (!mk || moved) { mk = { x: l.x, y: l.y, z: l.z, t: now, pi, dd }; rescueMark.set(e.id, mk); }
       const busy = combatLock.has(e.id) || !!perc.get(e.id)?.threat || gdp(e, "war:ordergoal") !== undefined && Number(gdp(e, "war:goal") ?? 0) !== Number(gdp(e, "war:catchup") ?? -1) || (m0 && m0.members.some((id) => combatLock.has(id)));
       if (busy) mk.t = now;                                           // fighting (or his squad is): that's not being stuck
+      // v6.2: pressing into a wall / going nowhere: he wants to walk to a marker well away, he's simulated (not frozen
+      // out of range) and he's got nowhere for 3 s. 1st: re-decide (that spot is avoided for 15 s); 2nd: a fresh route
+      // to his order's goal; still stuck ~12 s on and not in a firefight: rescue (below).
+      const goal = Number(gdp(e, "war:goal") ?? 0);
+      let pz = pressing.get(e.id);
+      if (!pz || Math.hypot(l.x - pz.x, l.z - pz.z) > 2 || Math.abs(l.y - pz.y) > 1.5) { pz = { x: l.x, y: l.y, z: l.z, t: now, n: 0 }; pressing.set(e.id, pz); }
+      if (!isRemote(e) && !gliders.has(e.id) && !climbing.has(e.id) && wantsWalk(e, goal) && now - pz.t >= 60) {
+        pz.n++; pz.t = now;
+        const mk = marker(goal);
+        if (mk) { const fl = failSpots.get(e.id) ?? []; fl.push({ x: mk.location.x, z: mk.location.z, t: now }); failSpots.set(e.id, fl.slice(-6)); }
+        const B = brain.get(e.id);
+        if (B) { B.act = ""; B.decT = -999; B.reachSpot = undefined; B.spread = undefined; B.reflex = undefined; }
+        drill.get(e.id) && (drill.get(e.id).scoot = undefined);
+        if (pz.n === 1) { note(e, "trying something else"); try { think(e); } catch {} }
+        else if (pz.n === 2) { personal.delete(e.id); travelTo.delete(e.id); const gp = goalPoint(e); if (gp) planPersonalTo(e, "settle", { x: gp.x, y: gp.y, z: gp.z }, now); note(e, "finding a way"); }
+        else if (pz.n >= 4 && !busy && now - (rescueT.get(e.id) ?? -99999) >= 1200 && rescuesNow < 2) { if (rescueTo(e, "caught up with his squad", now)) { rescuesNow++; pressing.delete(e.id); continue; } }
+      }
       if (now - (rescueT.get(e.id) ?? -99999) < 1200) continue;     // one rescue a minute at most
       // 1. inside a block
       if (!climbing.has(e.id) && insideBlock(e)) {
@@ -6066,7 +6084,7 @@ system.runInterval(() => {
       if (rescueTo(e, "caught up with his squad", now)) rescuesNow++;
     } catch {}
   }
-  if (now % 1200 < 20) for (const id of [...rescueMark.keys()]) if (!world.getEntity(id)) { rescueMark.delete(id); rescueT.delete(id); insideN.delete(id); ladderFail.delete(id); combatLock.delete(id); }
+  if (now % 1200 < 20) for (const id of [...rescueMark.keys()]) if (!world.getEntity(id)) { rescueMark.delete(id); rescueT.delete(id); insideN.delete(id); ladderFail.delete(id); combatLock.delete(id); remoteMemo.delete(id); remoteSettled.delete(id); pressing.delete(id); failSpots.delete(id); }
 }, 20);
 
 // ---- one way to travel anywhere: a direct step only when it's close and plainly reachable on foot;
@@ -6077,15 +6095,17 @@ const travelTo = new Map(); // id -> destination of his current personal route
 // A spot beside lava / a drop is moved to the nearest safe cell (or the move is dropped); Minecraft's own walking is only
 // used for a plain, safe straight walk off any bridge or ledge; everything else is a route the script carries him along
 // (short ones are instant). Fixing a movement bug here fixes it for every system at once.
+const failSpots = new Map(); // id -> [{ x, z, t }] spots he pressed toward and never reached (v6.2)
+const failedNear = (e, q, now) => (failSpots.get(e.id) ?? []).some((f) => now - f.t < 300 && Math.hypot(f.x - q.x, f.z - q.z) < 2);
 function safeSpot(e, spot, now) {
   const dim = e.dimension;
   if (!spot) return undefined;
-  if (!dangerNear(dim, spot) && !claimedByOther(spot, e.id, now)) return spot;
+  if (!dangerNear(dim, spot) && !claimedByOther(spot, e.id, now) && !failedNear(e, spot, now)) return spot;
   const bx = Math.floor(spot.x), by = Math.floor(spot.y + 0.01), bz = Math.floor(spot.z);
   let best, bd = 1e9;
   for (let dx = -3; dx <= 3; dx++) for (let dz = -3; dz <= 3; dz++) for (const dy of [0, 1, -1]) {
     const q = { x: bx + dx + 0.5, y: by + dy, z: bz + dz + 0.5 };
-    if (!standAt(dim, bx + dx, by + dy, bz + dz, now) || dangerNear(dim, q) || claimedByOther(q, e.id, now)) continue;
+    if (!standAt(dim, bx + dx, by + dy, bz + dz, now) || dangerNear(dim, q) || claimedByOther(q, e.id, now) || failedNear(e, q, now)) continue;
     const dd = Math.hypot(dx, dz) + Math.abs(dy);
     if (dd < bd) { bd = dd; best = q; }
   }
@@ -6279,8 +6299,6 @@ const stepping = new Set(); // soldiers following a route of their own right now
 // is still loaded but mobs don't move at all: their own walking simply doesn't run. A squad sent far away used to walk
 // ~64 blocks from you and freeze there ("doesn't take long orders"). Out there the script carries them along their route
 // itself (scripts still run in loaded land), at walking pace, single file. Back in range, normal walking takes over.
-const REMOTE_R = 44;
-const remoteMemo = new Map(); // id -> { t, v }
 // out of range nobody walks to a formation spot, so at the end of the known route each man steps onto his own free
 // cell (at most 3 blocks, safe ground, 1.5 from everyone) instead of all standing on the last route point
 const remoteSettled = new Map(); // id -> cell he settled on
@@ -6301,14 +6319,34 @@ function remoteSpread(e, now) {
     }
   }
 }
-function isRemote(e, now = tick()) {
-  const c = remoteMemo.get(e.id);
-  if (c && now - c.t < 20) return c.v;
-  let v = true;
-  try { const l = e.location, did = e.dimension.id; for (const p of world.getAllPlayers()) { if (p.dimension.id !== did) continue; const pl = p.location; if (Math.abs(pl.x - l.x) <= REMOTE_R && Math.abs(pl.z - l.z) <= REMOTE_R) { v = false; break; } } } catch { v = false; }
-  remoteMemo.set(e.id, { t: now, v });
-  if (remoteMemo.size > 4000) remoteMemo.clear();
-  return v;
+// Detected, not guessed: the add-on can't read the simulation distance setting, so a soldier counts as out of range only
+// when he should be walking but hasn't moved by a hair for ~2 s (mobs the game doesn't simulate are frozen exactly) and
+// no player is within 32 blocks. The moment he moves on his own again (or a player comes near) he's back to normal.
+const remoteMemo = new Map(); // id -> { x, y, z, frozen (ticks), on }
+function trackRemote(e, now, wantsToMove) {
+  const l = e.location;
+  let r = remoteMemo.get(e.id);
+  if (!r) { r = { x: l.x, y: l.y, z: l.z, frozen: 0, on: false }; remoteMemo.set(e.id, r); return; }
+  const moved = l.x !== r.x || l.y !== r.y || l.z !== r.z;
+  r.x = l.x; r.y = l.y; r.z = l.z;
+  if (moved) { if (!gliders.has(e.id) && !climbing.has(e.id)) { r.frozen = 0; r.on = false; } return; }   // he moved by himself: simulated
+  if (wantsToMove) r.frozen += 4;
+  if (r.frozen >= 40 && !playerNear(e, 32)) r.on = true;
+}
+// he's set to walk (Minecraft's walking on) toward a marker that's well away from him
+function wantsWalk(e, goal) {
+  const mk = goal ? marker(goal) : undefined;
+  return !!mk && dist(mk.location, e.location) > 4 && getJSON(e, "war:st", {}).g === "g_wp";
+}
+function playerNear(e, R) {
+  try { const l = e.location, did = e.dimension.id; for (const p of world.getAllPlayers()) { if (p.dimension.id !== did) continue; const pl = p.location; if (Math.abs(pl.x - l.x) <= R && Math.abs(pl.z - l.z) <= R) return true; } } catch {}
+  return false;
+}
+function isRemote(e) {
+  const r = remoteMemo.get(e.id);
+  if (!r?.on) return false;
+  if (playerNear(e, 32)) { r.on = false; r.frozen = 0; return false; }
+  return true;
 }
 system.runInterval(() => {
   const now = tick();
@@ -6329,7 +6367,8 @@ system.runInterval(() => {
         const m = mid ? getMarches()[mid] : undefined;
         if (!m?.path || m.final) { settle(e, og === undefined ? goal : Number(og), m); continue; }
         pts = m.path; i = routeProgress(m, e.location, e.id);
-        own = (!!cu && goal === cu && !formMode.has(e.id)) || isRemote(e, now);   // (v6.2: out of range: always carried)
+        trackRemote(e, now, wantsWalk(e, goal));
+        own = (!!cu && goal === cu && !formMode.has(e.id)) || isRemote(e);   // (v6.2: out of range: always carried)
         if (!own) {                                                           // on the formation lanes: only help at a gate / when the lane is too close to walk to
           const mk = marker(goal);
           const close = !mk || dist(mk.location, e.location) <= 3.3;
@@ -6345,7 +6384,8 @@ system.runInterval(() => {
       // as a straight walk is safe (no trench, gap or drop on the way); not even the next point: he's carried
       let ahead = -1;
       if (!pts.guess) for (let k = Math.min(pts.length - 1, driveAhead(pts, i, 7)); k > i; k--) if (straightReach(e.dimension, e.location, pts[k])) { ahead = k; break; }
-      const remote = isRemote(e, now);
+      if (pr) trackRemote(e, now, wantsWalk(e, Number(gdp(e, "war:goal") ?? 0)));
+      const remote = isRemote(e);
       if (remote && !gliders.has(e.id) && (i >= pts.length - 2 || (remoteSettled.has(e.id) && flat(e.location, pts[pts.length - 1]) < 5))) { remoteSpread(e, now); continue; }   // the end of the known route: his own spot (and he stays on it)
       const tight = !pts.guess && (glideBan.get(e.id) ?? 0) <= now && (remote || ahead < 0 || tightAt(e.dimension, pts, i, e.location));
       if (tight) {
