@@ -8,7 +8,7 @@ const [scen = "stairsDown,stairsUp", nSeeds = "4", A = "-", B] = process.argv.sl
 const dirs = B ? [A, B] : [A];
 const pick = (d) => {
   const o = {};
-  for (const k of ["arrivedTicks", "bunchAvg", "maxCluster", "apiCallsPerTick", "defendersLeft", "attackersLeft", "firstAttackerUpstairs", "simMsPerTick", "errorCount", "outside", "top", "ticks", "there", "worstStillSec", "bigTp", "clips", "attackersUp", "enemiesUp", "flipsMean", "flipsMax", "fellCourtyard", "fellMoat", "crossed", "firstCross", "defendersUp"]) if (d[k] !== undefined) o[k] = d[k];
+  for (const k of ["arrivedTicks", "bunchAvg", "maxCluster", "apiCallsPerTick", "defendersLeft", "attackersLeft", "firstAttackerUpstairs", "simMsPerTick", "errorCount", "outside", "top", "ticks", "there", "worstStillSec", "bigTp", "clips", "attackersUp", "enemiesUp", "flipsMean", "flipsMax", "fellCourtyard", "fellMoat", "crossed", "firstCross", "defendersUp", "defUp", "foesUp", "edgeSec", "fell", "offWall", "inHutShots"]) if (d[k] !== undefined) o[k] = d[k];
   for (const side of ["attackerShots", "defenderShots"]) if (d[side]) { o[`${side}.wasted`] = d[side].wasted; o[`${side}.n`] = d[side].shots; o[`${side}.meanDist`] = d[side].meanDistReal; o[`${side}.noEnemy`] = d[side].noEnemy; o[`${side}.hit`] = d[side].hit; }
   return o;
 };

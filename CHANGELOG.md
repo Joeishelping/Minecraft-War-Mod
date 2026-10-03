@@ -1,5 +1,34 @@
 # War Engine changelog
 
+## v6.9 (Rooftops, medics, shots through walls)
+
+- **Rooftops and wall-tops are used, not feared.** A man who wants a shot down at the enemy now steps up to the edge
+  of a roof (or a wall-top with no battlement) and fires from there. The drop must be straight ahead, not a corner, and
+  never over lava. He doesn't walk along the edge. If an enemy who could shove him off (a player, a hound, a man with a
+  blade) comes within 6 blocks, he backs off as before. Before, the "keep away from the drop" rule held everyone a
+  block or more back, where a flat roof hides everything below.
+- **A man told to hold a roof, a wall or an upper floor stays up there.** Fights no longer route him down to the
+  enemy's level: he holds the high ground. (Retreats and medics still go wherever they need to.)
+- **Firing positions:** the spots nearest the enemy (the front edge) are now always considered. Before, the first cut
+  ranked them low for the walk, and they were never checked for a shot.
+- **Medics:**
+  - Fixed: a medic standing next to a downed man could fail to ever revive him. The revive only happened on certain
+    ticks of a 2 s clock, and some medics' thoughts never landed on them. He now kneels for 1 s and revives.
+  - Reaching a man who lies on a step, a slab or a roof edge counts.
+  - A medic who can't get any closer for 15 s gives that man up for 30 s (and says so). The man then calls "Medic!"
+    again.
+  - Fixed: "Medic!" was never called once any medic had ever been assigned, even one who died or gave up. Now only
+    a medic actually on his way counts.
+- **No more firing at old spots through walls and ceilings.** Covering fire on a window or doorway stops as soon as
+  the shooter no longer has a line to it from where he now stands. Before, a man who kept walking (into a building,
+  behind a wall) kept firing at the old spot. The line-of-sight memory no longer reuses an old answer when the
+  per-tick budget runs out.
+- **Bullets go through walls, by accident.** Nobody aims at a wall, but shots that go into one happen anyway: a miss
+  into cover, a burst that clips a window frame, a man who ducks as the trigger is pulled. About 3 in 10 of those
+  come out the far side and fly on, slowed. That needs a wall no more than 3 blocks thick, not made of obsidian,
+  bedrock, iron, netherite, reinforced deepslate and similar. Rockets never do it. Players can be hit this way
+  (never in creative).
+
 ## v6.8 (Callouts: more often, never doubled, a test menu)
 
 - **They talk a lot more.** Most triggers fire more often: "Enemy spotted!" (3 in 4), "I'm hit!", "Taking heavy

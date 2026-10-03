@@ -1,4 +1,4 @@
-// War Engine v6.8: faction NPC war framework
+// War Engine v6.9: faction NPC war framework
 import { world, system, Player, ItemStack, EquipmentSlot, GameMode } from "@minecraft/server";
 import { ActionFormData, ModalFormData, FormCancelationReason } from "@minecraft/server-ui";
 import { SKINS } from "./skins.js";
@@ -2943,7 +2943,7 @@ function clearShot(dim, from, to) {
   if (!inner) { inner = new Map(); LOS.set(ka, inner); }
   const c = inner.get(kb), now = tick();
   if (c && now - c.t < (bigBattle ? 20 : 10)) return c.v;
-  if (losThisTick > (bigBattle ? 160 : 260)) return c ? c.v : false;  // over the per-tick cap: reuse what we knew (v6.0: lower caps)
+  if (losThisTick > (bigBattle ? 160 : 260)) return c && now - c.t < 60 ? c.v : false;  // over the per-tick cap: reuse what we knew, if it's recent (v6.0: lower caps; v6.9: never an old answer from where he no longer is)
   losThisTick++;
   let v = false;
   try { v = !dim.getBlockFromRay(from, { x: dx / l, y: dy / l, z: dz / l }, { maxDistance: l - 0.3, includeLiquidBlocks: false, includePassableBlocks: false }); } catch {}
@@ -3092,7 +3092,48 @@ function fireGun(e, spec, t, aim) {
     const pc = b.getComponent("minecraft:projectile");
     if (pc) { pc.owner = e; pc.shoot({ x: dir.x * spec.speed, y: dir.y * spec.speed, z: dir.z * spec.speed }); }
   } catch {}
+  wallbang(e, spec, from, dir, l + 2);
 }
+// v6.9: through the wall, by accident. Nobody aims at a wall: but a shot that goes wide into cover, a burst at a window
+// that clips the frame, a man who ducks behind a fence as the trigger is pulled: about 3 in 10 of those go through, if
+// the wall is no more than 3 blocks thick and isn't made of something no bullet gets through (obsidian, bedrock, iron,
+// netherite...). The bullet comes out the far side and flies on. (The one that hit the wall still hits it.)
+const BULLETPROOF = ["obsidian", "bedrock", "barrier", "reinforced_deepslate", "netherite_block", "ancient_debris", "iron_block", "iron_door", "iron_trapdoor", "iron_bars", "anvil", "enchanting_table", "end_portal_frame", "respawn_anchor", "ender_chest", "structure_block", "command_block", "jigsaw", "end_gateway", "end_portal", "border_block"];
+const WALLBANG = { chance: 0.3, thick: 3, perTick: 8 };
+let bangsThisTick = 0, bangTick = -1;
+function wallbang(e, spec, from, dir, maxL) {
+  try {
+    if (spec.bullet === "ww:nbazooka_projectile" || Math.random() >= WALLBANG.chance) return;
+    const now = tick(); if (now !== bangTick) { bangTick = now; bangsThisTick = 0; }
+    if (bangsThisTick >= WALLBANG.perTick) return;
+    bangsThisTick++;
+    const dim = e.dimension, n = Math.hypot(dir.x, dir.y, dir.z) || 1, u = { x: dir.x / n, y: dir.y / n, z: dir.z / n };
+    const hit = dim.getBlockFromRay(from, u, { maxDistance: maxL, includeLiquidBlocks: false, includePassableBlocks: false });
+    if (!hit?.block) return;                                          // nothing in the way: the bullet itself does the rest
+    const bl = hit.block.location;
+    let t = Math.max(0, (bl.x + 0.5 - from.x) * u.x + (bl.y + 0.5 - from.y) * u.y + (bl.z + 0.5 - from.z) * u.z - 1.2);
+    const cells = new Set(); let out;
+    for (let k = 0; k < 60 && t < maxL; k++, t += 0.15) {
+      const x = Math.floor(from.x + u.x * t), y = Math.floor(from.y + u.y * t), z = Math.floor(from.z + u.z * t);
+      const b = tBlock(dim, x, y, z);
+      if (!b) return;
+      if (!(b.isAir || b.isLiquid || passable(b))) {
+        if (BULLETPROOF.some((w) => b.typeId.includes(w))) return;
+        cells.add(`${x},${y},${z}`);
+        if (cells.size > WALLBANG.thick) return;                      // too thick
+      } else if (cells.size) { out = t; break; }
+    }
+    if (out === undefined) return;
+    const at = { x: from.x + u.x * (out + 0.3), y: from.y + u.y * (out + 0.3), z: from.z + u.z * (out + 0.3) };
+    const sp = spec.speed * (0.85 - 0.1 * cells.size);               // (slowed by the wall)
+    const b2 = dim.spawnEntity(spec.bullet, at);
+    const pc = b2.getComponent("minecraft:projectile");
+    if (pc) { pc.owner = e; pc.shoot({ x: u.x * sp, y: u.y * sp, z: u.z * sp }); }
+    wallbangs++;
+  } catch {}
+}
+let wallbangs = 0;
+const bangCount = () => wallbangs;
 function gunTick(e, now) {
   if (downed.has(e.id)) return;
   const d = sd(e);
@@ -3130,8 +3171,11 @@ function gunTick(e, now) {
   const aiming = now - st.seen < 40 || (st.supp?.until ?? 0) > now;
   if (!!P(e, "war:aiming") !== aiming) setP(e, "war:aiming", aiming);
   if (!st.target && st.supp && now < st.supp.until && now >= st.next && st.supp.ent?.isValid && !downed.has(st.supp.ent.id)) {   // v5.4: suppressing a window / doorway
-    const p = st.supp.p;
-    if (!friendlyInLine(e, d, headLoc(e), p, st.supp.ent) && turnTo(e, p, 20) <= 25) {
+    const p = st.supp.p, hl = headLoc(e);
+    // v6.9: only while there's still a line from where he stands NOW to that window / doorway. He kept walking (into a
+    // building, behind a wall) and kept firing at the old spot: into the ceiling, into the wall in front of him.
+    if (!clearShot(e.dimension, hl, p) && !clearShot(e.dimension, hl, { x: p.x, y: p.y + 0.4, z: p.z })) { st.supp = undefined; st.next = now + 4; return; }
+    if (!friendlyInLine(e, d, hl, p, st.supp.ent) && turnTo(e, p, 20) <= 25) {
       fireAtPoint(e, spec, { x: p.x, y: p.y - 1, z: p.z });
       st.lastShot = now; st.ammo--;
       if (st.ammo > 0) st.next = now + Math.max(2, spec.gap); else { st.ammo = spec.mag; st.next = now + spec.reload + Math.floor(Math.random() * 8); }
@@ -3611,6 +3655,8 @@ function engagement(e, d, now, orderGoal, melee) {
         const spot = spotNear(e, (w) => clearShot(e.dimension, { x: w.x, y: w.y + 1.6, z: w.z }, tc), anchor, leash, 8);
         if (spot) { const mv = moveTo(e, spot, now, true, "spot"); if (mv) { note(e, "moving for a clear shot"); return mv; } }
         if (anchor && freeOf(e) === false) return undefined;                                   // exactly as ordered: stay
+        if (t.location.y < e.location.y - 2.5) { const pq = perchFor(e, tc, anchor, leash, now); if (pq) { const mv = moveTo(e, pq, now, true, "spot"); if (mv) { note(e, "stepping up to the edge for a shot"); return mv; } } }   // (v6.9)
+        if (anchor && t.location.y < e.location.y - 2.5 && Math.abs(anchor.location.y - e.location.y) < 1.5) { note(e, "holding the high ground"); return { g: "g_none", t: "t_mid", urgent: false }; }   // (v6.9: told to hold a roof / a wall: he never gives it up to go down to them)
         if (Math.abs(t.location.y - e.location.y) > 2.5) {
           if (!personal.has(e.id)) planPersonalTo(e, "advance", { x: t.location.x, y: t.location.y, z: t.location.z }, now);
           return followPersonal(e, now);
@@ -5128,11 +5174,13 @@ function fireAtPoint(e, spec, p) {
   const n = Math.hypot(dx, dy, dz) || 1;
   const r = () => (Math.random() + Math.random() - 1) * spec.spread * 3;
   const dir = { x: dx / n + r(), y: dy / n + r(), z: dz / n + r() };
+  const from = { x: h.x + dir.x * 0.9, y: h.y - 0.2 + dir.y * 0.9, z: h.z + dir.z * 0.9 };
   try {
-    const b = e.dimension.spawnEntity(spec.bullet, { x: h.x + dir.x * 0.9, y: h.y - 0.2 + dir.y * 0.9, z: h.z + dir.z * 0.9 });
+    const b = e.dimension.spawnEntity(spec.bullet, from);
     const pc = b.getComponent("minecraft:projectile");
     if (pc) { pc.owner = e; pc.shoot({ x: dir.x * spec.speed, y: dir.y * spec.speed, z: dir.z * spec.speed }); }
   } catch {}
+  wallbang(e, spec, from, dir, n + 2);
   for (const o of nearbyCombatants(e.dimension.id, p, 4)) if (o.typeId === SOLDIER) suppB.set(o.id, Math.min(30, (suppB.get(o.id) ?? 0) + 1));
 }
 function nearestKnownB(S, e) { let b, bd = 1e9; for (const q of S.known.values()) { const dd = Math.hypot(q.x - e.location.x, q.z - e.location.z); if (dd < bd) { bd = dd; b = q; } } return b ? { q: b, dd: bd } : undefined; }
@@ -5182,14 +5230,14 @@ function standAt(dim, x, y, z, now = tick()) {
   return v;
 }
 // v5.9: a walk in a straight line, a block at a time, up or down at most one block per step (most spots in the open)
-function straightReach(dim, from, to) {
+function straightReach(dim, from, to, endOk = false) {
   const L = flat(from, to);
   if (L > 16) return false;
   const n = Math.ceil(L), now = tick();
   let y = Math.floor(from.y + 0.01);
   for (let k = 1; k <= n; k++) {
     const x = Math.floor(from.x + ((to.x - from.x) * k) / n), z = Math.floor(from.z + ((to.z - from.z) * k) / n);
-    if (dangerNear(dim, { x: x + 0.5, y, z: z + 0.5 })) return false;          // v6.2: past an edge / lava: not a walk for Minecraft
+    if (dangerNear(dim, { x: x + 0.5, y, z: z + 0.5 }) && !(endOk && k === n)) return false;   // v6.2: past an edge / lava: not a walk for Minecraft (v6.9: but a perch at the end is)
     if (standAt(dim, x, y, z, now)) continue;
     if (standAt(dim, x, y + 1, z, now)) {                                       // a step up: room over his head to jump it
       const px = from.x + ((to.x - from.x) * (k - 1)) / n, pz = from.z + ((to.z - from.z) * (k - 1)) / n;
@@ -5811,7 +5859,8 @@ system.runInterval(() => {
     // v6.6: calling for a medic: every ~18 s, only if no medic is already on his way, and only about half the wounded call
     if (now % 20 === 0 && (e.id.charCodeAt(e.id.length - 1) & 1) && now - Number(medicCall.get(id) ?? -9999) > 360) {
       medicCall.set(id, now);
-      let coming = false; for (const mt of medicTask.values()) if (mt.target === id) { coming = true; break; }
+      let coming = false;
+      for (const [mid, mt] of medicTask) if (mt.target === id && now - (mt.t ?? 0) < 60) { const m = world.getEntity(mid); if (m?.isValid && !downed.has(mid)) { coming = true; break; } }   // (v6.9: a medic who's down, gone or gave up isn't coming)
       if (!coming) callout(e, "Medic!");
     }
     // pinned where he fell, lying down, at the edge of death: no getting up on his own
@@ -5855,12 +5904,15 @@ system.runInterval(() => {
 }, 10);
 
 // ---- medics: go to the worst wounded (the downed first), revive / heal; otherwise wait at a rally flag
-const medicTask = new Map(); // medic id -> { target, slot }
+const medicTask = new Map(); // medic id -> { target, slot, t (last thought about it), bestD, progT, reachT }
+const medicBan = new Map();  // "medic>patient" -> tick he may try again (couldn't reach him)
+system.runInterval(() => { const now = tick(); for (const [k, v] of medicBan) if (now >= v) medicBan.delete(k); for (const [k, mt] of medicTask) if (now - (mt.t ?? 0) > 200) medicTask.delete(k); }, 200);
 function medicMove(e, d, now) {
   if (d.div !== "medic" || d.surr || isRiding(e)) return undefined;
   let best, bs = -1;
   for (const o of nearbyCombatants(e.dimension.id, e.location, 40)) {
     if (o.id === e.id || o.typeId !== SOLDIER) continue;
+    if (now < (medicBan.get(`${e.id}>${o.id}`) ?? 0)) continue;          // (v6.9: one he couldn't get to; tried again later)
     try {
       if (!isFriendly(d.faction, Number(P(o, "war:faction")))) continue;
       const h = o.getComponent("minecraft:health"); if (!h) continue;
@@ -5871,18 +5923,29 @@ function medicMove(e, d, now) {
     } catch {}
   }
   if (best) {
-    const dd = dist(best.location, e.location);
-    if (dd < 3) {
-      if (isDowned(best)) { if (now % 40 < 10) { revive(best, 8); note(e, "revived a soldier"); callout(e, "You're okay!"); const rb = best; system.runTimeout(() => callout(rb, "Thanks!"), 30); } }
+    // v6.9: beside him (lying on a step, a slab or the edge of a roof counts): kneel, then up he gets. Before, the revive
+    // only happened on certain ticks of a 2 s clock, and a medic whose thought fell between them never revived anyone.
+    const dd = flat(best.location, e.location), dy = Math.abs(best.location.y - e.location.y);
+    let mt = medicTask.get(e.id);
+    if (!mt || mt.target !== best.id) { mt = { target: best.id, slot: 0, t: now, bestD: dd, progT: now }; medicTask.set(e.id, mt); if (isDowned(best)) callout(e, "Moving up!"); }   // (v6.8: the medic answers "Medic!")
+    mt.t = now;
+    if (dd < 2.8 && dy < 2.2) {
+      mt.progT = now;
+      if (isDowned(best)) {
+        mt.reachT ??= now;
+        note(e, "treating a downed soldier");
+        if (now - mt.reachT >= 20) { revive(best, 8); mt.reachT = undefined; note(e, "revived a soldier"); callout(e, "You're okay!"); const rb = best; system.runTimeout(() => callout(rb, "Thanks!"), 30); }
+      }
+      turnTo(e, best.location, 30);
       return { g: "g_none", t: "t_off", urgent: false };
     }
-    let mt = medicTask.get(e.id);
-    if (!mt || mt.target !== best.id || !marker(mt.slot) || now % 40 < 10) {
-      const slot = makeWaypoint(e.dimension, best.location);
-      if (!slot) return undefined;
-      mt = { target: best.id, slot }; medicTask.set(e.id, mt);
-      if (isDowned(best)) callout(e, "Moving up!");                 // (v6.8: the medic answers "Medic!": he's on his way)
+    mt.reachT = undefined;
+    if (dd < mt.bestD - 1) { mt.bestD = dd; mt.progT = now; }
+    if (now - mt.progT > 300) {                                     // no closer for 15 s: he can't get there from here
+      medicBan.set(`${e.id}>${best.id}`, now + 600); medicTask.delete(e.id); note(e, "can't reach him");
+      return undefined;
     }
+    if (!mt.slot || !marker(mt.slot) || now % 40 < 10) { try { mt.slot = makeWaypoint(e.dimension, best.location) ?? 0; } catch { mt.slot = 0; } }
     note(e, isDowned(best) ? "going to a downed soldier" : "treating the wounded");
     const mv = travel(e, best.location, "medic", now, true);
     return mv ? { ...mv, t: "t_off" } : undefined;
@@ -6673,10 +6736,44 @@ function firingSlot(dim, q) {
   const solid = (bx, bz) => { try { const a = tBlock(dim, bx + 0.5, y, bz + 0.5), b = tBlock(dim, bx + 0.5, y + 1, bz + 0.5); return !!a && !!b && !(a.isAir || passable(a)) && !(b.isAir || passable(b)); } catch { return false; } };
   return ax ? solid(x, z - 1) && solid(x, z + 1) : solid(x - 1, z) && solid(x + 1, z);   // cover on both sides
 }
-function safeSpot(e, spot, now) {
+// v6.9: a perch: the edge of a roof or a wall-top with no battlement, the drop straight ahead (one side, not a corner, no
+// lava below). A man who wants a shot down at the enemy may stand there; nobody walks along it, and no enemy who could
+// shove him off (a player, a hound, a man with a blade) is within 6.
+function perchSpot(e, q) {
+  const dim = e.dimension, x = Math.floor(q.x), y = Math.floor(q.y + 0.01), z = Math.floor(q.z);
+  let ax = 0, az = 0, n = 0;
+  for (const [dx, dz] of [[1, 0], [-1, 0], [0, 1], [0, -1]]) if (dropOrHazard(dim, x + dx + 0.5, y, z + dz + 0.5)) { if (hazardCell(dim, x + dx + 0.5, y, z + dz + 0.5) || hazardBelow(dim, x + dx + 0.5, y, z + dz + 0.5)) return false; ax += dx; az += dz; n++; }
+  if (n !== 1) return false;
+  const df = Number(P(e, "war:faction") ?? 0);
+  for (const c of nearSnap(dim.id, q, 6)) if (!c.down && c.id !== e.id && (c.type === "minecraft:player" || c.type === HOUND || (c.type === SOLDIER && !GUNS.includes(String(gdp(c.e, "war:weapon") ?? "")))) && isHostile(df, c.f)) return false;
+  return true;
+}
+// v6.9: the nearest edge cell (a perch or a battlement gap) within 8 on his level with a shot down at the enemy. The
+// ordinary search for a clear shot only looks a block or two around him, and on a roof every such spot is blind.
+function perchFor(e, tc, anchor, leash, now) {
+  const dim = e.dimension, l = e.location, bx = Math.floor(l.x), by = Math.floor(l.y + 0.01), bz = Math.floor(l.z);
+  const cands = [];
+  for (let dx = -8; dx <= 8; dx++) for (let dz = -8; dz <= 8; dz++) {
+    const r = Math.hypot(dx, dz); if (r > 8) continue;
+    const q = { x: bx + dx + 0.5, y: by, z: bz + dz + 0.5 };
+    if (anchor && flat(q, anchor.location) > Math.max(leash, 8)) continue;
+    if (!dangerNear(dim, q) || !standAt(dim, bx + dx, by, bz + dz, now) || claimedByOther(q, e.id, now) || failedNear(e, q, now)) continue;
+    cands.push({ q, r });
+  }
+  cands.sort((a, b) => a.r - b.r);
+  let rays = 0;
+  for (const { q } of cands) {
+    if (!firingSlot(dim, q) && !perchSpot(e, q)) continue;
+    if (++rays > 8) break;
+    if (clearShot(dim, { x: q.x, y: q.y + 1.6, z: q.z }, tc)) return q;
+  }
+  return undefined;
+}
+function hazardBelow(dim, x, y, z) { for (let k = 1; k <= 12; k++) { const b = tBlock(dim, x, y - k, z); if (!b) return false; if (b.typeId.includes("lava") || TI(b.typeId).hazard) return true; if (!(b.isAir || passable(b))) return false; } return false; }
+function safeSpot(e, spot, now, shot = false) {
   const dim = e.dimension;
   if (!spot) return undefined;
-  if ((!dangerNear(dim, spot) || firingSlot(dim, spot)) && !claimedByOther(spot, e.id, now) && !failedNear(e, spot, now) && troubleAt(dim.id, spot.x, spot.z) < 3) return spot;
+  if ((!dangerNear(dim, spot) || firingSlot(dim, spot) || (shot && perchSpot(e, spot))) && !claimedByOther(spot, e.id, now) && !failedNear(e, spot, now) && troubleAt(dim.id, spot.x, spot.z) < 3) return spot;
   const bx = Math.floor(spot.x), by = Math.floor(spot.y + 0.01), bz = Math.floor(spot.z);
   let best, bd = 1e9;
   for (let dx = -3; dx <= 3; dx++) for (let dz = -3; dz <= 3; dz++) for (const dy of [0, 1, -1]) {
@@ -6689,15 +6786,20 @@ function safeSpot(e, spot, now) {
 }
 const onPassage = (e) => dangerNear(e.dimension, e.location);
 function moveTo(e, spot, now, urgent = true, kind = "spot") {
-  const s0 = safeSpot(e, spot, now);
+  const s0 = safeSpot(e, spot, now, kind === "spot");
   if (!s0) return undefined;
   claimSpot(e, s0, now);
-  if (isIndoors(e) || onStairs(e.dimension, e.location) || onPassage(e) || !straightReach(e.dimension, e.location, s0)) return travel(e, s0, kind, now, urgent);
+  const perch = kind === "spot" && dangerNear(e.dimension, s0) && !firingSlot(e.dimension, s0);   // (v6.9: a step up to the edge of a roof: a plain walk, he stops there)
+  if (isIndoors(e) || onStairs(e.dimension, e.location) || onPassage(e) || !straightReach(e.dimension, e.location, s0, perch)) return travel(e, s0, kind, now, urgent);
   const slot = myMarker(e, s0);
-  return slot ? { g: "g_wp", slot, t: "t_mid", urgent } : undefined;
+  // (v6.9: to a perch, Minecraft's own chase is off for the few steps: with an enemy below that it can't see, it walked
+  //  him toward the enemy (or nowhere) instead of to the edge. The script's gun doesn't need it.)
+  return slot ? { g: "g_wp", slot, t: perch ? "t_off" : "t_mid", urgent } : undefined;
 }
 function travel(e, dest, kind, now, urgent = false) {
   if (!dest) return undefined;
+  // v6.9: a man holding a roof, a wall-top or an upper floor stays up there: no move of the fight takes him down off it
+  if (kind !== "rally" && kind !== "medic") { const d = sd(e); if (POST_FUNCS.includes(d.func)) { const an = marker(d.goal); if (an && an.location.y - dest.y > 3 && e.location.y > an.location.y - 1.5) return undefined; } }
   const inside = isIndoors(e) || onStairs(e.dimension, e.location);  // v5.5: indoors / on stairs every move is a real route (the glider walks it)
   if (!inside && !onPassage(e) && flat(dest, e.location) <= 12 && Math.abs(dest.y - e.location.y) <= 1 && straightReach(e.dimension, e.location, dest)) {   // (v6.2: only a safe straight walk)
     const slot = myMarker(e, dest);
@@ -7737,6 +7839,10 @@ function tacSpot(e, d, S, o, now) {
   scored.sort((a, b) => b.s - a.s);
   const top = scored.filter((c) => c.r === 0 || !onWayThrough(dim, c)).slice(0, 6);   // (doorway / stairs check only for the leaders)
   if (!top.includes(scored.find((c) => c.r === 0) ?? top[0])) { const h = scored.find((c) => c.r === 0); if (h) top.push(h); }   // always judge where he stands too
+  // v6.9: and the two spots nearest the enemy (the edge of a roof, the front of a wall-top): the cheap first cut ranks
+  // them low for the walk, and then nobody ever looked to see they were the only places with a shot down at him
+  const kq = known[0];
+  for (const c of scored.filter((c) => c.r > 0 && !top.includes(c)).sort((a, b) => flat(a, kq) - flat(b, kq)).slice(0, 2)) top.push(c);
   let rays = 0;
   for (const c of top) {
     let cover = 0, shot = 0;

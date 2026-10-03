@@ -16,7 +16,7 @@ const runDir = path.join(here, `run_${process.pid}`);
 fs.mkdirSync(runDir, { recursive: true });
 fs.cpSync(scriptsDir, runDir, { recursive: true });
 // expose the add-on's internals to the scenarios (appended to the copy only)
-const HOOK = ["voiceMenu", "callout", "warTable", "eggUse", "getRel", "relAt", "fires", "coalitions", "held", "holding", "stagger", "putDown", "allOf", "edgeFearT", "cleanupMenu", "purgeState", "gliders", "glideBan", "driveOn", "formMode", "tightAt", "combatLock", "routeProgress", "getLearned", "learned", "generals", "planRoute", "BW", "BW_F", "HEAD_K", "medicMove", "shakenMove", "waterExit", "followPersonal", "spreadMove", "combatMove", "engagement", "reinforceMove", "patrolSweep", "marker", "think", "routeOf", "lookahead", "queuedBehind", "climbing", "laneOf", "trackIdx", "giveOrder", "startMarch", "giveFunction", "setupSoldier", "sd", "perc", "squads", "getMarches", "personal", "downed", "goDown", "marker", "gunState", "brain", "notes", "setRelPair", "travel", "isDowned"];
+const HOOK = ["bangCount", "wallbang", "WALLBANG", "perchSpot", "safeSpot", "dangerNear", "voiceMenu", "callout", "warTable", "eggUse", "getRel", "relAt", "fires", "coalitions", "held", "holding", "stagger", "putDown", "allOf", "edgeFearT", "cleanupMenu", "purgeState", "gliders", "glideBan", "driveOn", "formMode", "tightAt", "combatLock", "routeProgress", "getLearned", "learned", "generals", "planRoute", "BW", "BW_F", "HEAD_K", "medicMove", "shakenMove", "waterExit", "followPersonal", "spreadMove", "combatMove", "engagement", "reinforceMove", "patrolSweep", "marker", "think", "routeOf", "lookahead", "queuedBehind", "climbing", "laneOf", "trackIdx", "giveOrder", "startMarch", "giveFunction", "setupSoldier", "sd", "perc", "squads", "getMarches", "personal", "downed", "goDown", "marker", "gunState", "brain", "notes", "setRelPair", "travel", "isDowned"];
 if (opt.thinkdbg) { const f = path.join(runDir, "main.js"); fs.writeFileSync(f, fs.readFileSync(f, "utf8").replace("    // how far each stationary order may leave its spot to fight", "    if (globalThis.__thinkDbg) globalThis.__thinkDbg(e, engaged, cu, d);\n    // how far each stationary order may leave its spot to fight")); }
 fs.appendFileSync(path.join(runDir, "main.js"), `\nglobalThis.__war = {};\n${HOOK.map((n) => `try { globalThis.__war.${n} = ${n}; } catch {}`).join("\n")}\n`);
 loadDefs(path.join(root, "War Engine BP"));
@@ -677,12 +677,74 @@ const S = {
     const tp0 = MC.Entity.prototype.teleport;
     for (let t = 0; t < Number(opt.ticks ?? 2400); t += 10) {
       step(10);
-      if (opt.trace && SIM.tick % 100 === 0) console.error("T", SIM.tick, def.map((e) => `${e._loc.x.toFixed(1)},${e._loc.y.toFixed(0)},${e._loc.z.toFixed(1)}:${(W.notes.get(e.id)?.text ?? "").slice(0, 16)}`).join(" | "));
+      if (opt.trace && SIM.tick % Number(opt.trace) === 0) console.error("T", SIM.tick, def.map((e) => `${e._loc.x.toFixed(1)},${e._loc.y.toFixed(0)},${e._loc.z.toFixed(1)}h${Math.round(e.hp)}${W.isDowned(e) ? "D" : ""}:${(W.notes.get(e.id)?.text ?? "").slice(0, 16)}`).join(" | "));
     }
     offWall = def.filter((e) => e.isValid && (e._loc.y < 5.5 || e._loc.z > 3.9 || e._loc.z < -0.1)).length;
     report({ offWall, defUp: def.filter((e) => e.isValid && !W.isDowned(e)).length, foesUp: foes.filter((e) => e.isValid && !W.isDowned(e)).length, final: def.map((e) => `${e._loc.x.toFixed(1)},${e._loc.y.toFixed(1)},${e._loc.z.toFixed(1)}`), notes: Object.fromEntries(Object.entries(M.notes).sort((a, b) => b[1] - a[1]).slice(0, 10)) });
   },
 
+  // v6.9: a flat roof (no parapet), 8 up. Defenders hold 3-4 blocks back from the edge; the enemy comes across open
+  //   ground to a hut. They should step up to the edge to shoot down (and not fall), not stand back seeing nothing.
+  //   mode=medic: no enemy; a man is down right at the roof edge, a medic on the roof must reach and revive him.
+  async rooftop() {
+    SIM.bounds = { x0: -40, x1: 40, z0: -20, z1: 70, y0: -8, y1: 30 };
+    fill(-40, -4, -20, 40, -1, 70, "grass_block");
+    fill(-15, 0, 0, 15, 7, 14, "stone_bricks");                           // the block: walk on the roof at y 8, edge at z 14
+    if (opt.ladder) fill(-14, 0, -1, -14, 7, -1, "ladder");
+    const hut = opt.hut !== "0";
+    if (hut) { fill(-3, 0, 24, 3, 4, 30, "oak_planks"); fill(-2, 0, 25, 2, 3, 29, "air"); setBlock(0, 0, 30, "air"); setBlock(0, 1, 30, "air"); setBlock(0, 1, 24, "air"); setBlock(-2, 1, 24, "air"); setBlock(2, 1, 24, "air"); }   // a hut, door at the back, windows facing the roof
+    spawnPlayer({ x: 0, y: 8, z: 4 });
+    W.setRelPair(1, 2, "1", false);
+    const out = {};
+    if (opt.mode === "medic") {
+      const hurt = soldier(1, { x: 0.5, y: 8, z: 13.5 }, "rifle", 1, "hold");
+      const med = overworld.spawnEntity(SOLDIER, opt.medGround ? { x: 8.5, y: 0, z: 20.5 } : { x: 8.5, y: 8, z: 4.5 }, { spawnEvent: "war:init" });
+      W.setupSoldier(med, { faction: 1, squad: 1, weapon: "rifle", ranged: true, div: "medic", radius: 8, func: "__none" }, player); W.giveFunction(med, "hold", player);
+      step(40); SIM.voices = [];
+      W.goDown(hurt);
+      let at = -1;
+      for (let t = 0; t < Number(opt.ticks ?? 1200) && at < 0; t += 5) { step(5); if (!W.isDowned(hurt)) at = t; }
+      report({ revivedAfter: at, medicAt: `${med._loc.x.toFixed(1)},${med._loc.y.toFixed(1)},${med._loc.z.toFixed(1)}`, medicFell: med._loc.y < 7, note: W.notes.get(med.id)?.text, voices: SIM.voices.map((v) => v.split(" ")[1]) });
+      return;
+    }
+    const def = []; for (let i = 0; i < 4; i++) def.push(soldier(1, { x: -6 + i * 4 + 0.5, y: 8, z: 10.5 }, "rifle", 1, opt.func ?? "hold"));
+    step(40);
+    if (opt.perch) console.error("PERCH", W.perchSpot(def[0], { x: 0.5, y: 8, z: 14.5 }), W.dangerNear(overworld, { x: 0.5, y: 8, z: 14.5 }), JSON.stringify(W.safeSpot(def[0], { x: 0.5, y: 8, z: 14.5 }, SIM.tick, true)));
+    const foes = []; for (let i = 0; i < 6; i++) foes.push(soldier(2, { x: -5 + i * 2 + 0.5, y: 0, z: 55.5 }, "rifle", 1, "hold"));
+    step(20);
+    await W.giveOrder(player, { faction: 2, order: 0, squad: 0, count: 0, radius: 200, stance: "aggressive", ao: 100, free: true, target: 5, cx: 0, cz: 27, cy: 0, then: "hold" });
+    const t0 = SIM.tick; let edgeT = 0, fell = 0, inHutShots = 0;
+    if (opt.mvdbg) globalThis.__mvdbg = (e, a, b, p, sr, ind, pas) => { if (e === def[Number(opt.mvdbg)] && SIM.tick % 50 < 5) console.error("MV", SIM.tick, JSON.stringify(e._loc), "want", JSON.stringify(a), "safe", JSON.stringify(b), "perch", p, "straight", sr, ind, pas, "pers", W.personal.has(e.id), JSON.stringify(W.personal.get(e.id)?.pts?.slice(-2))); };
+    const s0 = SIM.shots.length;
+    for (let t = 0; t < Number(opt.ticks ?? 2400); t += 10) {
+      step(10);
+      if (opt.edbg && SIM.tick % 100 === 0) { const e = def[Number(opt.edbg)]; if (e.isValid) { const d = W.sd(e); let r; try { r = W.engagement(e, d, SIM.tick, d.goal, false); } catch (err) { r = String(err); } console.error("E", SIM.tick, JSON.stringify(e._loc), d.func, "goal", d.goal, JSON.stringify(W.marker(d.goal)?._loc), "nav", JSON.stringify(e.navGoal), "grp", [...e.groups].join(","), "eng", JSON.stringify(r), "pers", JSON.stringify(W.personal.get(e.id) ? { k: W.personal.get(e.id).kind, n: W.personal.get(e.id).pts?.length, end: W.personal.get(e.id).pts?.at(-1), pl: W.personal.get(e.id).planning } : null), "st", JSON.stringify(e.dyn.get("war:st")), "threat", W.perc.get(e.id)?.threat?._loc ? JSON.stringify(W.perc.get(e.id).threat._loc) : "-", "note", W.notes.get(e.id)?.text); } }
+      sample(1); for (const e of def) if (e.isValid && !W.isDowned(e) && e._loc.y > 7.5 && e._loc.z > 13) edgeT += 10;
+      if (opt.trace && SIM.tick % Number(opt.trace) === 0) console.error("T", SIM.tick, def.map((e) => `${e._loc.x.toFixed(1)},${e._loc.y.toFixed(0)},${e._loc.z.toFixed(1)}h${Math.round(e.hp)}${W.isDowned(e) ? "D" : ""}:${(W.notes.get(e.id)?.text ?? "").slice(0, 18)}`).join(" | "), "||", foes.map((e) => `${e._loc.x.toFixed(0)},${e._loc.z.toFixed(0)}:${(W.notes.get(e.id)?.text ?? "").slice(0, 14)}`).join(" "));
+      if (!foes.some((e) => e.isValid && !W.isDowned(e))) break;
+    }
+    fell = def.filter((e) => e.isValid && e._loc.y < 7).length;
+    for (const x of SIM.shots.slice(s0)) if (x.owner?.props?.get("war:faction") === 2 && x.from.x > -3 && x.from.x < 3 && x.from.z > 24 && x.from.z < 30) inHutShots++;
+    const hutShotsBlocked = SIM.shots.slice(s0).filter((x) => x.owner?.props?.get("war:faction") === 2 && x.from.z > 24 && x.from.z < 30 && Math.abs(x.from.x) < 3 && x.block).length;
+    report({ ticks: SIM.tick - t0, defUp: def.filter((e) => e.isValid && !W.isDowned(e)).length, foesUp: foes.filter((e) => e.isValid && !W.isDowned(e)).length, edgeSec: +(edgeT / 20).toFixed(1), fell, inHutShots, hutShotsBlocked, defenderShots: shotStats(1, t0), attackerShots: shotStats(2, t0), notes: M.notes });
+  },
+
+  // v6.9: through the wall by accident. A rifleman 20 blocks from a man behind a wall (thick=N blocks of mat=block)
+  //   with a window at head height. Misses into the wall sometimes come out the far side.
+  async wallbang() {
+    SIM.bounds = { x0: -30, x1: 30, z0: -30, z1: 40, y0: -8, y1: 30 };
+    fill(-30, -4, -30, 30, -1, 40, "grass_block");
+    const th = Number(opt.thick ?? 2), mat = opt.mat ?? "stone_bricks";
+    fill(-4, 0, 10, 4, 2, 10 + th - 1, mat);
+    fill(0, 1, 10, 0, 1, 10 + th - 1, "air");                             // a window, head-high for a man crouched behind
+    spawnPlayer({ x: 0, y: 0, z: -20 });
+    W.setRelPair(1, 2, "1", false);
+    const a = soldier(1, { x: 0.5, y: 0, z: -9.5 }, "rifle", 1, "post");
+    const b = soldier(2, { x: 0.5, y: 0, z: 10 + th + 0.5 }, "rifle", 1, "post");
+    b.maxHp = 1e6; b.hp = 1e6;
+    step(Number(opt.ticks ?? 1200));
+    report({ thick: th, mat, bangs: W.bangCount(), aShots: shotStats(1), bShots: shotStats(2) });
+  },
   // v6.6: weapons. mode=molotov: 6 molotov soldiers vs 6 swordsmen; mode=spear: 6 spears vs 6 swords (melee duel)
   async weapons() {
     SIM.bounds = { x0: -40, x1: 40, z0: -40, z1: 60, y0: -8, y1: 30 };
