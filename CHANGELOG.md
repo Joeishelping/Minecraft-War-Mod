@@ -1,5 +1,28 @@
 # War Engine changelog
 
+## v6.3 (knocked into lava, wary of edges, the TP wand)
+
+- **They can be knocked off now.** v6.2's edge safety cancelled every push near a drop or lava, so hitting someone
+  in was impossible. Now a hit from an enemy player, an enemy soldier or hound, a mob (arrows included) or an
+  explosion staggers him for ~0.7 s. Nothing cancels the knockback, so a good hit by the lava sends him in. Hits from
+  your own side or allies never do, and neither do gun bullets (a wall full of riflemen would empty itself). His own
+  moves (flinching, dodging, spacing out, walking) still never take him over the edge. Test: enemy punch, mob and
+  explosion all knock him into a lava channel; a friendly punch and a bullet don't.
+- **They're wary of edges.** Standing by lava or a drop with an enemy player, a melee soldier, a hound or a mob within
+  5 blocks, a soldier steps to the nearest safe spot away from him. A man on a post steps back at most 2 blocks: he
+  doesn't abandon the wall. On a 1-wide bridge or a narrow wall there may be nowhere to go: then a well-timed hit
+  still gets him.
+- **TP wand** (new item, next to the Unit Wand):
+  - Hit one of your own soldiers with it: he's picked up, with no damage. You can carry up to 10.
+  - Carried soldiers are hidden and come with you. They can't be hurt, don't shoot and don't move, and nobody can
+    see or target them.
+  - Right-click: they're all put down around your feet. Each one lands on his own free cell, never stacked and never
+    by lava or a drop, and carries on with what he was doing. A march or a charge re-routes from there; a man on a
+    post (hold, post, sentry, stand, patrol) takes the new spot as his post.
+  - Only your own faction. Hitting an enemy with the wand is just a hit.
+  - If you leave the game or die while carrying soldiers, they're put down where you were. After a reload,
+    anyone still marked as carried is put down where he is. Cleanup / repair puts everyone down first.
+
 ## v6.2 (long orders that really go the distance, no walking into lava, unsticking, cleanup)
 
 Built on v6.0 (the version you liked). Only the safe parts of v6.1 were kept: the crash fix for long orders, and the

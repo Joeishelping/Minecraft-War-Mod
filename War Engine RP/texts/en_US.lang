@@ -21,6 +21,7 @@ item.war:egg_houndmaster=Houndmaster Egg
 item.war:egg_cavalier=Cavalier Egg
 item.war:command_baton=Command Baton
 item.war:unit_wand=Unit Wand
+item.war:tp_wand=TP Wand
 item.war:flag=Flag
 item.war:boat_item=Troop Boat
 item.war:plane_item=War Plane

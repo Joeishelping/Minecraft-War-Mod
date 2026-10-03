@@ -152,7 +152,7 @@ export class Entity {
     if (n === "rideable") return this.typeId.startsWith("war:") && ["war:tank", "war:boat", "war:plane", "war:mg_nest"].includes(this.typeId) ? new Component({ seatCount: 2, getRiders: () => [...self.riders], addRider: () => false, ejectRider() {} }) : undefined;
     if (n === "projectile") return this.isBullet ? new Component({ get owner() { return self.owner; }, set owner(v) { self.owner = v; }, shoot(v, o) { if (o?.owner) self.owner = o.owner; self.vel = { ...v }; self.fired = true; } }) : undefined;
     if (n === "tameable") return new Component({ tamedToPlayerId: this.tamedTo, tame(p) { self.tamedTo = p.id; return true; } });
-    if (n === "equippable") return new Component({ getEquipment: () => undefined, setEquipment() {} });
+    if (n === "equippable") return new Component({ getEquipment: () => (self._mainhand ? { typeId: self._mainhand } : undefined), setEquipment() {} });
     if (n === "inventory") return new Component({ container: { addItem() {}, setItem() {}, getItem() {} } });
     return undefined;
   }

@@ -253,6 +253,7 @@
         }
       ],
       "scripts": {
+        "scale": "q.property('war:held') ? 0.0 : 1.0",
         "initialize": [
           "variable.gliding_speed_value = 1.0;"
         ],

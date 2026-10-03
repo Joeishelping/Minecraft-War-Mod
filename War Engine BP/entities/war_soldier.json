@@ -85,6 +85,11 @@
           ],
           "default": 0,
           "client_sync": true
+        },
+        "war:held": {
+          "type": "bool",
+          "default": false,
+          "client_sync": true
         }
       }
     },
@@ -12157,11 +12162,28 @@
           "max": 19
         }
       },
-      "war:body_foot": {},
+      "war:body_foot": {
+        "minecraft:collision_box": {
+          "width": 0.6,
+          "height": 1.9
+        }
+      },
       "war:body_cav": {
         "minecraft:collision_box": {
           "width": 1.6,
           "height": 2.6
+        }
+      },
+      "war:held": {
+        "minecraft:collision_box": {
+          "width": 0.1,
+          "height": 0.1
+        },
+        "minecraft:damage_sensor": {
+          "triggers": {
+            "cause": "all",
+            "deals_damage": "no"
+          }
         }
       }
     },
@@ -13222,6 +13244,22 @@
             "war:hp_40",
             "war:body_foot",
             "war:r_on"
+          ]
+        }
+      },
+      "war:held_on": {
+        "add": {
+          "component_groups": [
+            "war:held"
+          ]
+        }
+      },
+      "war:held_off": {
+        "remove": {
+          "component_groups": [
+            "war:held",
+            "war:body_foot",
+            "war:body_cav"
           ]
         }
       }

@@ -16,7 +16,7 @@ const runDir = path.join(here, `run_${process.pid}`);
 fs.mkdirSync(runDir, { recursive: true });
 fs.cpSync(scriptsDir, runDir, { recursive: true });
 // expose the add-on's internals to the scenarios (appended to the copy only)
-const HOOK = ["cleanupMenu", "purgeState", "gliders", "glideBan", "driveOn", "formMode", "tightAt", "combatLock", "routeProgress", "getLearned", "learned", "generals", "planRoute", "BW", "BW_F", "HEAD_K", "medicMove", "shakenMove", "waterExit", "followPersonal", "spreadMove", "combatMove", "engagement", "reinforceMove", "patrolSweep", "marker", "think", "routeOf", "lookahead", "queuedBehind", "climbing", "laneOf", "trackIdx", "giveOrder", "startMarch", "giveFunction", "setupSoldier", "sd", "perc", "squads", "getMarches", "personal", "downed", "goDown", "marker", "gunState", "brain", "notes", "setRelPair", "travel", "isDowned"];
+const HOOK = ["held", "holding", "stagger", "putDown", "allOf", "edgeFearT", "cleanupMenu", "purgeState", "gliders", "glideBan", "driveOn", "formMode", "tightAt", "combatLock", "routeProgress", "getLearned", "learned", "generals", "planRoute", "BW", "BW_F", "HEAD_K", "medicMove", "shakenMove", "waterExit", "followPersonal", "spreadMove", "combatMove", "engagement", "reinforceMove", "patrolSweep", "marker", "think", "routeOf", "lookahead", "queuedBehind", "climbing", "laneOf", "trackIdx", "giveOrder", "startMarch", "giveFunction", "setupSoldier", "sd", "perc", "squads", "getMarches", "personal", "downed", "goDown", "marker", "gunState", "brain", "notes", "setRelPair", "travel", "isDowned"];
 if (opt.thinkdbg) { const f = path.join(runDir, "main.js"); fs.writeFileSync(f, fs.readFileSync(f, "utf8").replace("    // how far each stationary order may leave its spot to fight", "    if (globalThis.__thinkDbg) globalThis.__thinkDbg(e, engaged, cu, d);\n    // how far each stationary order may leave its spot to fight")); }
 fs.appendFileSync(path.join(runDir, "main.js"), `\nglobalThis.__war = {};\n${HOOK.map((n) => `try { globalThis.__war.${n} = ${n}; } catch {}`).join("\n")}\n`);
 loadDefs(path.join(root, "War Engine BP"));
@@ -520,6 +520,68 @@ const S = {
   },
 
   // v6.2: the cleanup / repair tools, including things in unloaded land (removed the moment it loads)
+  // v6.3: knocked into lava. A soldier holds right at the edge of a lava channel; something hits him toward it.
+  //   mode=enemy (enemy player's punch), friend (a friendly player's), bullet (an enemy soldier's bullet), mob (a zombie),
+  //   boom (an explosion), fear (an enemy player just walks up: he should back away from the edge, not be hit)
+  async knock() {
+    SIM.bounds = { x0: -20, x1: 30, z0: -20, z1: 20, y0: -8, y1: 20 };
+    fill(-20, -4, -20, 30, -1, 20, "stone"); fill(4, -3, -20, 7, -1, 20, "lava");          // a lava channel 4 wide
+    spawnPlayer({ x: -15, y: 0, z: -15 });
+    W.setRelPair(1, 2, "1", false);
+    const mode = opt.mode ?? "enemy";
+    const e = soldier(1, { x: 3.5, y: 0, z: 0.5 }, "rifle", 1, "hold");
+    step(40);
+    const foe = new MC.Player({ x: 1.5, y: 0, z: 0.5 }, overworld); foe.tags.clear(); foe.tags.add(mode === "friend" ? "war_f1" : "war_f2"); foe.name = "Foe";
+    if (mode === "fear") { step(120); report({ mode, pos: e._loc, inLava: SIM.lavaIds?.size ?? 0, backedAway: e._loc.x < 2.6 || Math.abs(e._loc.z - 0.5) > 1, note: W.notes.get(e.id)?.text }); return; }
+    if (mode !== "enemy" && mode !== "friend") foe.remove?.();
+    let src, cause = "entityAttack";
+    if (mode === "enemy" || mode === "friend") src = foe;
+    else if (mode === "bullet") { src = soldier(2, { x: -10.5, y: 0, z: 0.5 }, "rifle", 1, "hold"); cause = "projectile"; }
+    else if (mode === "mob") src = overworld.spawnEntity("minecraft:zombie", { x: 1.5, y: 0, z: 0.5 });
+    else if (mode === "boom") { src = undefined; cause = "blockExplosion"; }
+    const hp0 = e.hp;
+    e.applyDamage(1, { damagingEntity: src, cause });
+    e.vel.x += Number(opt.kb ?? 0.4); e.vel.y = 0.36;               // Minecraft's knockback (~0.4), away from the hit, toward the lava
+    for (let t = 0; t < 60; t++) step(1);
+    report({ mode, pos: { x: +e._loc.x.toFixed(2), y: +e._loc.y.toFixed(2) }, inLava: SIM.lavaIds?.size ?? 0, fell: e._loc.y < -0.5 || !e.isValid, hp0 });
+  },
+
+  // v6.3: the TP wand. Pick up a guard and two marchers, walk away, put them down; then they carry on.
+  async wand() {
+    SIM.bounds = { x0: -60, x1: 160, z0: -60, z1: 60, y0: -8, y1: 20 };
+    fill(-60, -4, -60, 160, -1, 60, "stone");
+    fill(20, -3, 10, 23, -1, 14, "lava");                            // lava near the drop spot: nobody lands by it
+    spawnPlayer({ x: 0, y: 0, z: -5 });
+    player._mainhand = "war:tp_wand";
+    const guard = soldier(1, { x: 0.5, y: 0, z: 0.5 }, "rifle", 1, "hold");
+    const ms = []; for (let i = 0; i < 4; i++) ms.push(soldier(1, { x: 4.5 + i * 2, y: 0, z: 0.5 }, "rifle", 2, "hold"));
+    const enemy = soldier(2, { x: 0.5, y: 0, z: 40.5 }, "rifle", 1, "hold"); enemy.static = false;
+    step(40);
+    await W.giveOrder(player, { faction: 1, order: 0, squad: 2, count: 0, radius: 200, stance: "aggressive", ao: 100, free: true, target: 5, cx: 140, cz: 0, cy: 0, then: "hold" });
+    step(100);
+    const hp = guard.hp;
+    guard.applyDamage(3, { damagingEntity: player, cause: "entityAttack" });   // left-click with the wand
+    ms[0].applyDamage(3, { damagingEntity: player, cause: "entityAttack" });
+    ms[1].applyDamage(3, { damagingEntity: player, cause: "entityAttack" });
+    enemy.applyDamage(1, { damagingEntity: player, cause: "entityAttack" });  // not ours: just a hit
+    step(2);
+    const heldN = W.held.size, unhurt = guard.hp === hp, hidden = guard.props.get("war:held") === true, inLoops = W.allOf(SOLDIER).some((x) => x.id === guard.id);
+    for (let t = 0; t < 40; t++) { player._loc = { x: 22 + t * 0.2, y: 0, z: 8 }; step(1); }   // walk off with them (past some lava)
+    const withMe = [guard, ms[0], ms[1]].every((x) => Math.hypot(x._loc.x - player._loc.x, x._loc.z - player._loc.z) < 0.5);
+    for (let t = 0; t < 20; t++) { MC.SIM.tick; step(1); }
+    const shotsBefore = SIM.shots ?? 0;
+    MC.world.afterEvents.itemUse.fire({ source: player, itemStack: { typeId: "war:tp_wand" } });   // right-click: put them down
+    step(4);
+    const put = [guard, ms[0], ms[1]].map((x) => ({ x: +x._loc.x.toFixed(1), y: x._loc.y, z: +x._loc.z.toFixed(1) }));
+    let minGap = 99; for (let i = 0; i < put.length; i++) for (let j = i + 1; j < put.length; j++) minGap = Math.min(minGap, Math.hypot(put[i].x - put[j].x, put[i].z - put[j].z));
+    const byLava = put.some((q) => q.x > 18 && q.x < 25 && q.z > 8 && q.z < 16 && (Math.min(Math.abs(q.x - 20), Math.abs(q.x - 24)) < 1 || Math.min(Math.abs(q.z - 10), Math.abs(q.z - 15)) < 1));
+    step(200);
+    const guardStays = Math.hypot(guard._loc.x - put[0].x, guard._loc.z - put[0].z) < 4;   // his new post is where he was put down
+    let arrived = -1; const t0 = SIM.tick;
+    for (let t = 0; t < 4000 && arrived < 0; t += 10) { step(10); if (ms.filter((x) => x.isValid && Math.hypot(x._loc.x - 140, x._loc.z) < 12).length >= 4) arrived = SIM.tick - t0; }
+    report({ heldN, unhurt, hidden, inLoops, withMe, put, minGap: +minGap.toFixed(2), byLava, released: W.held.size === 0 && guard.props.get("war:held") === false, guardStays, marchersArrived: arrived, enemyHit: enemy.hp < enemy.maxHp, msgs: SIM.log.filter((m) => /\[bar\]/.test(m)).slice(-3) });
+  },
+
   async cleanup() {
     SIM.bounds = { x0: -300, x1: 300, z0: -300, z1: 300, y0: -10, y1: 40 };
     SIM.loadR = 100;

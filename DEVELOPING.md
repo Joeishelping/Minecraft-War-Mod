@@ -73,6 +73,22 @@ errands are **personal routes** (`planPersonalTo` / `travel`), followed by `foll
 - **Errors** (`oops`): every loop is wrapped. An error is logged once with a count (and shown in chat when the readout
   setting is on) instead of silently killing a loop.
 
+### v6.3: stagger, edge fear, the TP wand
+- **Stagger.** A hit that `knocksOver` counts (an enemy player, soldier or hound melee, a mob, an explosion; never
+  friendly and never a soldier's or player's projectile) sets `stagger` for 14 ticks. While `staggered(id)`, the edge
+  guards and the glider leave him alone, so the knockback plays out.
+- **Edge fear.** Every 10 ticks, a soldier on a `dangerNear` cell with a threat within 5 blocks (an enemy player,
+  hound or melee soldier, or a mob) gets a short `settle` route to the best safe cell within 4 blocks (2 on a post).
+- **TP wand** (`war:tp_wand`). `held` (soldier id -> carrier) is checked in `allOf(SOLDIER)` and in the combatant
+  snapshot, so held men are out of every loop and invisible to everyone. `beforeEvents.entityHurt` cancels all damage
+  to them; the wand's hit calls `pickUp`. The entity side:
+  - the `war:held` property is synced to the client, where Molang `scale` hides the model;
+  - the `war:held` component group gives a tiny collision box and a damage sensor;
+  - `war:held_off` removes that group and the body groups, and the script re-adds the right body group.
+
+  `releaseAll` / `letGo` put them down on free safe cells (`dropCell`). A carried man is marked `war:held`, so after a
+  reload he's put down where he is.
+
 ## The decision chain (`think`, every second per soldier, staggered)
 
 In order; the first that returns a move wins:

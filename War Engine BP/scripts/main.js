@@ -1,4 +1,4 @@
-// War Engine v6.2: faction NPC war framework
+// War Engine v6.3: faction NPC war framework
 import { world, system, Player, ItemStack, EquipmentSlot, GameMode } from "@minecraft/server";
 import { ActionFormData, ModalFormData, FormCancelationReason } from "@minecraft/server-ui";
 import { SKINS } from "./skins.js";
@@ -182,11 +182,15 @@ const findPlayer = (id) => (id ? world.getAllPlayers().find((p) => p.id === id) 
 const tick = () => system.currentTick;
 const DIMS = ["overworld", "nether", "the_end"];
 const allOfCache = new Map(); // type -> { t, list }  (one world search per type per tick)
+// v6.3: soldiers picked up with the TP wand (soldier id -> { by: player id }). They are left out of allOf, so nothing
+// thinks for them, moves them, aims or shoots with them, or rescues them while they're carried.
+const held = new Map();
 function allOf(type) {
   const now = system.currentTick, c = allOfCache.get(type);
   if (c && c.t === now) { if (!c.checked) { c.list = c.list.filter((e) => e.isValid); c.checked = true; } return c.list; }
-  const out = [];
+  let out = [];
   for (const d of DIMS) { try { out.push(...world.getDimension(d).getEntities({ type })); } catch {} }
+  if (type === SOLDIER && held.size) out = out.filter((e) => !held.has(e.id));
   allOfCache.set(type, { t: now, list: out });
   return out;
 }
@@ -1040,6 +1044,13 @@ const CIVILIANS = ["minecraft:villager_v2", "minecraft:villager", "minecraft:wan
 world.beforeEvents.entityHurt.subscribe((ev) => {
   try {
     const v = ev.hurtEntity;
+    if (v && held.has(v.id)) { ev.cancel = true; return; }                   // v6.3: carried with the TP wand: untouchable
+    const src = ev.damageSource?.damagingEntity;
+    if (v?.typeId === SOLDIER && src?.typeId === "minecraft:player" && mainhand(src) === TP_WAND) {   // v6.3: the TP wand picks him up, no harm done
+      ev.cancel = true;
+      system.run(() => { try { pickUp(src, v); } catch (err) { oops("tp wand", err); } });
+      return;
+    }
     if (v?.typeId === SOLDIER && !downed.has(v.id)) {
       const cause = String(ev.damageSource.cause ?? "");
       const h = v.getComponent("minecraft:health");
@@ -1708,6 +1719,7 @@ function tool(player, typeId, target) {
     case "war:chronicle": return run(() => chronicleUse(player));
     case "war:flag": return run(() => placeFlag(player));
     case "war:unit_wand": return run(() => unitWand(player, target ?? lookedAt(player, SOLDIER)));
+    case TP_WAND: return run(async () => putDown(player));
     case "war:boat_item": return run(() => placeVehicle(player, "war:boat"));
     case "war:plane_item": return run(() => placeVehicle(player, "war:plane"));
     case "war:tank_item": return run(() => placeVehicle(player, "war:tank"));
@@ -2305,6 +2317,7 @@ async function cleanupMenu(player) {
     .button("Remove everything near me").button("Remove one faction's units").button("§cRemove everything from War Engine"), player);
   if (!r || r.canceled || r.selection === undefined) return;
   const now = tick();
+  for (const pid of [...holding.keys()]) releaseAll(pid, undefined);   // (v6.3: anyone carried with the TP wand is put down where he is first)
   if (r.selection === 0) {
     clearMarches();
     personal.clear(); travelTo.clear(); gliders.clear(); climbing.clear(); combatLock.clear(); formMode.clear(); driveOn.clear(); remoteSettled.clear(); pressing.clear(); planJobs.length = 0;
@@ -2686,7 +2699,7 @@ function refreshCombatants() {
     let dim;
     try { dim = world.getDimension(did); } catch { continue; }
     const list = [];
-    const add = (arr) => { for (const o of arr) { try { const l = o.location, ty = o.typeId; const id = o.id; list.push({ e: o, id, type: ty, x: l.x, y: l.y, z: l.z, f: ty === SOLDIER || ty === HOUND || ty === "minecraft:player" ? factionOf(o) : 0, down: downed.has(id) || pows.has(id) }); } catch {} } };
+    const add = (arr) => { for (const o of arr) { try { if (held.has(o.id)) continue; const l = o.location, ty = o.typeId; const id = o.id; list.push({ e: o, id, type: ty, x: l.x, y: l.y, z: l.z, f: ty === SOLDIER || ty === HOUND || ty === "minecraft:player" ? factionOf(o) : 0, down: downed.has(id) || pows.has(id) }); } catch {} } };
     try { add(dim.getEntities({ type: SOLDIER })); } catch {}
     try { add(dim.getEntities({ type: HOUND })); } catch {}
     try { add(dim.getPlayers()); } catch {}
@@ -5444,6 +5457,7 @@ function revive(e, hpTo = 6) {
 system.runInterval(() => {
   const now = tick();
   for (const [id, until] of [...downed]) {
+    if (held.has(id)) continue;                                   // (v6.3: carried with the TP wand)
     const e = world.getEntity(id);
     if (!e?.isValid) { downed.delete(id); continue; }
     if (now >= until) {
@@ -5467,7 +5481,7 @@ system.runInterval(() => {
 world.afterEvents.playerInteractWithEntity.subscribe((ev) => {
   const e = ev.target, p = ev.player;
   if (e?.typeId !== SOLDIER || !(isDowned(e) || isPow(e))) return;
-  if ((ev.beforeItemStack ?? ev.itemStack)?.typeId === "war:unit_wand") return;     // the wand opens the same menu itself
+  if ((ev.beforeItemStack ?? ev.itemStack)?.typeId === "war:unit_wand" || (ev.beforeItemStack ?? ev.itemStack)?.typeId === TP_WAND) return;     // the wand opens the same menu itself
   system.run(() => captiveMenu(p, e).catch(() => {}));
 });
 
@@ -6773,7 +6787,7 @@ function safeAhead(e, dx, dz) {
 system.runInterval(() => {
   for (const e of allOf(SOLDIER)) {
     try {
-      if (stepping.has(e.id) || climbing.has(e.id) || (gliders.has(e.id) && !gliders.get(e.id).paused) || downed.has(e.id) || isRiding(e)) continue;
+      if (stepping.has(e.id) || climbing.has(e.id) || (gliders.has(e.id) && !gliders.get(e.id).paused) || downed.has(e.id) || isRiding(e) || staggered(e.id)) continue;   // (v6.3: knocked: his momentum is his)
       if (!dangerNear(e.dimension, e.location)) continue;
       // v6.2: on a bridge / ledge / wall-top edge, walking by himself: stop him now and put him on his route (carried)
       if (!gliders.has(e.id) && getJSON(e, "war:st", {}).g === "g_wp") {
@@ -6800,7 +6814,7 @@ system.runInterval(() => {
     const e = world.getEntity(id);
     try {
       if (!e?.isValid) { stepping.delete(id); continue; }
-      if (climbing.has(e.id) || gliders.has(e.id) || downed.has(e.id) || isRiding(e)) continue;   // (v5.9: only men the route driver steps)
+      if (climbing.has(e.id) || gliders.has(e.id) || downed.has(e.id) || isRiding(e) || staggered(e.id)) continue;   // (v5.9: only men the route driver steps; v6.3: not while knocked)
       const r = routeOf(e);
       if (!r) continue;
       const v = e.getVelocity(), sp = Math.hypot(v.x, v.z);
@@ -6823,6 +6837,181 @@ system.runInterval(() => {
     } catch {}
   }
 }, 1);
+
+// ================================================================ v6.3: knocked over the edge, wary of edges
+// v6.2's edge safety (the edge guards, men held still on a bridge, the glider) cancelled every bit of momentum by a drop
+// or lava, so nobody could ever be knocked in. Now a hit from an enemy player, an enemy soldier or hound, a mob or an
+// explosion staggers him for ~0.7 s: nothing touches his momentum and the knockback plays out (over the edge, if that's
+// where it sends him). His own moves stay safe. No friendly fire, and gun bullets don't count (a wall of riflemen would
+// empty itself).
+const stagger = new Map(); // soldier id -> tick the stagger ends
+const staggered = (id) => (stagger.get(id) ?? 0) > tick();
+function friendlySource(v, src) {
+  const df = Number(P(v, "war:faction") ?? 0);
+  if (src.typeId === "minecraft:player") { const f = playerFaction(src); return !!f && (f === df || !isHostile(df, f)); }
+  if (src.typeId === SOLDIER || src.typeId === HOUND) { const f = Number(P(src, "war:faction") ?? 0); return f === df || !isHostile(df, f); }
+  return false;                                                  // mobs (and anything else) are never friendly
+}
+function knocksOver(v, src, cause) {
+  if (cause === "entityExplosion" || cause === "blockExplosion") return !src?.isValid || !friendlySource(v, src);
+  if (!src?.isValid || friendlySource(v, src)) return false;
+  if (cause === "projectile") return isMob(src);                // a skeleton's arrow: yes. Bullets from soldiers / players: no
+  return cause === "entityAttack";
+}
+world.afterEvents.entityHurt.subscribe((ev) => {
+  try {
+    const v = ev.hurtEntity;
+    if (v?.typeId !== SOLDIER || held.has(v.id)) return;
+    const s0 = ev.damageSource;
+    if (knocksOver(v, s0?.damagingEntity, String(s0?.cause ?? ""))) { stagger.set(v.id, tick() + 14); gliders.delete(v.id); }
+  } catch {}
+});
+// wary of the edge: a soldier standing by a drop or lava with an enemy who could knock him over close by (a player, a
+// melee soldier, a hound, a mob, within 5 blocks) steps onto the nearest safe cell, away from him. Men on a post step back
+// at most 2 blocks (they don't abandon a wall-top). On a narrow wall or a 1-wide bridge there may be nowhere safe: then he stays.
+const edgeFearT = new Map(); // soldier id -> next check
+const POST_FUNCS = ["hold", "post", "sentry", "stand"];
+system.runInterval(() => {
+  const now = tick();
+  for (const e of allOf(SOLDIER)) {
+    try {
+      if (now < (edgeFearT.get(e.id) ?? 0) || downed.has(e.id) || pows.has(e.id) || climbing.has(e.id) || isRiding(e) || staggered(e.id)) continue;
+      const l = e.location, dim = e.dimension;
+      if (!dangerNear(dim, l)) continue;
+      const df = Number(P(e, "war:faction") ?? 0);
+      let foe;
+      for (const c of nearSnap(dim.id, l, 5)) {
+        if (c.id === e.id || c.down) continue;
+        const threat = c.type === "minecraft:player" || c.type === HOUND ? isHostile(df, c.f)
+          : c.type === SOLDIER ? isHostile(df, c.f) && !GUNS.includes(String(gdp(c.e, "war:weapon") ?? ""))
+          : isMob(c.e);
+        if (threat && (!foe || c.dd < foe.dd)) foe = c;
+      }
+      if (!foe) continue;
+      edgeFearT.set(e.id, now + 40);
+      const R = POST_FUNCS.includes(sd(e).func) ? 2 : 4;
+      const bx = Math.floor(l.x), by = Math.floor(l.y + 0.01), bz = Math.floor(l.z);
+      let best, bs = -1e9;
+      for (let dx = -R; dx <= R; dx++) for (let dz = -R; dz <= R; dz++) {
+        if (!dx && !dz) continue;
+        for (const dy of [0, 1, -1]) {
+          const q = { x: bx + dx + 0.5, y: by + dy, z: bz + dz + 0.5 };
+          if (!standAt(dim, bx + dx, by + dy, bz + dz, now) || dangerNear(dim, q) || claimedByOther(q, e.id, now)) continue;
+          const sc = Math.hypot(q.x - foe.x, q.z - foe.z) - Math.hypot(dx, dz) * 1.5;   // away from him, but not far
+          if (sc > bs) { bs = sc; best = q; }
+          break;
+        }
+      }
+      if (!best) continue;
+      claimSpot(e, best, now);
+      planPersonalTo(e, "settle", best, now);
+      note(e, "backing away from the edge");
+      edgeFearT.set(e.id, now + 60);
+    } catch {}
+  }
+}, 10);
+
+// ================================================================ v6.3: the TP wand
+// Hit one of your own soldiers with it: he's picked up (no harm done), hidden, and carried with you; up to 10. While
+// carried he can't be hurt, doesn't shoot, think or move, and nobody sees him. Right-click: they're all put down around
+// your feet (each on his own safe cell) and carry on with what they were doing; a man on a post takes the new spot as his post.
+const TP_WAND = "war:tp_wand", TP_MAX = 10;
+const holding = new Map(); // player id -> [soldier ids]
+function pickUp(p, e) {
+  if (!e?.isValid || e.typeId !== SOLDIER || held.has(e.id)) return;
+  const pf = playerFaction(p);
+  if (!pf || Number(P(e, "war:faction") ?? 0) !== pf) { p.onScreenDisplay.setActionBar("§cThe TP wand only picks up your own faction's soldiers."); return; }
+  if (isRiding(e)) { p.onScreenDisplay.setActionBar("§cHe has to get off first."); return; }
+  const list = holding.get(p.id) ?? [];
+  if (list.length >= TP_MAX) { p.onScreenDisplay.setActionBar(`§eYou're carrying ${TP_MAX} already. Right-click to put them down.`); return; }
+  list.push(e.id); holding.set(p.id, list);
+  held.set(e.id, { by: p.id });
+  allOfCache.delete(SOLDIER);
+  gliders.delete(e.id); personal.delete(e.id); travelTo.delete(e.id); climbing.delete(e.id); combatLock.delete(e.id);
+  stepping.delete(e.id); driveOn.delete(e.id); formMode.delete(e.id); stagger.delete(e.id);
+  try { e.triggerEvent("war:held_on"); } catch {}
+  try { setP(e, "war:held", true); setP(e, "war:aiming", false); setP(e, "war:firing", false); } catch {}
+  try { setGroups(e, { g: "g_none", t: "t_off" }); } catch {}
+  try { e.nameTag = ""; } catch {}
+  sdp(e, "war:held", 1);                                         // (remembered: after a reload he's put down where he is)
+  try { e.teleport(p.location, { dimension: p.dimension }); } catch {}
+  p.onScreenDisplay.setActionBar(`§aPicked up (${list.length}/${TP_MAX}). Right-click with the wand to put them down.`);
+}
+// a free safe cell around the player for each man (never stacked, never by a drop or lava)
+function dropCell(p, placed, now) {
+  const dim = p.dimension, l = p.location, bx = Math.floor(l.x), by = Math.floor(l.y + 0.01), bz = Math.floor(l.z);
+  for (const r of [1, 2, 3, 4, 0]) for (let dx = -r; dx <= r; dx++) for (let dz = -r; dz <= r; dz++) {
+    if (Math.max(Math.abs(dx), Math.abs(dz)) !== r) continue;
+    for (const dy of [0, 1, -1]) {
+      const q = { x: bx + dx + 0.5, y: by + dy, z: bz + dz + 0.5 };
+      if (!standAt(dim, bx + dx, by + dy, bz + dz, now) || !glideFree(dim, q.x, q.y, q.z) || dangerNear(dim, q)) continue;
+      if (placed.some((o) => Math.hypot(o.x - q.x, o.z - q.z) < 1.2 && Math.abs(o.y - q.y) < 1.5)) continue;
+      if (nearSnap(dim.id, q, 1.0).some((c) => c.type === SOLDIER && Math.abs(c.y - q.y) < 1.5)) continue;
+      return q;
+    }
+  }
+  return undefined;
+}
+function letGo(e, now) {
+  held.delete(e.id); allOfCache.delete(SOLDIER);
+  try { e.triggerEvent("war:held_off"); e.triggerEvent(P(e, "war:cav") ? "war:body_cav" : "war:body_foot"); } catch {}
+  try { setP(e, "war:held", false); } catch {}
+  sdp(e, "war:held", undefined);
+  rescueMark.delete(e.id); pressing.delete(e.id); remoteMemo.delete(e.id); remoteSettled.delete(e.id); rTrack.delete(e.id);
+  if (downed.has(e.id)) { downPos.set(e.id, { ...e.location }); updateName(e); return; }
+  const d = sd(e);
+  if (POST_FUNCS.includes(d.func) || d.func === "patrol") { freshMind(e); giveFunction(e, d.func, undefined, makeWaypoint(e.dimension, e.location, false)); }
+  else { setJSON(e, "war:st", {}); try { think(e); } catch {} }   // a march / charge / follow just carries on from here
+  updateName(e);
+  note(e, "put down");
+}
+function releaseAll(pid, p) {
+  const list = holding.get(pid) ?? [];
+  holding.delete(pid);
+  const now = tick(), placed = [];
+  let n = 0;
+  for (const id of list) {
+    const e = world.getEntity(id);
+    if (!e?.isValid) { held.delete(id); continue; }
+    if (p?.isValid) {
+      const to = dropCell(p, placed, now);
+      try { e.teleport(to ?? p.location, { dimension: p.dimension }); } catch {}
+      if (to) placed.push(to);
+    }
+    try { e.clearVelocity?.(); } catch {}
+    letGo(e, now);
+    n++;
+  }
+  return n;
+}
+function putDown(p) {
+  const n = releaseAll(p.id, p);
+  p.onScreenDisplay.setActionBar(n ? `§aPut down ${n}.` : "§7Hit one of your soldiers with the TP wand to pick him up.");
+}
+// carried: they stay right with you (hidden, tiny, untouchable). If you leave or the game reloads, they're put down
+// where they are.
+system.runInterval(() => {
+  for (const [pid, list] of [...holding]) {
+    const p = world.getEntity(pid);
+    if (!p?.isValid) { releaseAll(pid, undefined); continue; }
+    const l = p.location;
+    for (const id of list) {
+      const e = world.getEntity(id);
+      if (!e?.isValid) continue;
+      try { if (e.dimension.id !== p.dimension.id || Math.abs(e.location.x - l.x) + Math.abs(e.location.y - l.y) + Math.abs(e.location.z - l.z) > 0.05) e.teleport({ x: l.x, y: l.y, z: l.z }, { dimension: p.dimension }); e.clearVelocity?.(); } catch {}
+    }
+  }
+}, 1);
+world.afterEvents.entityDie.subscribe((ev) => { try { const d = ev.deadEntity; if (d?.typeId === "minecraft:player" && holding.has(d.id)) releaseAll(d.id, d); } catch {} });
+world.beforeEvents.playerLeave?.subscribe((ev) => { try { const pid = ev.player.id; system.run(() => releaseAll(pid, undefined)); } catch {} });
+// after a reload (nobody is carrying him any more): put down where he is
+system.runInterval(() => {
+  for (const d of DIMS) {
+    let list = [];
+    try { list = world.getDimension(d).getEntities({ type: SOLDIER }); } catch {}
+    for (const e of list) { try { if (!held.has(e.id) && gdp(e, "war:held")) letGo(e, tick()); } catch {} }
+  }
+}, 100);
 
 // ================================================================ v5.4: fighting where it counts, spreading out, no piles
 // ---- how far each gun is worth firing. Attackers close in to this before they shoot (no plinking at a building from
@@ -6995,6 +7184,7 @@ system.runInterval(() => {
   const now = tick();
   for (const [id, g] of [...gliders]) {
     if (now - g.t > 8) { gliders.delete(id); continue; }          // the driver stopped refreshing him: back to normal walking
+    if (staggered(id)) continue;                                  // (v6.3: knocked: not carried, not held still, until he's found his feet)
     if (g.paused) { try { const pe = world.getEntity(id); if (pe?.isValid && dangerNear(pe.dimension, pe.location)) pe.clearVelocity(); } catch {} continue; }   // (v6.2: waiting his turn on a bridge: no knockback off it)
     const e = world.getEntity(id);
     if (!e?.isValid || climbing.has(id) || downed.has(id) || isRiding(e)) { gliders.delete(id); continue; }

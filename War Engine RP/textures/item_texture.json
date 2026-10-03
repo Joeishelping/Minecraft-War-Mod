@@ -29,6 +29,9 @@
     "war_unit_wand": {
       "textures": "textures/items/war_unit_wand"
     },
+    "war_tp_wand": {
+      "textures": "textures/items/war_tp_wand"
+    },
     "war_flag": {
       "textures": "textures/items/war_flag"
     },
