@@ -432,7 +432,64 @@ const S = {
     if (opt.dump) for (const [id, m] of Object.entries(W.getMarches())) console.error("MARCH", id, "idx", m.idx, "len", m.path?.length, "planning", m.planning, "final", m.final, "replans", m.replans, "legs", m.legs?.length, "dead", JSON.stringify(m.dead), "progT", SIM.tick - m.progT, "pathEnd", JSON.stringify(m.path?.[m.path.length - 1]), "guess", !!m.path?.guess, "path@idx", JSON.stringify(m.path?.slice(Math.max(0, (m.idx ?? 0) - 2), (m.idx ?? 0) + 3)));
     if (opt.dump) for (const e of alive(1)) if (Math.hypot(e._loc.x - dest.x, e._loc.z - dest.z) >= 12) { const m = Object.values(W.getMarches())[0]; const g = W.gliders.get(e.id); const mk = W.marker(Number(e.dyn.get("war:catchup") ?? 0)); const pi = m?.path ? W.routeProgress(m, e._loc, e.id) : -1; console.error("DBG", e.id, "glider", g ? JSON.stringify({ k: g.k, paused: g.paused, wait: g.wait, blocked: g.blocked, t: SIM.tick - g.t }) : "-", "ban", (W.glideBan.get(e.id) ?? 0) - SIM.tick, "drive", JSON.stringify(W.driveOn.get(e.id)), "mk", mk ? JSON.stringify(mk._loc) : "-", "pi", pi, "tight", m?.path ? W.tightAt(overworld, m.path, pi, e._loc) : "-", "pts", JSON.stringify(m?.path?.slice(Math.max(0, pi - 1), pi + 3).map((p) => [p.x, p.y, p.z])), "nav", JSON.stringify(e.navGoal), "walk", JSON.stringify(e.walk), "vel", JSON.stringify(e.vel)); }
     if (opt.dump) for (const e of alive(1)) if (Math.hypot(e._loc.x - dest.x, e._loc.z - dest.z) >= 12) console.error("LEFT", JSON.stringify(e._loc), W.notes.get(e.id)?.text, "cu", e.dyn.get("war:catchup"), "goal", e.dyn.get("war:goal"), "og", e.dyn.get("war:ordergoal"));
-    report({ arrivedTicks: arrived, there, of: N, worstStillSec: worstStill / 2, bunchAvg: +(M.bunchPairs / M.bunchSamples).toFixed(2), dest, final: alive(1).map((e) => `${Math.round(e._loc.x)},${Math.round(e._loc.y)},${Math.round(e._loc.z)}`), notes: M.notes });
+    report({ plan: globalThis.__plan ? { ...globalThis.__plan, maxHeapMB: Math.round(globalThis.__plan.maxHeap / 1048576) } : undefined, arrivedTicks: arrived, there, of: N, worstStillSec: worstStill / 2, bunchAvg: +(M.bunchPairs / M.bunchSamples).toFixed(2), dest, final: alive(1).map((e) => `${Math.round(e._loc.x)},${Math.round(e._loc.y)},${Math.round(e._loc.z)}`), notes: M.notes });
+  },
+
+  // v6.1: from the screenshots: a squad on a castle wall-top (battlements both sides, an enclosed courtyard below with a
+  // ladder, a lava moat on the other side) charges a building across the moat. The only way over is a narrow bridge
+  // with no railings. Counts falls into the courtyard / the moat, who crossed, how long it took.
+  async castleMoat() {
+    SIM.bounds = { x0: -45, x1: 45, z0: -40, z1: 45, y0: -10, y1: 40 };
+    fill(-30, 0, -10, 30, 7, -8, "stone_bricks");                                          // the wall (walk on y=8, z=-9)
+    for (let x = -30; x <= 30; x += 2) { setBlock(x, 8, -10, "stone_bricks"); setBlock(x, 8, -8, "stone_bricks"); }   // battlements
+    fill(-30, 0, -30, 30, 7, -30, "stone_bricks"); fill(-30, 0, -30, -30, 7, -10, "stone_bricks"); fill(30, 0, -30, 30, 7, -10, "stone_bricks");   // courtyard walls
+    for (let y = 0; y <= 7; y++) setBlock(-2, y, -11, "ladder");                             // ladder from the courtyard
+    fill(-30, -3, -7, 30, -3, 8, "stone"); fill(-30, -2, -7, 30, -1, 8, "lava");             // the lava moat
+    fill(10, 0, -7, 11, 7, -7, "air");
+    fill(10, 7, -7, 11, 7, 8, "stone_bricks");                                             // the bridge (walk on y=8), no railings
+    fill(10, 0, 9, 11, 7, 10, "stone_bricks");                                             // landing on the far side
+    for (let i = 0; i < 7; i++) fill(10, 0, 11 + i, 11, 6 - i, 11 + i, "stone_bricks");    // steps down to the ground
+    const b = building(0, 24);                                                              // the enemy building (door faces the castle)
+    spawnPlayer({ x: 0, y: 8, z: -35 });
+    const W8 = ["rifle", "smg", "semi", "mg", "rifle", "semi", "smg", "rifle"];
+    for (let i = 0; i < 8; i++) soldier(1, { x: -20 + i * 2 + 0.5, y: 8, z: -8.5 }, W8[i]);
+    for (let i = 0; i < Number(opt.def ?? 4); i++) soldier(2, { x: 2 + i * 2.5 + 0.5, y: 6, z: 25.5 }, "rifle", 1, "hold");
+    W.setRelPair(1, 2, "1", false);
+    step(20);
+    await order(1, { x: 6, y: 0, z: 22 });
+    if (opt.mutual) await order(2, { x: -10, y: 8, z: -9 });                                  // they rush the castle too
+    const t0 = SIM.tick; const fellCourt = new Set(), fellMoat = new Set(), crossed = new Set(); let firstCross = -1;
+    for (let t = 0; t < Number(opt.ticks ?? 3600); t += 10) {
+      step(10); sample(1);
+      for (const e of alive(1)) {
+        const l = e._loc;
+        if (l.z < -10.5 && l.y < 6) fellCourt.add(e.id);
+        if (l.z > -7.5 && l.z < 8.5 && l.y < 1 && !(l.x >= 9.5 && l.x <= 12.5)) fellMoat.add(e.id);
+        if (l.z > 10) { crossed.add(e.id); if (firstCross < 0) firstCross = SIM.tick - t0; }
+      }
+      if (opt.fall) for (const e of [...alive(1), ...alive(2)]) { const h = (e.__h ??= []); h.push(`${SIM.tick} ${e._loc.x.toFixed(1)},${e._loc.y.toFixed(1)},${e._loc.z.toFixed(1)} ${W.notes.get(e.id)?.text ?? ""} g${W.gliders.has(e.id) ? 1 : 0} ${[...e.groups].filter((g) => /g_/.test(g)).join(",")}`); if (h.length > 12) h.shift(); if (e._loc.y < 1 && e._loc.z > -7.5 && e._loc.z < 8.5 && !e.__told) { e.__told = 1; console.error("FALL", e.props.get("war:faction"), "\n  " + h.join("\n  ")); } }
+      for (const e of alive(2)) { const l = e._loc; if (l.z > -7.5 && l.z < 8.5 && l.y < 1 && !(l.x >= 9.5 && l.x <= 12.5)) fellMoat.add(e.id); if (l.z < -10.5 && l.y < 6) fellCourt.add(e.id); }
+      if (!alive(2).filter((e) => !W.isDowned(e)).length && crossed.size >= alive(1).filter((e) => !W.isDowned(e)).length) break;
+      if (opt.mutual && (!alive(1).filter((e) => !W.isDowned(e)).length || !alive(2).filter((e) => !W.isDowned(e)).length)) break;
+    }
+    report({ ticks: SIM.tick - t0, fellCourtyard: fellCourt.size, fellMoat: fellMoat.size, crossed: crossed.size, firstCross, attackersUp: alive(1).filter((e) => !W.isDowned(e)).length, defendersUp: alive(2).filter((e) => !W.isDowned(e)).length, bunchAvg: +(M.bunchPairs / M.bunchSamples).toFixed(2), final: alive(1).map((e) => `${Math.round(e._loc.x)},${Math.round(e._loc.y)},${Math.round(e._loc.z)}`), notes: M.notes });
+  },
+
+  // v6.1: the planner's worst case: a 200-block order straight through a long wall whose only gap is far to one side
+  async detour() {
+    SIM.bounds = { x0: -220, x1: 220, z0: -60, z1: Number(opt.len ?? 200) + 40, y0: -10, y1: 40 };
+    fill(-200, 0, 100, 200, 4, 101, "stone_bricks"); fill(150, 0, 100, 152, 4, 101, "air");   // the wall, one gap at x=150
+    for (let k = 0; k < 30; k++) { const x = -180 + ((k * 73) % 360), z = 20 + ((k * 37) % 200); fill(x, 0, z, x, 3, z, "oak_log"); fill(x - 2, 3, z - 2, x + 2, 5, z + 2, "oak_leaves"); }
+    spawnPlayer({ x: 0, y: 0, z: -40 });
+    for (let i = 0; i < 12; i++) soldier(1, { x: (i % 4) * 2 - 3 + 0.5, y: 0, z: Math.floor(i / 4) * 2 + 0.5 }, "rifle");
+    step(20);
+    const dest = { x: 0, y: 0, z: Number(opt.len ?? 200) };
+    await order(1, dest);
+    const t0 = SIM.tick; let arrived = -1;
+    for (let t = 0; t < Number(opt.ticks ?? 9000) && arrived < 0; t += 10) { step(10); sample(1); if (alive(1).filter((e) => Math.hypot(e._loc.x - dest.x, e._loc.z - dest.z) < 12).length >= 11) arrived = SIM.tick - t0; }
+    if (opt.dump) for (const [id, m] of Object.entries(W.getMarches())) console.error("MARCH", "idx", m.idx, "len", m.path?.length, "planning", m.planning, "final", m.final, "replans", m.replans, "legs", JSON.stringify(m.legs), "dead", JSON.stringify(m.dead), "pathEnd", JSON.stringify(m.path?.[m.path.length - 1]), "legT", JSON.stringify(m.legT), "pos", JSON.stringify(m.pos));
+    if (opt.dump) console.error("POS", alive(1).map((e) => `${Math.round(e._loc.x)},${Math.round(e._loc.z)}`).join(" "));
+    report({ plan: globalThis.__plan ? { ...globalThis.__plan, maxHeapMB: Math.round(globalThis.__plan.maxHeap / 1048576) } : undefined, arrivedTicks: arrived, there: alive(1).filter((e) => Math.hypot(e._loc.x - dest.x, e._loc.z - dest.z) < 12).length, bigTp, ...callsPerTick(SIM.tick) });
   },
 
   // soldiers spread far apart (opt spread=1) or bunched (spread=0): the lag case from the field

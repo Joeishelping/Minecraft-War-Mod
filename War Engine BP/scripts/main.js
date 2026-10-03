@@ -1,4 +1,4 @@
-// War Engine v6.0: faction NPC war framework
+// War Engine v6.1: faction NPC war framework
 import { world, system, Player, ItemStack, EquipmentSlot, GameMode } from "@minecraft/server";
 import { ActionFormData, ModalFormData, FormCancelationReason } from "@minecraft/server-ui";
 import { SKINS } from "./skins.js";
@@ -859,7 +859,7 @@ function unstick(e, d, fighting) {
       push(e, { x: hx * 0.15, y: 0.42, z: hz * 0.15 }, 2);
     } else if (at(0) && at(1) && !at(2) && !at(3)) {      // 2-high wall: boost onto it
       const top = { x: Math.floor(ax) + 0.5, y: y + 2, z: Math.floor(az) + 0.5 };
-      if (standable(dim, top)) { try { e.teleport(top); } catch {} }
+      if (standable(dim, top) && goalLoc.y >= top.y - 0.5 && !dangerNear(dim, top)) { try { e.teleport(top); } catch {} }   // (v6.1: only when his goal is up there, never onto a battlement over a drop / lava)
     } else if (!at(-1) && !at(-2)) {                      // hole ahead: hop it if there's ground beyond
       const bx = p0.x + hx * 2, bz = p0.z + hz * 2;
       if (standable(dim, { x: Math.floor(bx) + 0.5, y, z: Math.floor(bz) + 0.5 })) push(e, { x: hx * 0.55, y: 0.32, z: hz * 0.55 }, 2);
@@ -3309,7 +3309,7 @@ function engagement(e, d, now, orderGoal, melee) {
       if (dd <= stopRange) {
         const tc = chest(t);
         const spot = spotNear(e, (w) => clearShot(e.dimension, { x: w.x, y: w.y + 1.6, z: w.z }, tc), anchor, leash, 8);
-        if (spot) { note(e, "moving for a clear shot"); const sl = myMarker(e, spot); return sl ? { g: "g_wp", slot: sl, t: "t_mid", urgent: true } : undefined; }
+        if (spot && straightReach(e.dimension, e.location, spot)) { note(e, "moving for a clear shot"); const sl = myMarker(e, spot); return sl ? { g: "g_wp", slot: sl, t: "t_mid", urgent: true } : undefined; }   // (v6.1: only a plain walk; otherwise a real route below)
         if (anchor && freeOf(e) === false) return undefined;                                   // exactly as ordered: stay
         if (Math.abs(t.location.y - e.location.y) > 2.5) {
           if (!personal.has(e.id)) planPersonalTo(e, "advance", { x: t.location.x, y: t.location.y, z: t.location.z }, now);
@@ -3581,7 +3581,7 @@ function startMarch(player, pool, dest, then) {
 function requestPlan(id, m, from, wide = false) {
   const dim = world.getDimension(m.dim);
   m.planning = true;
-  const far = Math.hypot(m.dest.x - from.x, m.dest.z - from.z) > 280;
+  const far = m.coarse || Math.hypot(m.dest.x - from.x, m.dest.z - from.z) > 150;  // (v6.1: was 280: anything long is planned as a coarse map + short legs)
   if ((!m.legs || !m.legs.length) && far) {
     planRoute(dim, from, { x: m.dest.x, z: m.dest.z }, (pts) => {
       const mm = getMarches()[id];
@@ -3610,6 +3610,9 @@ function planLeg(id, m, from, wide) {
     if (!mm) return;
     mm.planning = false;
     mm.replans++;
+    // v6.1: no full route within the direct search (a big detour around a long wall, a river, a mountain): plan it the
+    // way long orders are planned, on the coarse map that looks ~400 blocks around, in short legs
+    if ((!pts || (partial && !frontier)) && lastLeg && !mm.legs?.length && !mm.coarse) { mm.coarse = true; requestPlan(id, mm, from, wide); return; }
     mm.frontier = !!(partial && frontier);                      // stopped at unloaded land: just the next stretch, not a dead end
     if (pts) { mm.path = pts; mm.idx = 0; mm.bestIdx = 0; }
     else if (!lastLeg) {                                        // this leg point can't be reached: it was a bad corridor
@@ -3622,7 +3625,7 @@ function planLeg(id, m, from, wide) {
     }
     mm.progT = tick();
     saveMarches();
-  }, { step: 1, maxRadius: 300, max: 120000, weight: wide ? 1.0 : 1.15, dead: m.dead, prio: true });
+  }, { step: 1, maxRadius: lastLeg && !m.legs ? 140 : 110, max: wide ? 40000 : 25000, weight: wide ? 1.0 : 1.15, dead: m.dead, prio: true });   // (v6.1: legs are short: small searches)
 }
 function markDeadEnd(m, at, small = false) {
   const near = (m.dead ?? []).filter((z) => Math.hypot(z.x - at.x, z.z - at.z) < 30).length;
@@ -3792,7 +3795,8 @@ system.runInterval(() => {
       }
       changed = true; continue;
     }
-    if (now - m.progT > 300 && m.replans < 60) {               // no new ground for ~15 s: a dead end -> rethink wider
+    if (now - m.progT > 300 && m.replans < 30 && now - (m.wideT ?? -9999) > 400) {   // no new ground for ~15 s: a dead end -> rethink wider (v6.1: at most every 20 s)
+      m.wideT = now;
       const leadE = members.reduce((b, e) => ((progOf.get(e.id) ?? 0) > (progOf.get(b.id) ?? 0) ? e : b), members[0]);
       const pi0 = progOf.get(leadE.id) ?? 0;
       const tightSpot = isIndoorsAt(dim, leadE.location) || m.path.slice(Math.max(0, pi0 - 1), pi0 + 4).some((p, k, arr) => k && isGate(arr[k - 1], p));
@@ -4074,7 +4078,12 @@ system.runInterval(() => {
   for (const [id, it] of pushes) {
     if (downed.has(id)) continue;                                   // nothing moves the downed
     if (now - (pushCool.get(id) ?? -99) < (it.p >= 3 ? 4 : 8)) continue;
-    try { if (it.e.isValid) { it.e.applyImpulse(it.vec); pushCool.set(id, now); } } catch {}
+    try {
+      if (!it.e.isValid) continue;
+      let v = it.vec;
+      if (!stepping.has(id) && (Math.abs(v.x) > 0.01 || Math.abs(v.z) > 0.01) && !safeAhead(it.e, v.x, v.z)) v = { x: 0, y: Math.min(0.02, v.y ?? 0), z: 0 };   // v6.1: no shove over an edge or into lava
+      it.e.applyImpulse(v); pushCool.set(id, now);
+    } catch {}
   }
   pushes.clear();
   if (now % 400 < 2) for (const id of [...pushCool.keys()]) if (now - pushCool.get(id) > 400) pushCool.delete(id);
@@ -4133,7 +4142,7 @@ const pathable = (b) => passable(b) || isOpenable(b);
 const isFloor = (b) => { if (!b || b.isAir || b.isLiquid) return false; const t = TI(b.typeId); return !t.tall && !(t.trap && b.open) && (!t.pass || t.climb) && !t.leaves && !t.hazard; };
 const PLAN_BUDGET = 700;          // node expansions per tick, shared by all plans (a big search takes a few seconds)
 function cellAt(job, x, z, refY) {
-  const key = job.step > 1 ? `${x},${z}` : `${x},${z},${Math.floor(refY)}`;
+  const key = job.step > 1 ? job.nkey(x, z, 0) : job.nkey(x, z, Math.floor(refY));
   const c = job.cells.get(key);
   if (c !== undefined) {
     if (c.miss !== undefined) { if (Math.abs(c.miss - refY) <= 2) return null; }   // "no ground here" only counts for that height
@@ -4236,14 +4245,22 @@ function planRoute(dim, start, goal, onDone, opts = {}) {
     closed: new Set(), best: undefined, bestH: Infinity, exp: 0, max: opts.max ?? 9000, onDone, origin: { x: sx, z: sz }, maxRadius,
     step, weight: opts.weight ?? 1.25, dead: opts.dead ?? [], goalFn: opts.goalFn, accept: opts.accept, prio: !!opts.prio,
     danger: opts.danger?.length ? opts.danger : undefined, exposed: new Map(), rays: 0 };
-  const s0 = cellAt(job, sx, sz, start.y) ?? { x: sx, z: sz, y: Math.floor(start.y), w: false };
-  const nkey = (x, z, y) => step > 1 ? `${x},${z}` : `${x},${z},${y}`;
+  // v6.1: number keys relative to the start (text keys for every searched cell were the planner's memory hog: a long
+  // detour could build hundreds of thousands of them and crash the game's script engine)
+  const enc = (x, z, y) => ((x - sx + 4096) * 8192 + (z - sz + 4096)) * 1024 + ((y ?? 0) + 256);
+  const nkey = (x, z, y) => step > 1 ? enc(x, z, 0) : enc(x, z, y);
   job.nkey = nkey;
+  job.dec = (k) => { const y = (k % 1024) - 256, r = Math.floor(k / 1024); return { x: Math.floor(r / 8192) - 4096 + sx, z: (r % 8192) - 4096 + sz, y }; };
+  const s0 = cellAt(job, sx, sz, start.y) ?? { x: sx, z: sz, y: Math.floor(start.y), w: false };
   job.cells.set(nkey(sx, sz, s0.y), s0);
   const h0 = job.goalFn ? 0 : Math.hypot(job.goal.x - sx, job.goal.z - sz);
   job.open.push({ x: sx, z: sz, y: s0.y, w: s0.w, climb: !!s0.climb, f: h0 });
   job.g.set(nkey(sx, sz, s0.y), 0);
   job.best = { x: sx, z: sz, key: nkey(sx, sz, s0.y) }; job.bestH = h0;
+  if (planJobs.length >= 30) {                                         // v6.1: never more than 30 searches in memory at once
+    const old = planJobs.findIndex((j) => !j.prio);
+    if (old >= 0) { const [j] = planJobs.splice(old, 1); try { j.onDone(undefined, true, false); } catch {} }
+  }
   planJobs.push(job);
 }
 // a cell the known enemies can see (chest height), checked once per cell per route, with a ray budget per route
@@ -4267,7 +4284,7 @@ function exposedCost(job, b) {
 function finishJob(job, endKey, partial = false) {
   const pts = [];
   let k = endKey;
-  while (k) { const parts = k.split(",").map(Number); const [x, z] = parts; const c = job.cells.get(k); pts.push({ x: x + 0.5, y: c && c.y !== undefined ? c.y : (parts[2] ?? 0), z: z + 0.5, w: !!c?.w, climb: !!c?.climb, open: !!c?.open }); k = job.came.get(k); }
+  while (k !== undefined) { const { x, z, y } = job.dec(k); const c = job.cells.get(k); pts.push({ x: x + 0.5, y: c && c.y !== undefined ? c.y : y, z: z + 0.5, w: !!c?.w, climb: !!c?.climb, open: !!c?.open }); k = job.came.get(k); }
   pts.reverse();
   // keep a point every ~6 blocks, at turns, height changes and water edges
   const out = [];
@@ -4294,9 +4311,9 @@ system.runInterval(() => {
     let share = Math.max(40, Math.floor(PLAN_BUDGET / planJobs.length)) * (job.prio ? 3 : 1);
     let finished = false;
     while (share-- > 0 && budget-- > 0 && freshReads < readBudget && ((budget & 31) || Date.now() - tStart < 3)) {
-      if (!job.open.size || job.exp >= job.max) {
+      if (!job.open.size || job.exp >= job.max || job.cells.size > 90000 || job.open.size > 60000) {   // (v6.1: and a hard size cap: never a memory blow-up)
         // no full route: go as far as we can toward the goal (re-planned later)
-        const bk = job.best.key ?? `${job.best.x},${job.best.z}`;
+        const bk = job.best.key ?? job.nkey(job.best.x, job.best.z, 0);
         if (job.bestH < Math.hypot(job.goal.x - job.origin.x, job.goal.z - job.origin.z) - 6) finishJob(job, bk, true); else { try { job.onDone(undefined, true, !!job.hitUnloaded); } catch {} }
         finished = true; break;
       }
@@ -4734,7 +4751,7 @@ function standAt(dim, x, y, z, now = tick()) {
   if (c !== undefined && now - c.t < 200) return c.v;
   let v = false;
   try { const f = tBlock(dim, x + 0.5, y - 1, z + 0.5), ft = tBlock(dim, x + 0.5, y, z + 0.5), h = tBlock(dim, x + 0.5, y + 1, z + 0.5);
-    v = !!f && !!ft && !!h && !f.isAir && !f.isLiquid && passable(ft) && passable(h); } catch {}
+    v = !!f && !!ft && !!h && !f.isAir && !f.isLiquid && !TI(f.typeId).hazard && passable(ft) && passable(h); } catch {}   // (v6.1: never on magma / a campfire)
   STAND.set(k, { v, t: now });
   return v;
 }
@@ -4817,7 +4834,7 @@ function brainMove(e, d, now, melee, anchor, leash) {
       if (!localReach(e.dimension, e.location, spot)) { B.act = ""; return undefined; }   /* not reachable on foot from here: skip it */
       B.reachSpot = { x: spot.x, y: spot.y, z: spot.z };
     }
-    if (isIndoors(e) || onStairs(e.dimension, e.location)) return travel(e, spot, "spot", now, urgent);   // v5.5: indoors, a real route (no getting lost at doorways)
+    if (isIndoors(e) || onStairs(e.dimension, e.location) || !straightReach(e.dimension, e.location, spot)) return travel(e, spot, "spot", now, urgent);   // v5.5: indoors, a real route (no getting lost at doorways); v6.1: anywhere a straight walk isn't safe
     if (!B.slot || !B.spot || flat(B.spot, spot) > 1.5 || !marker(B.slot)) { B.slot = myMarker(e, spot); B.spot = spot; } return B.slot ? { g: "g_wp", slot: B.slot, t: "t_mid", urgent } : undefined; };
   const known = [...S.known.values()];
   if (melee) {
@@ -5348,6 +5365,7 @@ function placeStep(e, goalLoc, now) {
   let wall = 0;
   for (let k = 0; k < 6; k++) { try { const b = dim.getBlock({ x: ax, y: y + k, z: az }); if (b && !b.isAir && !passable(b)) wall = k + 1; else break; } catch { break; } }
   if (wall < 2 || wall > 4 || goalLoc.y < p.y + 1) return false;
+  if (dangerNear(dim, { x: ax, y: y + wall, z: az })) return false;   // v6.1: never builds his way up onto a wall-top over a drop / lava
   try {
     const here = dim.getBlock({ x: p.x, y, z: p.z }), above = dim.getBlock({ x: p.x, y: y + 2, z: p.z });
     if (!here || !here.isAir || !above || !above.isAir) return false;
@@ -5948,6 +5966,7 @@ system.runInterval(() => {
       if (!moving || combatLock.has(e.id) || perc.get(e.id)?.threat) continue;
       if (m && m.members.some((id) => combatLock.has(id))) continue;   // the squad is holding for a fight: not stuck
       if (squads.get(squadKey(e, sd(e)))?.known?.size) continue;     // his squad is in contact: that's fighting, not stuck
+      if (pi !== undefined) { const q = m.path[pi]; if (q && Math.hypot(q.x - l.x, q.z - l.z) < 4 && Math.abs(q.y - l.y) < 1.5) continue; }   // on his route, at its level: a queue, not a trap
       { const df = sd(e).faction; let crowd = 0, foe = false;            // a battle nearby, or jammed in a crowd: not stuck
         for (const c of nearSnap(e.dimension.id, l, 40)) { if (c.id === e.id || c.down) continue; if (c.f && isHostile(df, c.f)) { foe = true; break; } if (c.dd < 4 && c.type === SOLDIER) crowd++; }
         if (foe || crowd >= 4) continue; }
@@ -5964,10 +5983,19 @@ system.runInterval(() => {
 // ---- one way to travel anywhere: a direct step only when it's close and plainly reachable on foot;
 // otherwise a proper dense route (the same planner and follower as every march)
 const travelTo = new Map(); // id -> destination of his current personal route
+// v6.1: every combat move goes through here: Minecraft's own walking (a straight line to a marker) only where a
+// straight walk is safe; otherwise a planned route (around lava, over the bridge, up the ladder). Walking straight at
+// a spot across a moat is what piled soldiers against castle walls and slid them into the lava.
+function walkTo(e, spot, now, urgent = true, kind = "spot") {
+  if (!spot) return undefined;
+  if (isIndoors(e) || onStairs(e.dimension, e.location) || !straightReach(e.dimension, e.location, spot)) return travel(e, spot, kind, now, urgent);
+  const slot = myMarker(e, spot);
+  return slot ? { g: "g_wp", slot, t: "t_mid", urgent } : undefined;
+}
 function travel(e, dest, kind, now, urgent = false) {
   if (!dest) return undefined;
   const inside = isIndoors(e) || onStairs(e.dimension, e.location);  // v5.5: indoors / on stairs every move is a real route (the glider walks it)
-  if (!inside && flat(dest, e.location) <= 12 && Math.abs(dest.y - e.location.y) <= 1 && localReach(e.dimension, e.location, dest)) {
+  if (!inside && flat(dest, e.location) <= 12 && Math.abs(dest.y - e.location.y) <= 1 && straightReach(e.dimension, e.location, dest)) {   // (v6.1: a SAFE straight walk, not just "reachable somehow")
     const slot = myMarker(e, dest);
     return slot ? { g: "g_wp", slot, t: "t_mid", urgent } : undefined;
   }
@@ -6217,7 +6245,7 @@ function drillMove(e, d, now, melee, anchor, leash) {
     D.since = now;
     const tc = chest(t);
     const spot = spotNear(e, (w) => flat(w, e.location) >= 2.5 && clearShot(e.dimension, { x: w.x, y: w.y + 1.6, z: w.z }, tc), anchor, leash);
-    if (spot && localReach(e.dimension, e.location, spot)) {
+    if (spot && straightReach(e.dimension, e.location, spot)) {
       D.scoot = spot; D.scootUntil = now + 60;
       for (const st of gunState.values()) if (st.target?.id === e.id) st.next = Math.max(st.next, now + 8);   // those aiming at him lose their sight picture
       note(e, "shifting position");
@@ -6358,6 +6386,57 @@ world.afterEvents.playerInteractWithEntity.subscribe((ev) => {
   });
 });
 
+// ---- v6.1: is the ground a step ahead (in the direction dx, dz) safe? No drop of 2+ blocks, no lava / fire / magma
+const DANGER = new Map(); // cell -> { v, t }: a drop of 2+ or a hazard right next to this cell
+function hazardCell(dim, x, y, z) {
+  try {
+    const f = tBlock(dim, x, y, z), u = tBlock(dim, x, y - 1, z);
+    return (!!f && (TI(f.typeId).hazard || f.typeId.includes("lava"))) || (!!u && (TI(u.typeId).hazard || u.typeId.includes("lava")));
+  } catch { return false; }
+}
+function dropOrHazard(dim, x, fy, z) {
+  if (hazardCell(dim, x, fy, z)) return true;
+  try {
+    const f = tBlock(dim, x, fy, z);
+    if (!f || !(f.isAir || passable(f))) return false;                // a wall / a step up: not a drop
+    for (const k of [1, 2]) { const b = tBlock(dim, x, fy - k, z); if (!b || !(b.isAir || passable(b)) || isClimb(b) || b.typeId.includes("water")) return false; if (b.typeId.includes("lava")) return true; }
+    return true;
+  } catch { return false; }
+}
+function dangerNear(dim, l) {
+  const x = Math.floor(l.x), y = Math.floor(l.y + 0.01), z = Math.floor(l.z), k = bkey(dim.id, x, y, z), now = tick();
+  const c = DANGER.get(k);
+  if (c && now - c.t < 600) return c.v;
+  let v = false;
+  for (let dx = -1; dx <= 1 && !v; dx++) for (let dz = -1; dz <= 1 && !v; dz++) if ((dx || dz) && dropOrHazard(dim, x + dx + 0.5, y, z + dz + 0.5)) v = true;
+  DANGER.set(k, { v, t: now });
+  if (DANGER.size > 20000) DANGER.clear();
+  return v;
+}
+function safeAhead(e, dx, dz) {
+  const l = e.location;
+  if (!dangerNear(e.dimension, l)) return true;
+  const L = Math.hypot(dx, dz) || 1, fy = Math.floor(l.y + 0.01);
+  for (const r of [0.6, 1.2]) if (dropOrHazard(e.dimension, l.x + (dx / L) * r, fy, l.z + (dz / L) * r)) return false;
+  return true;
+}
+// v6.1: the same edge guard for everyone else standing by a drop or lava (fighting on a wall-top, by a lava moat):
+// any momentum toward the edge is cancelled. Only soldiers whose cell is next to danger are checked (remembered per cell).
+system.runInterval(() => {
+  for (const e of allOf(SOLDIER)) {
+    try {
+      if (stepping.has(e.id) || climbing.has(e.id) || gliders.has(e.id) || downed.has(e.id) || isRiding(e)) continue;
+      if (!dangerNear(e.dimension, e.location)) continue;
+      const v = e.getVelocity();
+      if (Math.hypot(v.x, v.z) < 0.02) continue;
+      const l = e.location, fy = Math.floor(l.y + 0.01);
+      let cx = 0, cz = 0;
+      if (Math.abs(v.x) > 0.02 && dropOrHazard(e.dimension, l.x + Math.sign(v.x) * 0.45 + v.x * 2, fy, l.z)) cx = -v.x;
+      if (Math.abs(v.z) > 0.02 && dropOrHazard(e.dimension, l.x, fy, l.z + Math.sign(v.z) * 0.45 + v.z * 2)) cz = -v.z;
+      if (cx || cz) { e.applyImpulse({ x: cx, y: 0, z: cz }); note(e, "stopped at the edge"); }
+    } catch {}
+  }
+}, 2);
 // ---- edge guard: a soldier on a planned route who is sliding toward a drop of 3+ blocks that his route doesn't take
 // (momentum from a push, a hop, a shove) is stopped at the edge. Drops the route really takes are left alone.
 system.runInterval(() => {
@@ -6490,7 +6569,7 @@ function unCrowd(e, d, now, anchor, leash) {
   const t = perc.get(e.id)?.threat;
   const good = t?.isValid ? (w) => clearShot(e.dimension, { x: w.x, y: w.y + 1.6, z: w.z }, chest(t)) : undefined;
   const spot = freeSpot(e, e.location, 1.5, 4.5, good, now, anchor, leash);
-  if (!spot) return undefined;
+  if (!spot || !straightReach(e.dimension, e.location, spot)) return undefined;   // (v6.1: never "making room" over an edge)
   claimSpot(e, spot, now);
   const B = brain.get(e.id) ?? { act: "", decT: -999 }; brain.set(e.id, B);
   B.spread = { spot, until: now + 60 };
@@ -6504,7 +6583,7 @@ function spreadMove(e, now) {
   if (!sp) return undefined;
   if (now > sp.until || flat(sp.spot, e.location) < 0.8) { B.spread = undefined; return undefined; }
   claimSpot(e, sp.spot, now);
-  if (isIndoors(e) || onStairs(e.dimension, e.location)) return travel(e, sp.spot, "spot", now, false);   // v5.5: walked there by the glider
+  if (isIndoors(e) || onStairs(e.dimension, e.location) || !straightReach(e.dimension, e.location, sp.spot)) return travel(e, sp.spot, "spot", now, false);   // v5.5: walked there by the glider (v6.1: or anywhere not a plain walk)
   const slot = myMarker(e, sp.spot);
   if (flat(sp.spot, e.location) < 3.2) push(e, { x: (sp.spot.x - e.location.x) * 0.15, y: 0.02, z: (sp.spot.z - e.location.z) * 0.15 }, 2);   // the last steps (followers stop short of the marker)
   return slot ? { g: "g_wp", slot, t: "t_mid", urgent: false } : undefined;
@@ -6793,7 +6872,7 @@ function reflexMove(e, d, now, anchor, leash) {
       if (w && Math.abs(w.y - e.location.y) <= 1 && (!anchor || flat(w, anchor.location) <= leash) && localReach(e.dimension, e.location, w, 120)) { spot = w; kind = "breaking the line of fire"; break; }
     }
   }
-  if (!spot) return undefined;
+  if (!spot || !straightReach(e.dimension, e.location, spot)) return undefined;   // (v6.1: ducking for cover never means stepping off a wall)
   claimSpot(e, spot, now);
   B.reflex = { spot, until: now + 50, kind };
   const st = gunState.get(e.id); if (st) st.check = now;

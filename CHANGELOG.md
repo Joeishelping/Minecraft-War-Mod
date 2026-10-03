@@ -1,5 +1,27 @@
 # War Engine changelog
 
+## v6.1 (the crash on longer orders, castles and lava moats)
+
+- **The crash on march orders of ~100-280 blocks.** Orders under 280 blocks were worked out in one search of up to
+  120,000 steps, every step stored with text keys. On real terrain that has to detour (a long wall, a river, a
+  mountain) that's hundreds of thousands of objects: ~255 MB in the test, enough to bring down the game's script
+  engine. v6.0 made it more likely (the "find another way" replans finally worked, each one another big search). Now:
+  number keys (several times less memory), orders over 150 blocks (and any order the direct search can't solve) are
+  planned on the coarse map in short legs, every search has a hard size cap, at most 30 searches exist at once, and a
+  stuck march re-thinks at most every 20 s. Test, a 250-block order around a long wall: 37,000 search steps -> 2,300,
+  the squad still gets there.
+- **Castles, bridges and lava moats.** Fighting moves (closing in, getting a clear shot, cover, making room, shoot
+  and scoot, reflexes) used Minecraft's own walking straight at a spot: across a moat that meant piling up against the
+  wall and sliding along it into the lava. Now a fight move only walks straight where that's a safe walk; anything
+  else is a planned route (over the bridge, around the lava, up the ladder). No shove (weaving, spacing, flinching,
+  dodging) ever pushes anyone over a 2+ block drop or into lava / fire, and the edge guard now covers every soldier
+  standing by a drop or lava, not just marching ones. The old "climb assist" no longer teleports a soldier on top of
+  a 2-high wall (or lets him build up one) unless his goal is up there and the top isn't beside a drop or lava.
+  New test copying the screenshots (wall-top, courtyard and ladder, lava moat, narrow bridge, both sides charging):
+  0 falls into the moat or the courtyard, 0 teleports, the fight over in ~900 ticks instead of 1,500-2,000.
+- **Rescue never fires for a traffic jam**: a soldier standing on his route at its level is in a queue, not stuck
+  (a 200 v 200 test had armies queueing round a building and being teleported forward).
+
 ## v6.0 (orders that get there, commit to the fight, rescue, armbands, tougher guards)
 
 - **Orders get there, long ones too.** A new test copies a real battlefield: hills, trenches with only two crossings,
