@@ -1,2 +1,3 @@
 tests/harness/run_*/
 *.log
+dist/

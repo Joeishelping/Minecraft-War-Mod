@@ -18,7 +18,7 @@ const gauss = () => Math.sqrt(-2 * Math.log(rnd() + 1e-9)) * Math.cos(2 * Math.P
 function mutate(p) {
   const q = { ...p }, keys = Object.keys(SPACE);
   const n = 2 + Math.floor(rnd() * 3);
-  for (let i = 0; i < n; i++) { const k = keys[Math.floor(rnd() * keys.length)], [lo, hi] = SPACE[k]; q[k] = +Math.min(hi, Math.max(lo, q[k] + gauss() * (hi - lo) * 0.18)).toFixed(3); }
+  for (let i = 0; i < n; i++) { const k = keys[Math.floor(rnd() * keys.length)], [lo, hi] = SPACE[k]; q[k] = +Math.min(hi, Math.max(lo, q[k] + gauss() * (hi - lo) * 0.25)).toFixed(3); }
   return q;
 }
 function run(scen, seed, bw1, bw2) {
@@ -54,13 +54,17 @@ async function duel(cand, inc, seeds, tag) {
 let best = { ...start };
 const log = [];
 for (let g = 1; g <= GENS; g++) {
-  const muts = Array.from({ length: 3 }, () => mutate(best));
+  const muts = Array.from({ length: 2 }, () => mutate(best));
   const scores = [];
   for (const m of muts) scores.push(await duel(m, best, SEEDS, g * 13));
   const bi = scores.indexOf(Math.max(...scores));
-  const line = `gen ${g}: mutant scores ${scores.map((x) => x.toFixed(3)).join(" ")}`;
-  if (scores[bi] > 0.06) { best = muts[bi]; log.push(`${line} -> adopted ${JSON.stringify(best)}`); }
-  else log.push(`${line} -> kept`);
+  let line = `gen ${g}: mutant scores ${scores.map((x) => x.toFixed(3)).join(" ")}`;
+  if (scores[bi] > 0.12) {                                       // promising: confirm on fresh seeds before adopting (no luck)
+    const again = await duel(muts[bi], best, SEEDS, g * 13 + 5000);
+    line += ` re-check ${again.toFixed(3)}`;
+    if (again > 0.06) { best = muts[bi]; log.push(`${line} -> adopted ${JSON.stringify(best)}`); }
+    else log.push(`${line} -> kept`);
+  } else log.push(`${line} -> kept`);
   console.log(log[log.length - 1]);
 }
 // final check against the starting weights on fresh seeds

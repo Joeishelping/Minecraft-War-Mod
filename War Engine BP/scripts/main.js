@@ -1,4 +1,4 @@
-// War Engine v5.3: faction NPC war framework
+// War Engine v5.4: faction NPC war framework
 import { world, system, Player, ItemStack, EquipmentSlot, GameMode } from "@minecraft/server";
 import { ActionFormData, ModalFormData, FormCancelationReason } from "@minecraft/server-ui";
 import { SKINS } from "./skins.js";
