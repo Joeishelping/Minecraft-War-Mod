@@ -16,13 +16,13 @@ export const SKINS = [
   "Old Jewtopia Soldier", // skin_08
   "Petropolis Soldier", // skin_09
   "Reich Soldier", // skin_10
-  "RZookieville Soldier", // skin_11
+  "Zookieville Soldier", // skin_11
   "Banditos", // skin_12
-  "", // skin_13
-  "", // skin_14
-  "", // skin_15
-  "", // skin_16
-  "", // skin_17
+  "DRGK Soldier", // skin_13
+  "Shlomo Castle Soldier", // skin_14
+  "Jeetya Soldier", // skin_15
+  "Tout Donner Soldier", // skin_16
+  "Gorgonzolan Army Soldier", // skin_17
   "", // skin_18
   "", // skin_19
   "", // skin_20
