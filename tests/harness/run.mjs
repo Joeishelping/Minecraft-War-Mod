@@ -20,6 +20,7 @@ const HOOK = ["cleanupMenu", "purgeState", "gliders", "glideBan", "driveOn", "fo
 if (opt.thinkdbg) { const f = path.join(runDir, "main.js"); fs.writeFileSync(f, fs.readFileSync(f, "utf8").replace("    // how far each stationary order may leave its spot to fight", "    if (globalThis.__thinkDbg) globalThis.__thinkDbg(e, engaged, cu, d);\n    // how far each stationary order may leave its spot to fight")); }
 fs.appendFileSync(path.join(runDir, "main.js"), `\nglobalThis.__war = {};\n${HOOK.map((n) => `try { globalThis.__war.${n} = ${n}; } catch {}`).join("\n")}\n`);
 loadDefs(path.join(root, "War Engine BP"));
+{ const cw = console.warn.bind(console); console.warn = (...a) => { const m = a.join(" "); if (m.startsWith("War Engine:")) SIM.errors.push(m); else cw(...a); }; }
 // v6.2 Bedrock mode: slow=K makes the add-on's own time budgets see K times the real time (Bedrock's script engine is
 // many times slower than V8), harsh=1 corner-cutting walking with knockback, loadR=N land unloads N blocks from players
 if (opt.slow) { const real = Date.now.bind(Date), t0 = real(), K = Number(opt.slow); Date.now = () => t0 + (real() - t0) * K; }
@@ -434,7 +435,7 @@ const S = {
       if (SIM.tick - t0 === 600) prog600 = +(alive(1).reduce((t, e) => t + e._loc.z, 0) / alive(1).length).toFixed(1);
       if (opt.follow && SIM.tick % 20 === 0 && SIM.tick - t0 >= Number(opt.followFrom ?? 0)) { const up = alive(1); const cz = up.reduce((t, e) => t + e._loc.z, 0) / up.length, cx = up.reduce((t, e) => t + e._loc.x, 0) / up.length; player._loc = { x: cx, y: 40, z: cz - 20 }; }
       if (opt.mtrace && SIM.tick % Number(opt.every ?? 100) === 0 && SIM.tick >= Number(opt.from ?? 0)) { const m = Object.values(W.getMarches())[0]; console.error("MT", SIM.tick, "idx", m?.idx, "p", JSON.stringify(m?.path?.[m.idx]), "shape", m?.shape, alive(1).map((e) => `${e._loc.x.toFixed(0)},${e._loc.y.toFixed(0)},${e._loc.z.toFixed(0)}${e.dyn.get("war:catchup") === e.dyn.get("war:fmk") ? "F" : "D"}${W.gliders.has(e.id) ? "g" : ""}${e.dyn.get("war:goal") === e.dyn.get("war:catchup") ? "" : "!"}`).join(" ")); }
-      for (const e of alive(1)) { const near = Math.hypot(e._loc.x - dest.x, e._loc.z - dest.z) < 12; const st = near ? 0 : (e.__still ?? 0); worstStill = Math.max(worstStill, st); }
+      for (const e of alive(1)) { const near = Math.hypot(e._loc.x - dest.x, e._loc.z - dest.z) < 12; const st = near ? 0 : (e.__still ?? 0); if (opt.still && st === 20) console.error("STILL", SIM.tick, JSON.stringify(e._loc), W.notes.get(e.id)?.text, [...e.groups].filter((g) => /g_/.test(g)).join(","), "goal", e.dyn.get("war:goal"), "cu", e.dyn.get("war:catchup"), "glide", W.gliders.has(e.id), "pers", W.personal.has(e.id)); worstStill = Math.max(worstStill, st); }
       if (alive(1).filter((e) => Math.hypot(e._loc.x - dest.x, e._loc.z - dest.z) < 12).length >= N - 1) arrived = SIM.tick - t0;
     }
     const there = alive(1).filter((e) => Math.hypot(e._loc.x - dest.x, e._loc.z - dest.z) < 12).length;

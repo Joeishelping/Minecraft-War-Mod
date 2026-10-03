@@ -3,6 +3,24 @@ import { world, system, Player, ItemStack, EquipmentSlot, GameMode } from "@mine
 import { ActionFormData, ModalFormData, FormCancelationReason } from "@minecraft/server-ui";
 import { SKINS } from "./skins.js";
 import { WarAPI } from "./api.js";
+// v6.2: errors are never silent any more in the core loops: counted per system, written to the content log (with the
+// first lines of the stack) at most once a minute per system, and shown in chat when "Show soldier decisions" is on.
+const ERRS = new Map(); // system -> { n, t }
+function oops(sys, err) {
+  try {
+    const now = system.currentTick, r = ERRS.get(sys) ?? { n: 0, t: -99999 };
+    r.n++;
+    if (now - r.t >= 1200) {
+      r.t = now;
+      const msg = `War Engine: ${sys} error (x${r.n}): ${String(err?.stack ?? err).split("\n").slice(0, 3).join(" | ")}`;
+      console.warn(msg);
+      try { if (world.getDynamicProperty("war:set_readout")) world.sendMessage(`§c${msg.slice(0, 180)}`); } catch {}
+      r.n = 0;
+    }
+    ERRS.set(sys, r);
+  } catch {}
+}
+{ const ri = system.runInterval.bind(system); system.runInterval = (f, n) => ri(() => { try { f(); } catch (err) { oops("loop", err); } }, n); }
 import "./extensions/index.js";
 
 // ================================================================ constants
@@ -966,7 +984,7 @@ system.runInterval(() => {
       const pass = (thinkPass.get(e.id) ?? 0) + 1; thinkPass.set(e.id, pass);
       if (!isHot(e, now) && pass % 3) continue;
       think(e);
-    } catch {}
+    } catch (err) { oops("think", err); }
   }
   thinkCursor = (thinkCursor + per) % n;
   if (now % 1200 === 0) { for (const id of [...thinkPass.keys()]) if (!world.getEntity(id)) { thinkPass.delete(id); g2Done.delete(id); hotMemo.delete(id); } }
@@ -3330,7 +3348,7 @@ system.runInterval(() => {
         const pass = (percPass.get(e.id) ?? 0) + 1; percPass.set(e.id, pass);
         if (!isHot(e, now) && pass % 3) continue;
         perceive(e, now);
-      } catch {}
+      } catch (err) { oops("perception", err); }
     }
     percCursor = (percCursor + per) % n;
   }
@@ -6441,7 +6459,9 @@ function trackRemote(e, now, wantsToMove) {
 // he's set to walk (Minecraft's walking on) toward a marker that's well away from him
 function wantsWalk(e, goal) {
   const mk = goal ? marker(goal) : undefined;
-  return !!mk && dist(mk.location, e.location) > 4 && getJSON(e, "war:st", {}).g === "g_wp";
+  if (!mk || dist(mk.location, e.location) <= 4) return false;
+  const g = getJSON(e, "war:st", {}).g;
+  return g === "g_wp" || (g === "g_none" && !gliders.has(e.id) && dangerNear(e.dimension, e.location));   // (v6.2: or held still on a ledge with somewhere to go)
 }
 function playerNear(e, R) {
   try { const l = e.location, did = e.dimension.id; for (const p of world.getAllPlayers()) { if (p.dimension.id !== did) continue; const pl = p.location; if (Math.abs(pl.x - l.x) <= R && Math.abs(pl.z - l.z) <= R) return true; } } catch {}
@@ -6507,7 +6527,7 @@ system.runInterval(() => {
       const tgt = pts[ahead >= 0 ? ahead : driveAhead(pts, i, 7)];
       myMarker(e, tgt);
       if (dist(tgt, e.location) <= 3.3) stepAlong(e, pts, i);
-    } catch {}
+    } catch (err) { oops("route driver", err); }
   }
 }, 4);
 
@@ -6973,14 +6993,18 @@ system.runInterval(() => {
           g.k++; g.blocked = 0; continue;
         } else {
           g.blocked = (g.blocked ?? 0) + 1;
-          if (g.blocked > 10) { gliders.delete(id); glideBan.set(id, now + 60); personal.delete(id); travelTo.delete(id); }   // (the brain / settle work out a new way)
+          if (g.blocked > 10) {
+            gliders.delete(id); glideBan.set(id, now + 60); personal.delete(id); travelTo.delete(id);   // (the brain / settle work out a new way)
+            // v6.2: on a bridge / ledge he can't just be left there: a fresh short route from exactly where he stands
+            if (dangerNear(e.dimension, e.location)) { const tgt = pts[Math.min(pts.length - 1, g.k + 3)]; if (tgt) { glideBan.delete(id); planPersonalTo(e, "settle", { x: tgt.x, y: tgt.y, z: tgt.z }, now); } }
+          }
           continue;
         }
       }
       g.blocked = 0;
       e.teleport({ x: tx, y, z: tz }, { facingLocation: { x: nb.x, y: y + 1.5, z: nb.z } });
       if (Math.hypot(b.x - tx, b.z - tz) < 0.05) g.k++;
-    } catch { gliders.delete(id); }
+    } catch (err) { gliders.delete(id); oops("glider", err); }
   }
 }, 1);
 
