@@ -1,5 +1,10 @@
 # War Engine changelog
 
+## v6.5.3 (the last 3 callout languages: 18 in all)
+
+- **Chinese (Mandarin), Yucatec Maya and AAVE** added. Chinese's lines recorded in two versions ("Flanking",
+  "Man down", "Clear") are used at random. AAVE keeps both sentences of each line as one shout.
+
 ## v6.5.2 (5 more callout languages: 15 in all)
 
 - **Italian, Hindi, Igbo, Haitian Creole and Syrian Arabic (mixed with English)** added. Hindi's lines recorded in
