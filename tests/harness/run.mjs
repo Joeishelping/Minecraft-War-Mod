@@ -16,7 +16,7 @@ const runDir = path.join(here, `run_${process.pid}`);
 fs.mkdirSync(runDir, { recursive: true });
 fs.cpSync(scriptsDir, runDir, { recursive: true });
 // expose the add-on's internals to the scenarios (appended to the copy only)
-const HOOK = ["gliders", "glideBan", "driveOn", "formMode", "tightAt", "combatLock", "routeProgress", "getLearned", "learned", "generals", "planRoute", "BW", "BW_F", "HEAD_K", "medicMove", "shakenMove", "waterExit", "followPersonal", "spreadMove", "combatMove", "engagement", "reinforceMove", "patrolSweep", "marker", "think", "routeOf", "lookahead", "queuedBehind", "climbing", "laneOf", "trackIdx", "giveOrder", "startMarch", "giveFunction", "setupSoldier", "sd", "perc", "squads", "getMarches", "personal", "downed", "goDown", "marker", "gunState", "brain", "notes", "setRelPair", "travel", "isDowned"];
+const HOOK = ["cleanupMenu", "purgeState", "gliders", "glideBan", "driveOn", "formMode", "tightAt", "combatLock", "routeProgress", "getLearned", "learned", "generals", "planRoute", "BW", "BW_F", "HEAD_K", "medicMove", "shakenMove", "waterExit", "followPersonal", "spreadMove", "combatMove", "engagement", "reinforceMove", "patrolSweep", "marker", "think", "routeOf", "lookahead", "queuedBehind", "climbing", "laneOf", "trackIdx", "giveOrder", "startMarch", "giveFunction", "setupSoldier", "sd", "perc", "squads", "getMarches", "personal", "downed", "goDown", "marker", "gunState", "brain", "notes", "setRelPair", "travel", "isDowned"];
 if (opt.thinkdbg) { const f = path.join(runDir, "main.js"); fs.writeFileSync(f, fs.readFileSync(f, "utf8").replace("    // how far each stationary order may leave its spot to fight", "    if (globalThis.__thinkDbg) globalThis.__thinkDbg(e, engaged, cu, d);\n    // how far each stationary order may leave its spot to fight")); }
 fs.appendFileSync(path.join(runDir, "main.js"), `\nglobalThis.__war = {};\n${HOOK.map((n) => `try { globalThis.__war.${n} = ${n}; } catch {}`).join("\n")}\n`);
 loadDefs(path.join(root, "War Engine BP"));
@@ -516,6 +516,37 @@ const S = {
       if (!up1 || !up2 || (crossed.size >= up1 && !up2)) break;
     }
     report({ ticks: SIM.tick - t0, fellMoat: fellMoat.size, crossed: crossed.size, firstCross, attackersUp: alive(1).filter((e) => !W.isDowned(e)).length, defendersUp: alive(2).filter((e) => !W.isDowned(e)).length, bunchAvg: +(M.bunchPairs / M.bunchSamples).toFixed(2), final: alive(1).map((e) => `${Math.round(e._loc.x)},${Math.round(e._loc.y)},${Math.round(e._loc.z)}`), notes: M.notes });
+  },
+
+  // v6.2: the cleanup / repair tools, including things in unloaded land (removed the moment it loads)
+  async cleanup() {
+    SIM.bounds = { x0: -300, x1: 300, z0: -300, z1: 300, y0: -10, y1: 40 };
+    SIM.loadR = 100;
+    spawnPlayer({ x: 0, y: 0, z: 0 });
+    for (let i = 0; i < 4; i++) soldier(1, { x: i * 2 + 0.5, y: 0, z: 10.5 }, "rifle");
+    for (let i = 0; i < 4; i++) soldier(2, { x: i * 2 + 0.5, y: 0, z: -10.5 }, "rifle", 1);
+    SIM.loadR = 1000; for (let i = 0; i < 4; i++) soldier(2, { x: i * 2 + 0.5, y: 0, z: 200.5 }, "rifle", 1); SIM.loadR = 100;   // far away: unloaded
+    step(40);
+    const count = (f, near) => [...SIM.entities.values()].filter((e) => e._valid && e.typeId === SOLDIER && e.props.get("war:faction") === f && (near === undefined || (near ? e._loc.z < 100 : e._loc.z > 100))).length;
+    const before = { f1: count(1), f2near: count(2, true), f2far: count(2, false) };
+    globalThis.__formAnswers = [{ selection: 2 }, { selection: 1 }, { selection: 0 }];          // remove faction 2, confirm
+    await W.cleanupMenu(player); step(20);
+    const afterF = { f1: count(1), f2near: count(2, true), f2far: count(2, false) };
+    player._loc = { x: 0, y: 0, z: 190 }; step(220);                                                  // go near the far ones: their land loads
+    const afterLoad = { f2far: count(2, false) };
+    player._loc = { x: 0, y: 0, z: 0 };
+    await order(1, { x: 0, y: 0, z: 60 }); step(40);
+    const marchesBefore = Object.keys(W.getMarches()).length;
+    globalThis.__formAnswers = [{ selection: 0 }];                                                   // repair
+    await W.cleanupMenu(player); step(40);
+    const repaired = { marches: Object.keys(W.getMarches()).length, holding: alive(1).filter((e) => W.sd(e).func === "hold").length };
+    SIM.loadR = 1000; soldier(1, { x: 0.5, y: 0, z: 250.5 }, "rifle"); SIM.loadR = 100;
+    globalThis.__formAnswers = [{ selection: 3 }, { selection: 0 }];                                  // remove everything
+    await W.cleanupMenu(player); step(40);
+    const left = [...SIM.entities.values()].filter((e) => e._valid && e.typeId.startsWith("war:")).length;
+    player._loc = { x: 0, y: 0, z: 240 }; step(220);
+    const leftAfterLoad = [...SIM.entities.values()].filter((e) => e._valid && e.typeId.startsWith("war:")).length;
+    report({ before, afterF, afterLoad, marchesBefore, repaired, left, leftAfterLoad, leftovers: [...SIM.entities.values()].filter((e) => e._valid && e.typeId.startsWith("war:")).map((e) => `${e.typeId}@${Math.round(e._loc.x)},${Math.round(e._loc.z)} gen=${e.dyn.get("war:gen")}`), purge: W.purgeState(), msgs: SIM.log.slice(-2) });
   },
 
   // v6.1: the planner's worst case: a 200-block order straight through a long wall whose only gap is far to one side

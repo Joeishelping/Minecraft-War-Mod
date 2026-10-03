@@ -2114,10 +2114,11 @@ async function placeFlag(player) {
 // ================================================================ War Table
 async function warTable(player, pre) {
   const af = new ActionFormData().title("War Table").body(`Your faction: ${factionLabel(playerFaction(player))}`)
-    .button("Join a faction").button("Leave my faction").button("Diplomacy").button("Name factions").button("Name squads").button("Settings").button("Coalitions").button("War archive").button("Test battle");
+    .button("Join a faction").button("Leave my faction").button("Diplomacy").button("Name factions").button("Name squads").button("Settings").button("Coalitions").button("War archive").button("Test battle").button("Cleanup / repair");
   const r = pre !== undefined ? { selection: pre, canceled: false } : await show(af, player);
   if (!r || r.canceled || r.selection === undefined) return;
   if (r.selection === 8) { await testBattle(player); return; }
+  if (r.selection === 9) { await cleanupMenu(player); return; }
   const pickFaction = async (title) => {
     const jf = new ActionFormData().title(title);
     for (const l of factionList()) jf.button(l);
@@ -2232,6 +2233,110 @@ async function warTable(player, pre) {
     player.sendMessage("§aSettings saved.");
     return warTable(player, 5);
     player.sendMessage("§aSettings saved.");
+  }
+}
+
+// ================================================================ v6.2: cleanup & repair
+// Everything this add-on puts in the world, removable on demand. Only loaded things can be touched by any script (or
+// /kill), so a removal is also written down: anything older than it (or of that faction) is removed the moment its land
+// loads. Repair deletes nothing: it cancels every march and stuck route and has every soldier hold where he stands.
+const PACK = [SOLDIER, HOUND, "war:mg_nest", ...VEHICLES, FLAG, WAYPOINT, "war:bomb", "war:shell", "war:blank"];
+const purgeState = () => getJSON(world, "war:purge", { gen: 1, all: 0, f: {} });
+function entFaction(o) {
+  try {
+    if (o.typeId === SOLDIER || o.typeId === HOUND || o.typeId === FLAG) return Number(P(o, "war:faction") ?? 0);
+    if (VEHICLES.includes(o.typeId) || o.typeId === "war:mg_nest") return vehicleFaction(o) || Number(gdp(o, "war:faction") ?? 0);
+  } catch {}
+  return 0;
+}
+function isPurged(o, ps) {
+  const g = Number(gdp(o, "war:gen") ?? 0);
+  if (ps.all && g < ps.all) return true;
+  const f = entFaction(o);
+  return !!(f && ps.f[f] && g < ps.f[f]);
+}
+function removeEnt(o) {
+  try { if (o.typeId === SOLDIER) { downed.delete(o.id); pows.delete(o.id); personal.delete(o.id); gliders.delete(o.id); climbing.delete(o.id); } } catch {}
+  try { o.remove(); } catch { try { o.kill(); } catch {} }
+}
+// new things are stamped with the current generation; things from before a removal are removed when they load
+world.afterEvents.entitySpawn.subscribe((ev) => { try { const o = ev.entity; if (PACK.includes(o.typeId) && gdp(o, "war:gen") === undefined) sdp(o, "war:gen", purgeState().gen); } catch {} });
+system.runInterval(() => {
+  const ps = purgeState();
+  if (!ps.all && !Object.keys(ps.f).length) return;
+  for (const did of ["overworld", "nether", "the_end"]) {
+    let dim; try { dim = world.getDimension(did); } catch { continue; }
+    for (const type of PACK) {
+      let list = []; try { list = dim.getEntities({ type }); } catch {}
+      for (const o of list) { try { if (isPurged(o, ps)) removeEnt(o); else if (gdp(o, "war:gen") === undefined) sdp(o, "war:gen", ps.gen); } catch {} }
+    }
+  }
+}, 100);
+function clearMarches(filter) {
+  const ms = getMarches();
+  for (const [id, m] of Object.entries(ms)) { if (filter && !filter(m)) continue; for (const sl of m.lanes ?? []) laneOf.delete(sl); delete ms[id]; }
+  saveMarches();
+}
+async function confirm(player, title, text) {
+  const r = await show(new ActionFormData().title(title).body(text).button("§cYes, do it").button("Cancel"), player);
+  return !!r && !r.canceled && r.selection === 0;
+}
+async function cleanupMenu(player) {
+  const r = await show(new ActionFormData().title("Cleanup / repair").body("Fix stuck soldiers, or remove War Engine things from the world.")
+    .button("Repair (deletes nothing)\nstop all marches, every soldier holds where he is")
+    .button("Remove everything near me").button("Remove one faction's units").button("§cRemove everything from War Engine"), player);
+  if (!r || r.canceled || r.selection === undefined) return;
+  const now = tick();
+  if (r.selection === 0) {
+    clearMarches();
+    personal.clear(); travelTo.clear(); gliders.clear(); climbing.clear(); combatLock.clear(); formMode.clear(); driveOn.clear(); remoteSettled.clear(); pressing.clear(); planJobs.length = 0;
+    let n = 0;
+    for (const e of allOf(SOLDIER)) {
+      try {
+        if (downed.has(e.id) || pows.has(e.id)) continue;
+        freshMind(e);
+        const d = sd(e), func = d.func === "charge" ? (FUNCS[d.div]?.[0]?.[0] ?? "hold") : d.func;
+        giveFunction(e, func, player, ["hold", "post", "sentry", "stand", "patrol"].includes(func) ? makeWaypoint(e.dimension, e.location, false) : undefined);
+        n++;
+      } catch {}
+    }
+    try { gcWaypoints(allOf(SOLDIER)); } catch {}
+    player.sendMessage(`§aRepaired: ${n} soldiers hold where they stand, all marches and routes cleared.`);
+    return;
+  }
+  if (r.selection === 1) {
+    const mr = await show(new ModalFormData().title("Remove near me").slider("Radius (blocks)", 8, 160, { valueStep: 8, defaultValue: 32 }), player);
+    if (!mr || mr.canceled || !mr.formValues) return;
+    const R = Number(mr.formValues[0]);
+    if (!(await confirm(player, "Remove near me", `Remove every War Engine soldier, hound, vehicle, nest, flag and marker within ${R} blocks?`))) return;
+    let n = 0;
+    for (const o of player.dimension.getEntities({ location: player.location, maxDistance: R })) if (PACK.includes(o.typeId)) { removeEnt(o); n++; }
+    player.sendMessage(`§aRemoved ${n} things within ${R} blocks.`);
+    return;
+  }
+  if (r.selection === 2) {
+    const ff = new ActionFormData().title("Remove one faction's units");
+    for (const l of factionList()) ff.button(l);
+    const fr = await show(ff, player);
+    if (!fr || fr.canceled || fr.selection === undefined) return;
+    const f = fr.selection + 1;
+    if (!(await confirm(player, "Remove a faction", `Remove every soldier, hound, vehicle, nest and flag of ${factionLabel(f)} (everywhere: things in unloaded land go when it loads)?`))) return;
+    const ps = purgeState(); ps.gen++; ps.f[f] = ps.gen; setJSON(world, "war:purge", ps);
+    clearMarches((m) => m.fac === f);
+    let n = 0;
+    for (const did of ["overworld", "nether", "the_end"]) { let dim; try { dim = world.getDimension(did); } catch { continue; } for (const type of PACK) { try { for (const o of dim.getEntities({ type })) if (entFaction(o) === f) { removeEnt(o); n++; } } catch {} } }
+    player.sendMessage(`§aRemoved ${n} loaded units of ${factionLabel(f)}; the rest go when their land loads.`);
+    return;
+  }
+  if (r.selection === 3) {
+    if (!(await confirm(player, "§cRemove everything", "Remove EVERY War Engine soldier, hound, vehicle, nest, flag and marker in the world, and every march? (Things in unloaded land go when it loads. Settings, factions and names are kept.)"))) return;
+    const ps = purgeState(); ps.gen++; ps.all = ps.gen; ps.f = {}; setJSON(world, "war:purge", ps);
+    clearMarches();
+    personal.clear(); travelTo.clear(); gliders.clear(); climbing.clear(); combatLock.clear(); planJobs.length = 0;
+    try { slotRefs = {}; setJSON(world, "war:slotrefs", {}); } catch {}
+    let n = 0;
+    for (const did of ["overworld", "nether", "the_end"]) { let dim; try { dim = world.getDimension(did); } catch { continue; } for (const type of PACK) { try { for (const o of dim.getEntities({ type })) { removeEnt(o); n++; } } catch {} } }
+    player.sendMessage(`§aRemoved ${n} loaded War Engine things; anything in unloaded land goes when it loads.`);
   }
 }
 
