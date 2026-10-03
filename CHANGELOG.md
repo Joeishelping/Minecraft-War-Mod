@@ -1,5 +1,11 @@
 # War Engine changelog
 
+## v6.5.2 (5 more callout languages: 15 in all)
+
+- **Italian, Hindi, Igbo, Haitian Creole and Syrian Arabic (mixed with English)** added. Hindi's lines recorded in
+  two versions ("Contact", "Charge", "Suppressing") are used at random. Syrian Arabic keeps both halves of its
+  two-part lines ("هُجوم! لِتْز غُو!") as one shout.
+
 ## v6.5.1 (5 more callout languages)
 
 - **Hebrew, Dutch, German, Mongolian and Russian** callouts added: 10 languages in all. Lines recorded in two
