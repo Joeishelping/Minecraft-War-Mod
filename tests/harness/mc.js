@@ -34,7 +34,7 @@ const isOpen = (x, y, z) => !!SIM.states.get(k3(Math.floor(x), Math.floor(y), Ma
 // can a body pass through this cell?
 export function passCell(x, y, z) {
   const id = idAt(x, y, z);
-  if (id === "minecraft:air" || id.includes("water")) return true;
+  if (id === "minecraft:air" || id.includes("water") || id.includes("lava")) return true;
   if (id.includes("door") && !id.includes("iron") && !id.includes("trapdoor")) return true;       // mobs open wooden doors
   if ((id.includes("trapdoor") || id.includes("fence_gate") || id.includes("iron_door")) && isOpen(x, y, z)) return true;
   return PASS.some((p) => id.includes(p)) && !id.includes("grass_block");
@@ -44,6 +44,17 @@ const stepBlock = (x, y, z) => { const id = idAt(x, y, z); return id.includes("s
 // rays stop at anything that isn't air/plant/open thing (glass stops them too, as in the game)
 const rayStops = (x, y, z) => { const id = idAt(x, y, z); if (id === "minecraft:air" || id.includes("water")) return false; if (PASS.some((p) => id.includes(p)) && !id.includes("grass_block")) return false; if ((id.includes("door") || id.includes("gate")) && isOpen(x, y, z)) return false; return true; };
 function inBounds(x, z) { const b = SIM.bounds; return x >= b.x0 && x <= b.x1 && z >= b.z0 && z <= b.z1; }
+// v6.2: Bedrock mode: land further than SIM.loadR from every player is unloaded (blocks throw, entities are frozen and invisible)
+// beyond the simulation distance (SIM.simR) the land is loaded but nothing ticks: mobs don't walk or fall (scripts still see them)
+export function tickingAt(x, z) {
+  for (const e of SIM.entities.values()) if (e.isPlayer && e._valid && Math.hypot(e._loc.x - x, e._loc.z - z) <= SIM.simR) return true;
+  return false;
+}
+export function loadedAt(x, z) {
+  if (!SIM.loadR) return true;
+  for (const e of SIM.entities.values()) if (e.isPlayer && e._valid && Math.hypot(e._loc.x - x, e._loc.z - z) <= SIM.loadR) return true;
+  return false;
+}
 class Permutation {
   constructor(loc) { this.loc = loc; }
   getState(n) { return SIM.states.get(k3(this.loc.x, this.loc.y, this.loc.z))?.[n] ?? false; }
@@ -199,11 +210,11 @@ export class Dimension {
   getBlock(loc) {
     count("getBlock");
     const x = Math.floor(loc.x), y = Math.floor(loc.y), z = Math.floor(loc.z);
-    if (!inBounds(x, z)) throw new Error("LocationInUnloadedChunkError");
+    if (!inBounds(x, z) || !loadedAt(x, z)) throw new Error("LocationInUnloadedChunkError");
     if (y < SIM.bounds.y0 || y > SIM.bounds.y1) return undefined;
     return new Block(this, x, y, z);
   }
-  getTopmostBlock(loc) { for (let y = SIM.bounds.y1; y >= SIM.bounds.y0; y--) if (solidCell(loc.x, y, loc.z)) return new Block(this, Math.floor(loc.x), y, Math.floor(loc.z)); return undefined; }
+  getTopmostBlock(loc) { count("getTopmostBlock"); if (!inBounds(Math.floor(loc.x), Math.floor(loc.z)) || !loadedAt(loc.x, loc.z)) throw new Error("LocationInUnloadedChunkError"); for (let y = SIM.bounds.y1; y >= SIM.bounds.y0; y--) if (solidCell(loc.x, y, loc.z)) return new Block(this, Math.floor(loc.x), y, Math.floor(loc.z)); return undefined; }
   getBlockFromRay(from, dir, opts = {}) {
     count("getBlockFromRay");
     const max = opts.maxDistance ?? 64, st = 0.1;
@@ -224,6 +235,7 @@ export class Dimension {
     const out = [];
     for (const e of SIM.entities.values()) {
       if (!e._valid || e.dimension !== this) continue;
+      if (SIM.loadR && !e.isPlayer && !loadedAt(e._loc.x, e._loc.z)) continue;
       if (q.type && e.typeId !== q.type) continue;
       if (q.excludeTypes && q.excludeTypes.includes(e.typeId)) continue;
       if (q.families && !q.families.every((f) => famOf(e).includes(f))) continue;
@@ -263,7 +275,7 @@ export const world = {
   getDimension: (id) => { count("getDimension"); return dimCache.get(String(id).replace("minecraft:", "")); },
   getDynamicProperty(k) { count("world.getDynamicProperty"); if (SIM.loading) throw new Error("Native function [World::getDynamicProperty] cannot be used in early execution"); return SIM.dynWorld.get(k); },
   setDynamicProperty(k, v) { count("world.setDynamicProperty"); if (SIM.loading) throw new Error("Native function [World::setDynamicProperty] cannot be used in early execution"); if (v === undefined) SIM.dynWorld.delete(k); else SIM.dynWorld.set(k, v); if (typeof v === "string" && v.length > 32767) throw new Error("dynamic property too large"); },
-  getEntity: (id) => { count("getEntity"); const e = SIM.entities.get(id); return e && e._valid ? e : undefined; },
+  getEntity: (id) => { count("getEntity"); const e = SIM.entities.get(id); return e && e._valid && (!SIM.loadR || e.isPlayer || loadedAt(e._loc.x, e._loc.z)) ? e : undefined; },
   getAllPlayers: () => [...SIM.entities.values()].filter((e) => e.isPlayer && e._valid),
   getPlayers: () => [...SIM.entities.values()].filter((e) => e.isPlayer && e._valid),
   sendMessage: (m) => SIM.log.push(`[world] ${m}`),
@@ -362,8 +374,8 @@ function aiTick(e) {
     if (d > stop) {
       if (!e.path || SIM.tick - e.pathT > 20 || !e.pathGoal || Math.hypot(e.pathGoal.x - goal.x, e.pathGoal.y - goal.y, e.pathGoal.z - goal.z) > 1.5) { e.path = navPath(e._loc, goal); e.pathT = SIM.tick; e.pathGoal = { ...goal }; e.pi = 1; SIM.calls.set("~navPath", (SIM.calls.get("~navPath") ?? 0) + 1); }
       let p = e.path[e.pi];
-      while (p && Math.hypot(p.x - e._loc.x, p.z - e._loc.z) < 0.35 && Math.abs(p.y - e._loc.y) < 1.1) { e.pi++; p = e.path[e.pi]; }
-      if (p) { const dx = p.x - e._loc.x, dz = p.z - e._loc.z, L = Math.hypot(dx, dz) || 1; want = { x: dx / L * speed * mult, z: dz / L * speed * mult }; e.jumpWanted = p.y > e._loc.y + 0.5; }
+      while (p && Math.hypot(p.x - e._loc.x, p.z - e._loc.z) < (SIM.harsh ? 1.3 : 0.35) && Math.abs(p.y - e._loc.y) < 1.1) { e.pi++; p = e.path[e.pi]; }
+      if (p) { const dx = p.x - e._loc.x, dz = p.z - e._loc.z, L = Math.hypot(dx, dz) || 1; want = { x: dx / L * speed * mult, z: dz / L * speed * mult }; e.jumpWanted = p.y > e._loc.y + 0.5; if (SIM.harsh) { const wob = Math.sin(SIM.tick * 0.3 + e.id.charCodeAt(e.id.length - 1)) * 0.035; want.x += -dz / L * wob; want.z += dx / L * wob; } }
       else if (e.path.length <= 1 || e.pi >= e.path.length) { const dx = goal.x - e._loc.x, dz = goal.z - e._loc.z, L = Math.hypot(dx, dz) || 1; if (L > stop) want = { x: dx / L * speed * mult, z: dz / L * speed * mult }; }
     }
   }
@@ -375,6 +387,7 @@ function physTick(e) {
   if (e.isBullet) return bulletTick(e);
   const l = e._loc;
   const inW = idAt(l.x, l.y + 0.2, l.z).includes("water");
+  if (idAt(l.x, l.y + 0.2, l.z).includes("lava")) { SIM.lavaTicks = (SIM.lavaTicks ?? 0) + 1; (SIM.lavaIds ??= new Set()).add(e.id); if (SIM.tick % 10 === 0) damage(e, 4, undefined, "lava"); }
   // horizontal: walking intent plus whatever impulse momentum is left
   const w = e.walk ?? { x: 0, z: 0 };
   let vx = e.vel.x + w.x, vz = e.vel.z + w.z;
@@ -414,7 +427,7 @@ function bulletTick(b) {
       if (!o._valid || o === b.owner || o.static || o.isBullet || (o.typeId !== "war:soldier" && !o.isPlayer)) continue;
       const dx = o._loc.x - l.x, dz = o._loc.z - l.z, dy = l.y - o._loc.y;
       if (Math.hypot(dx, dz) < 2.5 && dy > -0.5 && dy < 2.5 && b.owner && hostileTo(b.owner, o)) b.shotLog.nearEnemy = true;
-      if (Math.hypot(dx, dz) < 0.35 && dy > 0 && dy < 1.9) { b.shotLog.hit = true; SIM.hits++; damage(o, BULLET_DMG[b.typeId] ?? 5, b.owner, "projectile"); b.remove(); return; }
+      if (Math.hypot(dx, dz) < 0.35 && dy > 0 && dy < 1.9) { b.shotLog.hit = true; SIM.hits++; damage(o, BULLET_DMG[b.typeId] ?? 5, b.owner, "projectile"); if (SIM.harsh && !o.isPlayer) { const L = Math.hypot(b.vel.x, b.vel.z) || 1; o.vel.x += (b.vel.x / L) * 0.35; o.vel.z += (b.vel.z / L) * 0.35; o.vel.y = Math.max(o.vel.y, 0.2); } b.remove(); return; }
     }
     if (rayStops(l.x, l.y, l.z)) { b.shotLog.block = true; b.remove(); return; }
   }
@@ -445,7 +458,7 @@ export function step(n = 1, profile = false) {
     SIM.cur = "timeouts";
     for (const h of due) { try { h.f(); } catch (err) { SIM.errors.push(`timeout: ${err?.stack ?? err}`); } }
     SIM.cur = undefined;
-    for (const e of [...SIM.entities.values()]) { try { aiTick(e); physTick(e); } catch (err) { SIM.errors.push(`sim: ${err?.stack ?? err}`); } }
+    for (const e of [...SIM.entities.values()]) { try { if (SIM.loadR && !e.isPlayer && !loadedAt(e._loc.x, e._loc.z)) continue; if (SIM.simR && !e.isPlayer && !e.isBullet && !tickingAt(e._loc.x, e._loc.z)) continue; aiTick(e); physTick(e); } catch (err) { SIM.errors.push(`sim: ${err?.stack ?? err}`); } }
   }
 }
 export function debugHook() {

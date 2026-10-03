@@ -1,4 +1,4 @@
-// War Engine v6.1: faction NPC war framework
+// War Engine v6.0: faction NPC war framework
 import { world, system, Player, ItemStack, EquipmentSlot, GameMode } from "@minecraft/server";
 import { ActionFormData, ModalFormData, FormCancelationReason } from "@minecraft/server-ui";
 import { SKINS } from "./skins.js";
@@ -508,7 +508,7 @@ function marchMembership(e, slot) {
 // wipe everything left over from earlier orders: searches, noises, water exits, catch-ups, fall-backs
 function freshMind(e) {
   try { sdDrop(e); } catch {}
-  travelTo.delete(e.id); climbing.delete(e.id);
+  travelTo.delete(e.id); climbing.delete(e.id); try { remoteSettled.delete(e.id); combatLock.delete(e.id); } catch {}
   medicTask.delete(e.id); personal.delete(e.id);
   shaken.delete(e.id); sweep.delete(e.id); brain.delete(e.id); reinforcing.delete(e.id); hornCone.delete(e.id);
   const s = perc.get(e.id);
@@ -1913,7 +1913,12 @@ async function giveOrderInner(player, cfg) {
     let near = false;
     try { near = !!dest && dist(cxz, dest) <= 14 && Math.abs((dest.y ?? cxz.y) - cxz.y) <= 1 && !!player.dimension.getBlock(dest) && localReach(player.dimension, cxz, dest); } catch {}
     if (near) { slot = makeWaypoint(player.dimension, dest); march = undefined; }       // close and on the same level: Minecraft walks them there
-    else { march = dest ? startMarch(player, pool, dest, cfg.then ?? "hold") : undefined; slot = march ? march.lanes[0] : 0; }
+    else {
+      const fac = cfg.faction || sd(pool[0]).faction;
+      if (dest && Math.hypot(dest.x - cxz.x, dest.z - cxz.z) > orderLimit()) { factionMsg(fac, `§cToo far: ${Math.round(Math.hypot(dest.x - cxz.x, dest.z - cxz.z))} blocks (limit ${orderLimit()}). Pick a closer point.`, player); return; }
+      march = dest ? startMarch(player, pool, dest, cfg.then ?? "hold") : undefined; slot = march ? march.lanes[0] : 0;
+      if (march && dest) announceMarch(player, fac, getMarches()[march.id], cxz);
+    }
   } else if (order === "hold" || order === "patrol") {
     const spot = generals.get(player.id)?.cursor ?? aimFar(player);
     if (!spot) { player.onScreenDisplay.setActionBar("§cLook at the ground where they should go."); return; }
@@ -1926,8 +1931,10 @@ async function giveOrderInner(player, cfg) {
     try { plain = loaded && Math.abs(spot.y - pc.y) <= 1.5 && localReach(player.dimension, pc, spot); } catch {}
     if (!loaded || dist(spot, player.location) > 48 || !plain) {
       // far away / not plainly reachable: march there along a route first, then hold / patrol
+      const fac = cfg.faction || sd(pool[0]).faction;
+      if (Math.hypot(spot.x - pc.x, spot.z - pc.z) > orderLimit()) { factionMsg(fac, `§cToo far: ${Math.round(Math.hypot(spot.x - pc.x, spot.z - pc.z))} blocks (limit ${orderLimit()}). Pick a closer point.`, player); return; }
       march = startMarch(player, pool, spot, order);
-      if (march) { cfg = { ...cfg, then: order }; order = "charge"; slot = march.lanes[0]; }
+      if (march) { cfg = { ...cfg, then: order }; order = "charge"; slot = march.lanes[0]; announceMarch(player, fac, getMarches()[march.id], pc); }
       else { spotCenter = spot; slot = makeWaypoint(player.dimension, spot); }
     } else {
       spotCenter = spot;
@@ -3309,7 +3316,7 @@ function engagement(e, d, now, orderGoal, melee) {
       if (dd <= stopRange) {
         const tc = chest(t);
         const spot = spotNear(e, (w) => clearShot(e.dimension, { x: w.x, y: w.y + 1.6, z: w.z }, tc), anchor, leash, 8);
-        if (spot && straightReach(e.dimension, e.location, spot)) { note(e, "moving for a clear shot"); const sl = myMarker(e, spot); return sl ? { g: "g_wp", slot: sl, t: "t_mid", urgent: true } : undefined; }   // (v6.1: only a plain walk; otherwise a real route below)
+        if (spot) { note(e, "moving for a clear shot"); const sl = myMarker(e, spot); return sl ? { g: "g_wp", slot: sl, t: "t_mid", urgent: true } : undefined; }
         if (anchor && freeOf(e) === false) return undefined;                                   // exactly as ordered: stay
         if (Math.abs(t.location.y - e.location.y) > 2.5) {
           if (!personal.has(e.id)) planPersonalTo(e, "advance", { x: t.location.x, y: t.location.y, z: t.location.z }, now);
@@ -3554,13 +3561,33 @@ function placeFormation(m, dim, p0, list, shape) {
     if (slot) setCatchup(e, slot);
   });
 }
+// ================================================================ v6.2: orders: the limit and telling the faction
+const orderLimit = () => Math.max(50, Number(setting("olimit", 500)));
+const msgSeen = new Map(); // text -> tick (the same message at most every 3 s)
+function factionMsg(f, text, fallback) {
+  const now = tick();
+  if (now - (msgSeen.get(text) ?? -999) < 60) return;
+  msgSeen.set(text, now);
+  if (msgSeen.size > 200) msgSeen.clear();
+  let sent = false;
+  if (f) for (const p of world.getAllPlayers()) { try { if (playerFaction(p) === f) { p.sendMessage(text); sent = true; } } catch {} }
+  if (!sent && fallback) { try { fallback.sendMessage(text); } catch {} }
+}
+function announceMarch(player, fac, m, from) {
+  if (!m) return;
+  const d = Math.round(Math.hypot(m.dest.x - from.x, m.dest.z - from.z));
+  let loaded = true;
+  try { loaded = !!player.dimension.getBlock({ x: m.dest.x, y: Number.isFinite(m.dest.y) ? m.dest.y : from.y, z: m.dest.z }); } catch { loaded = false; }
+  factionMsg(fac, `§7${squadLabel(m)} -> (${Math.round(m.dest.x)}, ${Math.round(m.dest.z)}), ${d} blocks${loaded ? "" : " (part of the way isn't loaded yet: they go as far as it is and carry on as it loads)"}`, player);
+}
+const squadLabel = (m) => { if (!m.sq) return "Your soldiers"; let n; try { n = getSquads()[m.fac]?.[m.sq - 1]; } catch {} return n || `Squad ${m.sq}`; };
 function startMarch(player, pool, dest, then) {
   let cx = 0, cy = 0, cz = 0;
   for (const e of pool) { cx += e.location.x; cy += e.location.y; cz += e.location.z; }
   cx /= pool.length; cy /= pool.length; cz /= pool.length;
   const dim = player.dimension, from = { x: cx, y: cy, z: cz };
   const m = { pos: from, dest, dim: dim.id, then, final: false, lanes: [], heading: Math.atan2(dest.z - cz, dest.x - cx),
-    path: undefined, idx: 0, planning: false, progT: tick(), replans: 0, members: pool.map((e) => e.id) };
+    path: undefined, idx: 0, planning: false, progT: tick(), replans: 0, members: pool.map((e) => e.id), fac: sd(pool[0]).faction, sq: sd(pool[0]).squad };
   const nLanes = Math.min(6, Math.max(2, Math.ceil(pool.length / 4)));
   for (let i = 0; i < nLanes; i++) { const s = makeWaypoint(dim, from, false); if (s) m.lanes.push(s); }
   if (!m.lanes.length) return undefined;
@@ -3581,7 +3608,7 @@ function startMarch(player, pool, dest, then) {
 function requestPlan(id, m, from, wide = false) {
   const dim = world.getDimension(m.dim);
   m.planning = true;
-  const far = m.coarse || Math.hypot(m.dest.x - from.x, m.dest.z - from.z) > 150;  // (v6.1: was 280: anything long is planned as a coarse map + short legs)
+  const far = Math.hypot(m.dest.x - from.x, m.dest.z - from.z) > 280;
   if ((!m.legs || !m.legs.length) && far) {
     planRoute(dim, from, { x: m.dest.x, z: m.dest.z }, (pts) => {
       const mm = getMarches()[id];
@@ -3625,7 +3652,7 @@ function planLeg(id, m, from, wide) {
     }
     mm.progT = tick();
     saveMarches();
-  }, { step: 1, maxRadius: lastLeg && !m.legs ? 140 : 110, max: wide ? 40000 : 25000, weight: wide ? 1.0 : 1.15, dead: m.dead, prio: true });   // (v6.1: legs are short: small searches)
+  }, { step: 1, maxRadius: 300, max: 120000, weight: wide ? 1.0 : 1.15, dead: m.dead, prio: true });
 }
 function markDeadEnd(m, at, small = false) {
   const near = (m.dead ?? []).filter((z) => Math.hypot(z.x - at.x, z.z - at.z) < 30).length;
@@ -3739,7 +3766,9 @@ system.runInterval(() => {
     // (v6.0: really fighting: following something else than his march marker. Walking to his catch-up/formation marker
     // also parks the order goal, and counting that as fighting kept the march's stall detector from ever firing)
     const fighting = members.some((e) => gdp(e, "war:ordergoal") !== undefined && Number(gdp(e, "war:goal") ?? 0) !== Number(gdp(e, "war:catchup") ?? -1));
-    const contact = members.some((e) => combatLock.has(e.id));      // v6.0: someone's locked in a fight: the squad holds together here
+    // v6.0: someone's locked in a fight: the squad holds together here (v6.2: at most ~20 s, then the march carries on)
+    let contact = members.some((e) => combatLock.has(e.id));
+    if (contact) { m.contactT = m.contactT ?? now; if (now - m.contactT > 400) contact = false; } else if (m.contactT !== undefined && now - m.contactT > 500) m.contactT = undefined;
     // the front of the group sets the pace (60th percentile of the members who are up and moving)
     const progOf = new Map(members.map((e) => [e.id, routeProgress(m, e.location, e.id)]));
     const prog = [...progOf.values()].sort((a, b) => b - a);
@@ -3750,8 +3779,9 @@ system.runInterval(() => {
     // v6.0: under fire the march bounds: ~3 s forward, ~3 s down and firing, instead of walking steadily into the guns
     const underFire = members.some((e) => now - (hurtBy.get(e.id)?.t ?? -999) < 60 || (shotsAtMe.get(e.id) ?? []).some((t) => now - t < 40));
     if (underFire) m.fireT = now;
-    const bounding = now - (m.fireT ?? -999) < 200 && Math.floor(now / 60) % 2 === 1;
+    const bounding = now - (m.fireT ?? -999) < 200 && Math.floor(now / 60) % 2 === 1 && Math.hypot(m.dest.x - c.x, m.dest.z - c.z) < 80;   // (v6.2: near the objective only, not on a long road)
     if (!contact && !bounding) m.idx = Math.min(m.path.length - 1, Math.max(m.idx ?? 0, j));
+    if (lead > (m.bestIdx ?? 0)) { m.wides = 0; m.edgeMsg = m.frontier ? m.edgeMsg : false; }
     if (lead > (m.bestIdx ?? 0) || fighting || contact || bounding) { m.bestIdx = Math.max(m.bestIdx ?? 0, lead); m.progT = now; }
     // who follows the route himself: anyone in a tight stretch, and anyone well behind the guide. v5.9: once he
     // drives he keeps driving until he's been clear and caught up for 1.5 s (no flip-flopping between the two); everyone
@@ -3783,20 +3813,47 @@ system.runInterval(() => {
         // arrived: lanes become formation spots at the destination
         m.final = true; m.finalT = now; m.dest.y = last.y; m.pos = { x: last.x, y: last.y, z: last.z };
         placeLanes(m, dim, m.pos, m.heading, "line");
+        factionMsg(m.fac, `§a${squadLabel(m)} in position at (${Math.round(last.x)}, ${Math.round(last.z)})`);
         for (const e of all) sdp(e, "war:catchup", undefined);   // stragglers now just join the formation
       } else if (!lt.final && Math.hypot(lt.x - last.x, lt.z - last.z) <= 8) {
         m.legs?.shift();                                         // leg done: plan the next one
         requestPlan(id, m, c);
       } else if (m.frontier) {
-        requestPlan(id, m, c);                                   // reached the edge of the loaded land: plan the next stretch
+        // reached the edge of the loaded land: plan the next stretch. v6.2: if that ends at the same edge again, the land
+        // beyond isn't loaded: say so once and only look again every 10 s (it used to re-plan every half second)
+        const same = m.edgeAt && Math.hypot(m.edgeAt.x - last.x, m.edgeAt.z - last.z) < 4;
+        m.edgeAt = { x: last.x, z: last.z };
+        if (same) {
+          if (!m.edgeMsg) { m.edgeMsg = true; factionMsg(m.fac, `§e${squadLabel(m)} is waiting at the edge of the loaded land near (${Math.round(last.x)}, ${Math.round(last.z)}): they carry on when it loads (come closer).`); }
+          if (now - (m.edgeT ?? -9999) < 200) { changed = true; continue; }
+          m.edgeT = now;
+          // is the land just past the edge (toward the destination) loaded now? If not, nothing to plan: stay put
+          const L = Math.hypot(m.dest.x - last.x, m.dest.z - last.z) || 1;
+          let beyond = false;
+          try { beyond = !!dim.getBlock({ x: last.x + ((m.dest.x - last.x) / L) * 10, y: last.y, z: last.z + ((m.dest.z - last.z) / L) * 10 }); } catch {}
+          if (!beyond) { changed = true; continue; }
+        } else m.edgeMsg = false;
+        requestPlan(id, m, c);
       } else {
         markDeadEnd(m, last);                                    // the route ran out short of the target: a dead end
         requestPlan(id, m, c, true);
       }
       changed = true; continue;
     }
+    if (now - m.progT > 300 && m.frontier) {                     // v6.2: at the edge of the loaded land: wait for it (told once)
+      if (!m.edgeMsg) { m.edgeMsg = true; factionMsg(m.fac, `§e${squadLabel(m)} is waiting at the edge of the loaded land (${Math.round(c.x)}, ${Math.round(c.z)}): they carry on when it loads (come closer).`); }
+      if (now - (m.wideT ?? -9999) > 200) { m.wideT = now; requestPlan(id, m, c); changed = true; continue; }
+    } else if (now - m.progT > 300 && ((m.wides ?? 0) >= 3 || m.replans >= 30)) {   // v6.2: really no way: say so and hold
+      m.final = true; m.finalT = now; m.stuck = true;
+      const leadE = members.reduce((b, e) => ((progOf.get(e.id) ?? 0) > (progOf.get(b.id) ?? 0) ? e : b), members[0]);
+      m.pos = { x: leadE.location.x, y: Math.floor(leadE.location.y + 0.01), z: leadE.location.z };
+      placeLanes(m, dim, m.pos, m.heading, "line");
+      for (const e of all) sdp(e, "war:catchup", undefined);
+      factionMsg(m.fac, `§e${squadLabel(m)} can't find a way to (${Math.round(m.dest.x)}, ${Math.round(m.dest.z)}). Holding at (${Math.round(m.pos.x)}, ${Math.round(m.pos.z)}).`);
+      changed = true; continue;
+    }
     if (now - m.progT > 300 && m.replans < 30 && now - (m.wideT ?? -9999) > 400) {   // no new ground for ~15 s: a dead end -> rethink wider (v6.1: at most every 20 s)
-      m.wideT = now;
+      m.wideT = now; m.wides = (m.wides ?? 0) + 1;
       const leadE = members.reduce((b, e) => ((progOf.get(e.id) ?? 0) > (progOf.get(b.id) ?? 0) ? e : b), members[0]);
       const pi0 = progOf.get(leadE.id) ?? 0;
       const tightSpot = isIndoorsAt(dim, leadE.location) || m.path.slice(Math.max(0, pi0 - 1), pi0 + 4).some((p, k, arr) => k && isGate(arr[k - 1], p));
@@ -4834,7 +4891,7 @@ function brainMove(e, d, now, melee, anchor, leash) {
       if (!localReach(e.dimension, e.location, spot)) { B.act = ""; return undefined; }   /* not reachable on foot from here: skip it */
       B.reachSpot = { x: spot.x, y: spot.y, z: spot.z };
     }
-    if (isIndoors(e) || onStairs(e.dimension, e.location) || !straightReach(e.dimension, e.location, spot)) return travel(e, spot, "spot", now, urgent);   // v5.5: indoors, a real route (no getting lost at doorways); v6.1: anywhere a straight walk isn't safe
+    if (isIndoors(e) || onStairs(e.dimension, e.location)) return travel(e, spot, "spot", now, urgent);   // v5.5: indoors, a real route (no getting lost at doorways)
     if (!B.slot || !B.spot || flat(B.spot, spot) > 1.5 || !marker(B.slot)) { B.slot = myMarker(e, spot); B.spot = spot; } return B.slot ? { g: "g_wp", slot: B.slot, t: "t_mid", urgent } : undefined; };
   const known = [...S.known.values()];
   if (melee) {
@@ -5983,19 +6040,10 @@ system.runInterval(() => {
 // ---- one way to travel anywhere: a direct step only when it's close and plainly reachable on foot;
 // otherwise a proper dense route (the same planner and follower as every march)
 const travelTo = new Map(); // id -> destination of his current personal route
-// v6.1: every combat move goes through here: Minecraft's own walking (a straight line to a marker) only where a
-// straight walk is safe; otherwise a planned route (around lava, over the bridge, up the ladder). Walking straight at
-// a spot across a moat is what piled soldiers against castle walls and slid them into the lava.
-function walkTo(e, spot, now, urgent = true, kind = "spot") {
-  if (!spot) return undefined;
-  if (isIndoors(e) || onStairs(e.dimension, e.location) || !straightReach(e.dimension, e.location, spot)) return travel(e, spot, kind, now, urgent);
-  const slot = myMarker(e, spot);
-  return slot ? { g: "g_wp", slot, t: "t_mid", urgent } : undefined;
-}
 function travel(e, dest, kind, now, urgent = false) {
   if (!dest) return undefined;
   const inside = isIndoors(e) || onStairs(e.dimension, e.location);  // v5.5: indoors / on stairs every move is a real route (the glider walks it)
-  if (!inside && flat(dest, e.location) <= 12 && Math.abs(dest.y - e.location.y) <= 1 && straightReach(e.dimension, e.location, dest)) {   // (v6.1: a SAFE straight walk, not just "reachable somehow")
+  if (!inside && flat(dest, e.location) <= 12 && Math.abs(dest.y - e.location.y) <= 1 && localReach(e.dimension, e.location, dest)) {
     const slot = myMarker(e, dest);
     return slot ? { g: "g_wp", slot, t: "t_mid", urgent } : undefined;
   }
@@ -6167,6 +6215,41 @@ function settle(e, slot, m) {
   note(e, "taking his spot");
 }
 const stepping = new Set(); // soldiers following a route of their own right now (the edge guard watches only them)
+// v6.2: out of range. Beyond the game's simulation distance (4 chunks by default, ~64 blocks from every player) the land
+// is still loaded but mobs don't move at all: their own walking simply doesn't run. A squad sent far away used to walk
+// ~64 blocks from you and freeze there ("doesn't take long orders"). Out there the script carries them along their route
+// itself (scripts still run in loaded land), at walking pace, single file. Back in range, normal walking takes over.
+const REMOTE_R = 44;
+const remoteMemo = new Map(); // id -> { t, v }
+// out of range nobody walks to a formation spot, so at the end of the known route each man steps onto his own free
+// cell (at most 3 blocks, safe ground, 1.5 from everyone) instead of all standing on the last route point
+const remoteSettled = new Map(); // id -> cell he settled on
+function remoteSpread(e, now) {
+  const l = e.location, dim = e.dimension;
+  const crowded = (q) => nearSnap(dim.id, q, 1.4).some((c) => c.id !== e.id && c.type === SOLDIER && !c.down && Math.abs(c.y - q.y) < 1.5) || claimedByOther(q, e.id, now);
+  if (remoteSettled.get(e.id) === Math.floor(l.x) * 100000 + Math.floor(l.z)) return;   // he's settled here: later arrivals move, not him
+  remoteSettled.set(e.id, Math.floor(l.x) * 100000 + Math.floor(l.z));
+  if (!crowded(l)) return;
+  const bx = Math.floor(l.x), by = Math.floor(l.y + 0.01), bz = Math.floor(l.z);
+  for (let r = 1; r <= 3; r++) for (let dx = -r; dx <= r; dx++) for (let dz = -r; dz <= r; dz++) {
+    if (Math.max(Math.abs(dx), Math.abs(dz)) !== r) continue;
+    for (const dy of [0, 1, -1]) {
+      const q = { x: bx + dx + 0.5, y: by + dy, z: bz + dz + 0.5 };
+      if (!standAt(dim, bx + dx, by + dy, bz + dz, now) || dangerNear(dim, q) || crowded(q) || !localReach(dim, l, q, 60)) continue;
+      try { e.teleport(q); claimSpot(e, q, now); remoteSettled.set(e.id, Math.floor(q.x) * 100000 + Math.floor(q.z)); } catch {}
+      return;
+    }
+  }
+}
+function isRemote(e, now = tick()) {
+  const c = remoteMemo.get(e.id);
+  if (c && now - c.t < 20) return c.v;
+  let v = true;
+  try { const l = e.location, did = e.dimension.id; for (const p of world.getAllPlayers()) { if (p.dimension.id !== did) continue; const pl = p.location; if (Math.abs(pl.x - l.x) <= REMOTE_R && Math.abs(pl.z - l.z) <= REMOTE_R) { v = false; break; } } } catch { v = false; }
+  remoteMemo.set(e.id, { t: now, v });
+  if (remoteMemo.size > 4000) remoteMemo.clear();
+  return v;
+}
 system.runInterval(() => {
   const now = tick();
   stepping.clear();
@@ -6186,7 +6269,7 @@ system.runInterval(() => {
         const m = mid ? getMarches()[mid] : undefined;
         if (!m?.path || m.final) { settle(e, og === undefined ? goal : Number(og), m); continue; }
         pts = m.path; i = routeProgress(m, e.location, e.id);
-        own = !!cu && goal === cu && !formMode.has(e.id);
+        own = (!!cu && goal === cu && !formMode.has(e.id)) || isRemote(e, now);   // (v6.2: out of range: always carried)
         if (!own) {                                                           // on the formation lanes: only help at a gate / when the lane is too close to walk to
           const mk = marker(goal);
           const close = !mk || dist(mk.location, e.location) <= 3.3;
@@ -6202,7 +6285,9 @@ system.runInterval(() => {
       // as a straight walk is safe (no trench, gap or drop on the way); not even the next point: he's carried
       let ahead = -1;
       if (!pts.guess) for (let k = Math.min(pts.length - 1, driveAhead(pts, i, 7)); k > i; k--) if (straightReach(e.dimension, e.location, pts[k])) { ahead = k; break; }
-      const tight = !pts.guess && (glideBan.get(e.id) ?? 0) <= now && (ahead < 0 || tightAt(e.dimension, pts, i, e.location));
+      const remote = isRemote(e, now);
+      if (remote && !gliders.has(e.id) && (i >= pts.length - 2 || (remoteSettled.has(e.id) && flat(e.location, pts[pts.length - 1]) < 5))) { remoteSpread(e, now); continue; }   // the end of the known route: his own spot (and he stays on it)
+      const tight = !pts.guess && (glideBan.get(e.id) ?? 0) <= now && (remote || ahead < 0 || tightAt(e.dimension, pts, i, e.location));
       if (tight) {
         const g = gliders.get(e.id);
         const queued = queuedBehind(e, pts, i);
@@ -6210,7 +6295,7 @@ system.runInterval(() => {
         const k = g && g.pts === pts ? g.k : glideStart(pts, i, e.location);
         gliders.set(e.id, { pts, k, t: now, paused: queued && wait < 50 && floorUnder(e.dimension, e.location.x, e.location.y, e.location.z), wait });   // (never paused over a gap)   // never waits more than 2.5 s for anyone (no deadlocks)
         myMarker(e, e.location);
-        note(e, queued && wait < 50 ? "waiting his turn" : "on the way through");
+        note(e, queued && wait < 50 ? "waiting his turn" : remote ? "marching (out of range)" : "on the way through");
         continue;
       }
       gliders.delete(e.id);
@@ -6245,7 +6330,7 @@ function drillMove(e, d, now, melee, anchor, leash) {
     D.since = now;
     const tc = chest(t);
     const spot = spotNear(e, (w) => flat(w, e.location) >= 2.5 && clearShot(e.dimension, { x: w.x, y: w.y + 1.6, z: w.z }, tc), anchor, leash);
-    if (spot && straightReach(e.dimension, e.location, spot)) {
+    if (spot && localReach(e.dimension, e.location, spot)) {
       D.scoot = spot; D.scootUntil = now + 60;
       for (const st of gunState.values()) if (st.target?.id === e.id) st.next = Math.max(st.next, now + 8);   // those aiming at him lose their sight picture
       note(e, "shifting position");
@@ -6569,7 +6654,7 @@ function unCrowd(e, d, now, anchor, leash) {
   const t = perc.get(e.id)?.threat;
   const good = t?.isValid ? (w) => clearShot(e.dimension, { x: w.x, y: w.y + 1.6, z: w.z }, chest(t)) : undefined;
   const spot = freeSpot(e, e.location, 1.5, 4.5, good, now, anchor, leash);
-  if (!spot || !straightReach(e.dimension, e.location, spot)) return undefined;   // (v6.1: never "making room" over an edge)
+  if (!spot) return undefined;
   claimSpot(e, spot, now);
   const B = brain.get(e.id) ?? { act: "", decT: -999 }; brain.set(e.id, B);
   B.spread = { spot, until: now + 60 };
@@ -6583,7 +6668,7 @@ function spreadMove(e, now) {
   if (!sp) return undefined;
   if (now > sp.until || flat(sp.spot, e.location) < 0.8) { B.spread = undefined; return undefined; }
   claimSpot(e, sp.spot, now);
-  if (isIndoors(e) || onStairs(e.dimension, e.location) || !straightReach(e.dimension, e.location, sp.spot)) return travel(e, sp.spot, "spot", now, false);   // v5.5: walked there by the glider (v6.1: or anywhere not a plain walk)
+  if (isIndoors(e) || onStairs(e.dimension, e.location)) return travel(e, sp.spot, "spot", now, false);   // v5.5: walked there by the glider
   const slot = myMarker(e, sp.spot);
   if (flat(sp.spot, e.location) < 3.2) push(e, { x: (sp.spot.x - e.location.x) * 0.15, y: 0.02, z: (sp.spot.z - e.location.z) * 0.15 }, 2);   // the last steps (followers stop short of the marker)
   return slot ? { g: "g_wp", slot, t: "t_mid", urgent: false } : undefined;
@@ -6872,7 +6957,7 @@ function reflexMove(e, d, now, anchor, leash) {
       if (w && Math.abs(w.y - e.location.y) <= 1 && (!anchor || flat(w, anchor.location) <= leash) && localReach(e.dimension, e.location, w, 120)) { spot = w; kind = "breaking the line of fire"; break; }
     }
   }
-  if (!spot || !straightReach(e.dimension, e.location, spot)) return undefined;   // (v6.1: ducking for cover never means stepping off a wall)
+  if (!spot) return undefined;
   claimSpot(e, spot, now);
   B.reflex = { spot, until: now + 50, kind };
   const st = gunState.get(e.id); if (st) st.check = now;

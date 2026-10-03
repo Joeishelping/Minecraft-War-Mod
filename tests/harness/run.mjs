@@ -20,6 +20,13 @@ const HOOK = ["gliders", "glideBan", "driveOn", "formMode", "tightAt", "combatLo
 if (opt.thinkdbg) { const f = path.join(runDir, "main.js"); fs.writeFileSync(f, fs.readFileSync(f, "utf8").replace("    // how far each stationary order may leave its spot to fight", "    if (globalThis.__thinkDbg) globalThis.__thinkDbg(e, engaged, cu, d);\n    // how far each stationary order may leave its spot to fight")); }
 fs.appendFileSync(path.join(runDir, "main.js"), `\nglobalThis.__war = {};\n${HOOK.map((n) => `try { globalThis.__war.${n} = ${n}; } catch {}`).join("\n")}\n`);
 loadDefs(path.join(root, "War Engine BP"));
+// v6.2 Bedrock mode: slow=K makes the add-on's own time budgets see K times the real time (Bedrock's script engine is
+// many times slower than V8), harsh=1 corner-cutting walking with knockback, loadR=N land unloads N blocks from players
+if (opt.slow) { const real = Date.now.bind(Date), t0 = real(), K = Number(opt.slow); Date.now = () => t0 + (real() - t0) * K; }
+if (opt.harsh) SIM.harsh = true;
+if (opt.loadR) SIM.loadR = Number(opt.loadR);
+if (opt.simR) SIM.simR = Number(opt.simR);
+if (opt.bedrock) { const real = Date.now.bind(Date), t0 = real(); Date.now = () => t0 + (real() - t0) * 15; SIM.harsh = true; SIM.loadR = Number(opt.loadR ?? 160); SIM.simR = Number(opt.simR ?? 64); }
 SIM.gunPack = true;
 MC.seed(Number(opt.seed ?? 7));
 const cleanup = () => { try { fs.rmSync(runDir, { recursive: true, force: true }); } catch {} };
@@ -112,7 +119,7 @@ let bigTp = 0;
 let clips = 0;
 const fullSolid = (x, y, z) => { const id = MC.idAt(x, y, z); return !MC.passCell(x, y, z) && !id.includes("stairs") && !id.includes("slab") && !id.includes("ladder") && !id.includes("door"); };
 MC.system.runInterval(() => { for (const e of alive()) { const l = e._loc; if (fullSolid(l.x, l.y + 0.05, l.z) || fullSolid(l.x, l.y + 1.2, l.z)) clips++; } }, 5);
-const report = (o) => { console.log(JSON.stringify({ scenario, ...o, clips, bigTp, errors: SIM.errors.slice(0, 5), errorCount: SIM.errors.length })); };
+const report = (o) => { console.log(JSON.stringify({ scenario, ...o, clips, bigTp, lava: SIM.lavaIds?.size ?? 0, errors: SIM.errors.slice(0, 5), errorCount: SIM.errors.length })); };
 
 // ---------------------------------------------------------------- scenarios
 const S = {
@@ -418,10 +425,13 @@ const S = {
     const dest = { x: ri(-30, 30), y: 0, z: LEN };
     fill(dest.x - 6, -3, dest.z - 6, dest.x + 6, -1, dest.z + 6, "grass_block"); fill(dest.x - 6, 0, dest.z - 6, dest.x + 6, 8, dest.z + 6, "air");
     await order(1, dest);
-    const t0 = SIM.tick; let arrived = -1; const stillT = new Map(); let worstStill = 0;
+    const t0 = SIM.tick; let arrived = -1; const stillT = new Map(); let worstStill = 0; let firstMove = -1, prog600 = -1; const start0 = alive(1).map((e) => ({ ...e._loc }));
     for (let t = 0; t < Number(opt.ticks ?? 7000) && arrived < 0; t += 10) {
       if (opt.watch !== undefined && SIM.tick >= Number(opt.from ?? 0) - 10 && SIM.tick <= Number(opt.to ?? 1e9)) { for (let q = 0; q < 10; q++) { step(1); const e = alive(1)[Number(opt.watch)]; const g = W.gliders.get(e.id); console.error("W", SIM.tick, e._loc.x.toFixed(2), e._loc.y.toFixed(2), e._loc.z.toFixed(2), g ? `g k${g.k} p${g.paused ? 1 : 0} b${g.blocked ?? 0}` : "-", "ban", Math.max(0, (W.glideBan.get(e.id) ?? 0) - SIM.tick), W.driveOn.has(e.id) ? "D" : "F", W.notes.get(e.id)?.text, "walk", e.walk ? `${e.walk.x.toFixed(2)},${e.walk.z.toFixed(2)}` : "", "nav", e.navGoal ? `${e.navGoal.x.toFixed(1)},${e.navGoal.y},${e.navGoal.z.toFixed(1)}` : "", (() => { const m = Object.values(W.getMarches())[0]; if (!m?.path) return ""; const pi = W.routeProgress(m, e._loc, e.id); return `pi ${pi} tight ${W.tightAt(overworld, m.path, pi, e._loc)} pts ${JSON.stringify(m.path.slice(pi, pi + 4).map((q) => [q.x, q.y, q.z]))}`; })()); } } else
       step(10); sample(1);
+      if (firstMove < 0 && alive(1).filter((e, k) => Math.hypot(e._loc.x - start0[k].x, e._loc.z - start0[k].z) > 5).length >= 6) firstMove = SIM.tick - t0;
+      if (SIM.tick - t0 === 600) prog600 = +(alive(1).reduce((t, e) => t + e._loc.z, 0) / alive(1).length).toFixed(1);
+      if (opt.follow && SIM.tick % 20 === 0 && SIM.tick - t0 >= Number(opt.followFrom ?? 0)) { const up = alive(1); const cz = up.reduce((t, e) => t + e._loc.z, 0) / up.length, cx = up.reduce((t, e) => t + e._loc.x, 0) / up.length; player._loc = { x: cx, y: 40, z: cz - 20 }; }
       if (opt.mtrace && SIM.tick % Number(opt.every ?? 100) === 0 && SIM.tick >= Number(opt.from ?? 0)) { const m = Object.values(W.getMarches())[0]; console.error("MT", SIM.tick, "idx", m?.idx, "p", JSON.stringify(m?.path?.[m.idx]), "shape", m?.shape, alive(1).map((e) => `${e._loc.x.toFixed(0)},${e._loc.y.toFixed(0)},${e._loc.z.toFixed(0)}${e.dyn.get("war:catchup") === e.dyn.get("war:fmk") ? "F" : "D"}${W.gliders.has(e.id) ? "g" : ""}${e.dyn.get("war:goal") === e.dyn.get("war:catchup") ? "" : "!"}`).join(" ")); }
       for (const e of alive(1)) { const near = Math.hypot(e._loc.x - dest.x, e._loc.z - dest.z) < 12; const st = near ? 0 : (e.__still ?? 0); worstStill = Math.max(worstStill, st); }
       if (alive(1).filter((e) => Math.hypot(e._loc.x - dest.x, e._loc.z - dest.z) < 12).length >= N - 1) arrived = SIM.tick - t0;
@@ -432,7 +442,7 @@ const S = {
     if (opt.dump) for (const [id, m] of Object.entries(W.getMarches())) console.error("MARCH", id, "idx", m.idx, "len", m.path?.length, "planning", m.planning, "final", m.final, "replans", m.replans, "legs", m.legs?.length, "dead", JSON.stringify(m.dead), "progT", SIM.tick - m.progT, "pathEnd", JSON.stringify(m.path?.[m.path.length - 1]), "guess", !!m.path?.guess, "path@idx", JSON.stringify(m.path?.slice(Math.max(0, (m.idx ?? 0) - 2), (m.idx ?? 0) + 3)));
     if (opt.dump) for (const e of alive(1)) if (Math.hypot(e._loc.x - dest.x, e._loc.z - dest.z) >= 12) { const m = Object.values(W.getMarches())[0]; const g = W.gliders.get(e.id); const mk = W.marker(Number(e.dyn.get("war:catchup") ?? 0)); const pi = m?.path ? W.routeProgress(m, e._loc, e.id) : -1; console.error("DBG", e.id, "glider", g ? JSON.stringify({ k: g.k, paused: g.paused, wait: g.wait, blocked: g.blocked, t: SIM.tick - g.t }) : "-", "ban", (W.glideBan.get(e.id) ?? 0) - SIM.tick, "drive", JSON.stringify(W.driveOn.get(e.id)), "mk", mk ? JSON.stringify(mk._loc) : "-", "pi", pi, "tight", m?.path ? W.tightAt(overworld, m.path, pi, e._loc) : "-", "pts", JSON.stringify(m?.path?.slice(Math.max(0, pi - 1), pi + 3).map((p) => [p.x, p.y, p.z])), "nav", JSON.stringify(e.navGoal), "walk", JSON.stringify(e.walk), "vel", JSON.stringify(e.vel)); }
     if (opt.dump) for (const e of alive(1)) if (Math.hypot(e._loc.x - dest.x, e._loc.z - dest.z) >= 12) console.error("LEFT", JSON.stringify(e._loc), W.notes.get(e.id)?.text, "cu", e.dyn.get("war:catchup"), "goal", e.dyn.get("war:goal"), "og", e.dyn.get("war:ordergoal"));
-    report({ plan: globalThis.__plan ? { ...globalThis.__plan, maxHeapMB: Math.round(globalThis.__plan.maxHeap / 1048576) } : undefined, arrivedTicks: arrived, there, of: N, worstStillSec: worstStill / 2, bunchAvg: +(M.bunchPairs / M.bunchSamples).toFixed(2), dest, final: alive(1).map((e) => `${Math.round(e._loc.x)},${Math.round(e._loc.y)},${Math.round(e._loc.z)}`), notes: M.notes });
+    report({ firstMove, prog600, msgs: SIM.log.filter((m) => /war|Squad|far|position|way/i.test(m)).slice(-4), plan: globalThis.__plan ? { ...globalThis.__plan, maxHeapMB: Math.round(globalThis.__plan.maxHeap / 1048576) } : undefined, arrivedTicks: arrived, there, of: N, worstStillSec: worstStill / 2, bunchAvg: +(M.bunchPairs / M.bunchSamples).toFixed(2), dest, final: alive(1).map((e) => `${Math.round(e._loc.x)},${Math.round(e._loc.y)},${Math.round(e._loc.z)}`), notes: M.notes });
   },
 
   // v6.1: from the screenshots: a squad on a castle wall-top (battlements both sides, an enclosed courtyard below with a
@@ -485,11 +495,11 @@ const S = {
     step(20);
     const dest = { x: 0, y: 0, z: Number(opt.len ?? 200) };
     await order(1, dest);
-    const t0 = SIM.tick; let arrived = -1;
-    for (let t = 0; t < Number(opt.ticks ?? 9000) && arrived < 0; t += 10) { step(10); sample(1); if (alive(1).filter((e) => Math.hypot(e._loc.x - dest.x, e._loc.z - dest.z) < 12).length >= 11) arrived = SIM.tick - t0; }
+    const t0 = SIM.tick; let arrived = -1; const firstMove = -1, prog600 = -1;
+    for (let t = 0; t < Number(opt.ticks ?? 9000) && arrived < 0; t += 10) { step(10); sample(1); if (opt.follow && SIM.tick % 20 === 0) { const up = alive(1); player._loc = { x: up.reduce((q, e) => q + e._loc.x, 0) / up.length, y: 30, z: up.reduce((q, e) => q + e._loc.z, 0) / up.length - 20 }; } if (alive(1).filter((e) => Math.hypot(e._loc.x - dest.x, e._loc.z - dest.z) < 12).length >= 11) arrived = SIM.tick - t0; }
     if (opt.dump) for (const [id, m] of Object.entries(W.getMarches())) console.error("MARCH", "idx", m.idx, "len", m.path?.length, "planning", m.planning, "final", m.final, "replans", m.replans, "legs", JSON.stringify(m.legs), "dead", JSON.stringify(m.dead), "pathEnd", JSON.stringify(m.path?.[m.path.length - 1]), "legT", JSON.stringify(m.legT), "pos", JSON.stringify(m.pos));
     if (opt.dump) console.error("POS", alive(1).map((e) => `${Math.round(e._loc.x)},${Math.round(e._loc.z)}`).join(" "));
-    report({ plan: globalThis.__plan ? { ...globalThis.__plan, maxHeapMB: Math.round(globalThis.__plan.maxHeap / 1048576) } : undefined, arrivedTicks: arrived, there: alive(1).filter((e) => Math.hypot(e._loc.x - dest.x, e._loc.z - dest.z) < 12).length, bigTp, ...callsPerTick(SIM.tick) });
+    report({ firstMove, prog600, msgs: SIM.log.filter((m) => /war|Squad|far|position|way/i.test(m)).slice(-4), plan: globalThis.__plan ? { ...globalThis.__plan, maxHeapMB: Math.round(globalThis.__plan.maxHeap / 1048576) } : undefined, arrivedTicks: arrived, there: alive(1).filter((e) => Math.hypot(e._loc.x - dest.x, e._loc.z - dest.z) < 12).length, bigTp, ...callsPerTick(SIM.tick) });
   },
 
   // soldiers spread far apart (opt spread=1) or bunched (spread=0): the lag case from the field
