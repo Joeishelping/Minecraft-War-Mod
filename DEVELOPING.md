@@ -89,6 +89,18 @@ errands are **personal routes** (`planPersonalTo` / `travel`), followed by `foll
   `releaseAll` / `letGo` put them down on free safe cells (`dropCell`). A carried man is marked `war:held`, so after a
   reload he's put down where he is.
 
+### v6.4: water, firing slots, trouble memory
+- `dryDest` (in `startMarch`) moves an order's destination off water, lava or anything unstandable, to the nearest dry
+  spot on the squad's side.
+- `swimOn` swims for the route's next land point. `waterExit` gives up a crossing after 10 s without progress
+  (`swimGiveUp`), and only exits onto banks within a block of the water surface (`waterSurface`).
+- `firingSlot(dim, q)`: a `dangerNear` cell with the drop on one side only and solid cover on both sides (an embrasure,
+  a window). `safeSpot` accepts it. Posts with no shot look for one within their reach (`engagement`, "taking a firing
+  slot"). Posts are never stuck-rescue teleported.
+- `TROUBLE` (dynamic property `war:trouble`): 2x2 cells with a weight 1-8, learned by `noteTrouble` from stuck
+  escalations, rescues, pits and swim give-ups. It adds `2.5 x weight` to fine planner steps, `safeSpot` skips weight
+  3 and up, it fades by 1 every 5 minutes untouched, and it holds at most 400 cells.
+
 ## The decision chain (`think`, every second per soldier, staggered)
 
 In order; the first that returns a move wins:

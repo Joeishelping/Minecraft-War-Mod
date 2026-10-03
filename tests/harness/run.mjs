@@ -631,6 +631,55 @@ const S = {
     report({ mode, doneA, doneB, worstStillSec: worstStill / 2, jitter, bunchAvg: +(M.bunchPairs / M.bunchSamples).toFixed(2), maxCluster: M.maxCluster, A: pos(A), B: pos(B), notes: Object.fromEntries(Object.entries(M.notes).sort((a, b) => b[1] - a[1]).slice(0, 8)) });
   },
 
+  // v6.4: the screenshots. pondWall: a pond right at the foot of a high wall; the squad's goal is beyond the wall
+  // (a gap far to the side: gap=0 for no gap and a stair up onto it instead). wallTop: a castle wall, a moat at its
+  // foot outside, defenders put on the wall walk (between merlons), enemies coming from beyond the moat.
+  async pondWall() {
+    SIM.bounds = { x0: -50, x1: 50, z0: -20, z1: 70, y0: -8, y1: 30 };
+    fill(-50, -5, -20, 50, -1, 70, "grass_block");
+    fill(-8, -3, 8, 8, -1, 16, "water");                                  // the pond, 3 deep, right up to the wall
+    fill(-30, 0, 17, 30, 3, 18, "stone_bricks");                        // a 4-high wall
+    if (opt.gap !== "0") fill(24, 0, 17, 26, 3, 18, "air"); else for (let k = 0; k < 4; k++) fill(-20 + k, 0, 16, -20 + k, k, 16, "stone_bricks");   // a gap far right, or steps up along the wall
+    spawnPlayer({ x: 0, y: 0, z: -15 });
+    for (let i = 0; i < 8; i++) soldier(1, { x: -3 + (i % 4) * 2 + 0.5, y: 0, z: Math.floor(i / 4) * 2 + 0.5 }, "rifle", 1, "hold");
+    step(40);
+    const dest = opt.inpond ? { x: 0, y: -1, z: 14 } : opt.gap === "0" ? { x: 0, y: 4, z: 18 } : { x: 0, y: 0, z: 40 };
+    await W.giveOrder(player, { faction: 1, order: Number(opt.order ?? 0), squad: 0, count: 0, radius: 200, stance: "aggressive", ao: 100, free: true, target: 5, cx: dest.x, cz: dest.z, cy: dest.y, then: "hold" });
+    const t0 = SIM.tick; let arrived = -1, wetMax = 0, wetSum = 0;
+    for (let t = 0; t < Number(opt.ticks ?? 3000) && arrived < 0; t += 10) {
+      step(10); sample(1);
+      const wet = alive(1).filter((e) => e.isInWater).length; wetMax = Math.max(wetMax, wet); wetSum += wet;
+      if (alive(1).filter((e) => Math.hypot(e._loc.x - dest.x, e._loc.z - dest.z) < 10 && (opt.inpond ? !e.isInWater : Math.abs(e._loc.y - dest.y) < 2)).length >= 7 && (!opt.inpond || SIM.tick - t0 > 600)) arrived = SIM.tick - t0;
+      if (opt.trace && SIM.tick % 100 === 0) console.error("T", SIM.tick, alive(1).map((e) => `${e._loc.x.toFixed(0)},${e._loc.y.toFixed(0)},${e._loc.z.toFixed(0)}${e.isInWater ? "w" : ""}:${(W.notes.get(e.id)?.text ?? "").slice(0, 12)}`).join(" "));
+    }
+    report({ arrivedTicks: arrived, wetMax, wetSec: +(wetSum / 2 / 8).toFixed(1), final: alive(1).map((e) => `${e._loc.x.toFixed(0)},${e._loc.y.toFixed(0)},${e._loc.z.toFixed(0)}${e.isInWater ? "w" : ""}`), notes: Object.fromEntries(Object.entries(M.notes).sort((a, b) => b[1] - a[1]).slice(0, 8)) });
+  },
+  async wallTop() {
+    SIM.bounds = { x0: -40, x1: 40, z0: -30, z1: 70, y0: -8, y1: 30 };
+    fill(-40, -5, -30, 40, -1, 70, "grass_block");
+    fill(-30, 0, 0, 30, 5, 3, "stone_bricks");                           // the wall: 4 thick, 6 high; walk on top at y 6
+    for (let x = -30; x <= 30; x += 2) fill(x, 6, 3, x, 7, 3, "quartz_block");   // merlons on the outer edge, 1 gap between
+    for (let k = 0; k < 6; k++) fill(-12 + k, 0, -1 - 0, -12 + k, k, -1, "stone_bricks");   // a stair up from the courtyard (inside, z < 0)
+    fill(-30, -3, 4, 30, -1, 9, "water");                                 // the moat outside
+    spawnPlayer({ x: 0, y: 0, z: -20 });
+    W.setRelPair(1, 2, "1", false);
+    const def = []; for (let i = 0; i < 6; i++) def.push(soldier(1, { x: -5 + i * 2 + 0.5, y: 6, z: 1.5 }, "rifle", 1, opt.func ?? "post"));
+    const mates = opt.mates === "0" ? [] : [soldier(1, { x: 0.5, y: 0, z: -10.5 }, "rifle", 1, "hold"), soldier(1, { x: 2.5, y: 0, z: -10.5 }, "rifle", 1, "hold")];
+    step(40);
+    const foes = []; for (let i = 0; i < 6; i++) foes.push(soldier(2, { x: -5 + i * 2 + 0.5, y: 0, z: 45.5 }, "rifle", 1, "hold"));
+    step(20);
+    await W.giveOrder(player, { faction: 2, order: 0, squad: 0, count: 0, radius: 200, stance: "aggressive", ao: 100, free: true, target: 5, cx: 0, cz: 15, cy: 0, then: "hold" });
+    const t0 = SIM.tick; const start = def.map((e) => ({ ...e._loc }));
+    let offWall = 0, tps = 0;
+    const tp0 = MC.Entity.prototype.teleport;
+    for (let t = 0; t < Number(opt.ticks ?? 2400); t += 10) {
+      step(10);
+      if (opt.trace && SIM.tick % 100 === 0) console.error("T", SIM.tick, def.map((e) => `${e._loc.x.toFixed(1)},${e._loc.y.toFixed(0)},${e._loc.z.toFixed(1)}:${(W.notes.get(e.id)?.text ?? "").slice(0, 16)}`).join(" | "));
+    }
+    offWall = def.filter((e) => e.isValid && (e._loc.y < 5.5 || e._loc.z > 3.9 || e._loc.z < -0.1)).length;
+    report({ offWall, defUp: def.filter((e) => e.isValid && !W.isDowned(e)).length, foesUp: foes.filter((e) => e.isValid && !W.isDowned(e)).length, final: def.map((e) => `${e._loc.x.toFixed(1)},${e._loc.y.toFixed(1)},${e._loc.z.toFixed(1)}`), notes: Object.fromEntries(Object.entries(M.notes).sort((a, b) => b[1] - a[1]).slice(0, 10)) });
+  },
+
   async cleanup() {
     SIM.bounds = { x0: -300, x1: 300, z0: -300, z1: 300, y0: -10, y1: 40 };
     SIM.loadR = 100;

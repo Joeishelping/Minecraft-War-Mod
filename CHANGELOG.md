@@ -1,5 +1,36 @@
 # War Engine changelog
 
+## v6.4 (water, wall-top defenders, learning the map, shaking loose)
+
+- **Water.**
+  - **Orders into water.** An order to a spot in a pond (easy to do when you aim at water next to a wall) made the
+    whole squad "arrive" in the water. Its formation spots fell back onto that point, and the get-out-of-the-water
+    logic and the formation then fought each other. Now an order to water (or lava, or any spot nobody can stand
+    on) goes to the nearest dry, safe spot on the squad's side. Test, ordered into a pond at the foot of a wall:
+    before, all 8 were in the water for ~90 s. Now, nobody gets wet.
+  - **Swimming across.** A squad committed to swimming across pushed every man straight at the final destination,
+    even with a wall in the way (your screenshot: a row of them pressed into the wall in the water). Now they swim
+    for the next bit of their route that's on land. While the glider is carrying them, there's no extra push.
+  - **Getting out.** The "get out of the water" spot is only ever a bank you can climb out onto, never the top of a
+    wall. A crossing that gets nowhere for 10 s is given up for the nearest real bank.
+- **Wall-top defenders.**
+  - **Firing slots.** A gap in a battlement (between two merlons) or a window in a wall-walk now counts as a firing
+    slot. v6.2's ledge safety had banned every cell next to the drop, so defenders stood back from the merlons,
+    saw nothing and "took a firing position" forever. A man on a post with no shot from where he stands takes the
+    slot within his post's reach that sees the enemy. A bare wall-top edge is still treated as a ledge.
+  - Test, 6 defenders on a battlement against 6 attackers across a moat: before, defenders lost (0 standing, 5
+    attackers left). Now they hold the wall in most runs.
+  - **Never teleported off a post.** A man on a post (hold, post, sentry, stand) is never stuck-rescue teleported to
+    his squad any more. That's how wall-top men ended up on the far side of the wall. If he can't make a move, he
+    gives it up and holds where he is.
+- **Shaking loose.** You noticed a hit helps a stuck soldier: it does. Now, the first time a soldier is pressing into
+  something and getting nowhere, he does what your hit did: a little hop and a step back or aside, then he
+  re-decides. Never toward a drop or lava.
+- **Learning the map.** The army remembers trouble spots: everywhere a soldier got properly stuck, needed a rescue,
+  was trapped below his route or gave up a swim. It's remembered in the world, so it survives a reload. Routes go
+  round remembered trouble when there's another way, and fight moves don't pick those spots. A spot that stops
+  causing trouble fades from memory after a while. "Remove everything" in Cleanup forgets it all.
+
 ## v6.3.1 (two squads in one spot, the long scan after a fight)
 
 - **Two squads jammed in one spot.** A soldier a little past a route point could get his carried walk (the glider)

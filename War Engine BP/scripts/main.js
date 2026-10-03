@@ -2365,6 +2365,7 @@ async function cleanupMenu(player) {
     clearMarches();
     personal.clear(); travelTo.clear(); gliders.clear(); climbing.clear(); combatLock.clear(); planJobs.length = 0;
     try { slotRefs = {}; setJSON(world, "war:slotrefs", {}); } catch {}
+    try { TROUBLE.clear(); world.setDynamicProperty("war:trouble", undefined); } catch {}   // (v6.4: and the learned trouble spots)
     let n = 0;
     for (const did of ["overworld", "nether", "the_end"]) { let dim; try { dim = world.getDimension(did); } catch { continue; } for (const type of PACK) { try { for (const o of dim.getEntities({ type })) { removeEnt(o); n++; } } catch {} } }
     player.sendMessage(`§aRemoved ${n} loaded War Engine things; anything in unloaded land goes when it loads.`);
@@ -3447,7 +3448,16 @@ function engagement(e, d, now, orderGoal, melee) {
     if (stance === "holdfire" && !isProvoker(d.faction, t, now)) return undefined; // hold fire until someone of ours is attacked
     turnTo(e, t.location);
     const dd = dist(t.location, e.location);
-    if (anchor && flat(t.location, anchor.location) > leash) { note(e, "holding post"); return undefined; } // fight from the post
+    if (anchor && flat(t.location, anchor.location) > leash) {        // fight from the post
+      // v6.4: ...from the best spot of it: no shot from where he stands (behind a merlon, back from a window) -> the
+      // spot within his post's reach that sees the enemy (a battlement gap, the window), never further
+      if (gun && !canHit(e, t) && spendDecision()) {
+        const tc = chest(t);
+        const spot = spotNear(e, (w) => clearShot(e.dimension, { x: w.x, y: w.y + 1.6, z: w.z }, tc), anchor, Math.max(leash, 2.5), 6);
+        if (spot) { const mv = moveTo(e, spot, now, true, "spot"); if (mv) { note(e, "taking a firing slot"); return mv; } }
+      }
+      note(e, "holding post"); return undefined;
+    }
     if (stance === "defensive") { note(e, "defending"); return { g: "g_none", t: melee ? "t_short" : "t_mid", urgent: false }; }
     if (isMob(t) && dd > 10) return undefined;                  // shoot an attacking mob if it's there, never chase it
     if (gun) {
@@ -3661,6 +3671,10 @@ function placeLanes(m, dim, center, heading, shape) {
         if (c2 && dangerNear(dim, c2)) continue;
         if (c2 && Math.abs(c2.y - center.y) <= 1) w = c2;
       }
+      if (!w) for (let r = 4; r <= 8 && !w; r += 2) for (let k = 0; k < 12 && !w; k++) {   // (v6.4: still nothing: further out, rather than in the water)
+        const c2 = walkableNear(dim, center.x + Math.cos((k / 12) * Math.PI * 2) * r, center.z + Math.sin((k / 12) * Math.PI * 2) * r, center.y);
+        if (c2 && !dangerNear(dim, c2) && Math.abs(c2.y - center.y) <= 2) w = c2;
+      }
       w = w ?? center;
     }
     try { marker(slot)?.teleport(w); } catch {}
@@ -3726,11 +3740,35 @@ function announceMarch(player, fac, m, from) {
   factionMsg(fac, `§7${squadLabel(m)} -> (${Math.round(m.dest.x)}, ${Math.round(m.dest.z)}), ${d} blocks${loaded ? "" : " (part of the way isn't loaded yet: they go as far as it is and carry on as it loads)"}`, player);
 }
 const squadLabel = (m) => { if (!m.sq) return "Your soldiers"; let n; try { n = getSquads()[m.fac]?.[m.sq - 1]; } catch {} return n || `Squad ${m.sq}`; };
+// v6.4: an order to a spot nobody can stand on (water, lava, the air beside a cliff): the nearest dry, safe spot to it,
+// on the squad's side. Ordered into a pond by a wall, the whole squad used to "arrive" in the water and stay there.
+function dryDest(dim, dest, from) {
+  try {
+    const x = Math.floor(dest.x), y = Math.floor(Number.isFinite(dest.y) ? dest.y : from.y), z = Math.floor(dest.z);
+    const wetAt = (q) => { for (const k of [0, -1]) { const b = tBlock(dim, q.x, q.y + k, q.z); if (b && (b.typeId.includes("water") || b.typeId.includes("lava"))) return true; } return false; };
+    const here = walkableNear(dim, dest.x, dest.z, y);
+    if (here && Math.abs(here.y - y) <= 2 && !wetAt(here) && !dangerNear(dim, here)) return dest;
+    let best, bs = 1e9;
+    const L = Math.hypot(from.x - dest.x, from.z - dest.z) || 1, ux = (from.x - dest.x) / L, uz = (from.z - dest.z) / L;
+    for (let r = 1; r <= 10; r++) {
+      for (let k = 0; k < 16; k++) {
+        const a = (k / 16) * Math.PI * 2, w = walkableNear(dim, x + 0.5 + Math.cos(a) * r, z + 0.5 + Math.sin(a) * r, y);
+        if (!w || wetAt(w) || dangerNear(dim, w) || Math.abs(w.y - y) > 3) continue;
+        const proj = (w.x - dest.x) * ux + (w.z - dest.z) * uz;   // >0: on the squad's side of the spot
+        const sc = r * 2 + (proj < 0 ? -proj * 3 : 0) + Math.abs(w.y - y);   // close to the spot, on the squad's side (not past a wall)
+        if (sc < bs) { bs = sc; best = w; }
+      }
+      if (best && bs < r * 2) break;                            // nothing further out can beat it
+    }
+    return best ? { x: best.x, y: best.y, z: best.z } : dest;
+  } catch { return dest; }
+}
 function startMarch(player, pool, dest, then) {
   let cx = 0, cy = 0, cz = 0;
   for (const e of pool) { cx += e.location.x; cy += e.location.y; cz += e.location.z; }
   cx /= pool.length; cy /= pool.length; cz /= pool.length;
   const dim = player.dimension, from = { x: cx, y: cy, z: cz };
+  dest = dryDest(dim, dest, from);
   const m = { pos: from, dest, dim: dim.id, then, final: false, lanes: [], heading: Math.atan2(dest.z - cz, dest.x - cx),
     path: undefined, idx: 0, planning: false, progT: tick(), replans: 0, members: pool.map((e) => e.id), fac: sd(pool[0]).faction, sq: sd(pool[0]).squad };
   const nLanes = Math.min(6, Math.max(2, Math.ceil(pool.length / 4)));
@@ -4123,19 +4161,29 @@ function waterExit(e, d, now) {
     return undefined;
   }
   if (!wetSince.has(e.id)) wetSince.set(e.id, now);
-  // a planned crossing: commit to it until out on land
-  if (crossing.has(e.id) || (d.func === "charge" && plannedSwim(e))) { crossing.set(e.id, true); note(e, "crossing water"); swimOn(e); return undefined; }
+  // a planned crossing: commit to it until out on land. v6.4: along the route (not straight at the destination: with the
+  // destination behind a wall that pushed the whole squad into the wall), not at all while the glider is carrying him,
+  // and given up after 10 s wet without getting anywhere (then: the nearest bank he can really climb out on)
+  const wet = now - wetSince.get(e.id);
+  if (wet > 200 && (swimGiveUp.get(e.id) ?? 0) <= now && !wetProgress(e, now)) { swimGiveUp.set(e.id, now + 300); noteTrouble(e.dimension, e.location, 1); }
+  if ((crossing.has(e.id) || (d.func === "charge" && plannedSwim(e))) && (swimGiveUp.get(e.id) ?? 0) <= now) {
+    crossing.set(e.id, true); note(e, "crossing water");
+    if (!gliders.has(e.id)) swimOn(e);
+    return undefined;
+  }
+  crossing.delete(e.id);
   // already heading for a shore: keep going there
   const ex = exitSpot.get(e.id);
   if (ex && marker(ex.slot) && now - ex.t < 300) { swimTo(e, ex.at); return { g: "g_wp", slot: ex.slot, t: "t_mid", urgent: true }; }
   if (now - wetSince.get(e.id) < 10) return undefined;
   const goal = goalPoint(e), p = e.location;
+  const surf = waterSurface(e.dimension, p);
   let best, bs = 1e9;
   for (let r = 2; r <= 16; r += 2) {
     for (let i = 0; i < 16; i++) {
       const a = (i / 16) * Math.PI * 2;
       const w = walkableNear(e.dimension, p.x + Math.cos(a) * r, p.z + Math.sin(a) * r, p.y);
-      if (!w) continue;
+      if (!w || w.y > surf + 1.1 || failedNear(e, w, now)) continue;   // (v6.4: only a bank he can climb out on: never the top of a wall)
       const sc = r * 2 + (goal ? Math.hypot(goal.x - w.x, goal.z - w.z) * 0.5 : 0);
       if (sc < bs) { bs = sc; best = w; }
     }
@@ -4160,7 +4208,27 @@ function swimTo(e, at) {
   } catch {}
   push(e, { x: (dx / l) * 0.22, y: bank ? 0.5 : 0.04, z: (dz / l) * 0.22 }, 2);
 }
-function swimOn(e) { const g = goalPoint(e); if (g) swimTo(e, g); }
+// v6.4: toward the next bit of his route that's on land (not straight at the destination), else the destination
+function swimOn(e) {
+  const r = routeOf(e);
+  if (r?.pts) for (let k = r.idx; k < Math.min(r.pts.length, r.idx + 24); k++) { const q = r.pts[k]; if (!q.w && flat(q, e.location) > 0.8) { swimTo(e, q); return; } }
+  const g = goalPoint(e); if (g) swimTo(e, g);
+}
+// the top of the water he's in (where a bank must be within a block to climb out)
+function waterSurface(dim, p) {
+  let y = Math.floor(p.y + 0.2);
+  for (let k = 0; k < 6; k++) { const b = tBlock(dim, p.x, y + 1, p.z); if (!b || !b.typeId.includes("water")) break; y++; }
+  return y + 1;
+}
+// getting anywhere in the water: closer to his goal than 5 s ago
+const wetTrack = new Map(); // id -> { t, d }
+const swimGiveUp = new Map(); // id -> until when he's stopped trying to cross and makes for the nearest climbable bank
+function wetProgress(e, now) {
+  const g = goalPoint(e); if (!g) return false;
+  const dd = flat(g, e.location), w = wetTrack.get(e.id);
+  if (!w || now - w.t > 100) { const ok = !w || dd < w.d - 2; wetTrack.set(e.id, { t: now, d: dd }); return ok; }
+  return true;
+}
 
 // ================================================================ Fall awareness
 // Before stepping off a ledge, a soldier works out the fall: free up to ~3 blocks, then ~1 HP per
@@ -4431,6 +4499,7 @@ function stepCost(a, b, diag, job) {
     }
   }
   if (job && inDead(job, b)) base += 40 * step;                 // a known dead end: only if there's truly nothing else
+  if (step === 1 && TROUBLE.size && job?.dim) base += troubleAt(job.dim.id, b.x, b.z) * 2.5;   // v6.4: remembered trouble: round it if there's a way
   if (job?.danger && step === 1) base += exposedCost(job, b);   // v5.7: in a fight, ground the enemy can see costs extra
   if (b.w) base *= 10;                                          // swimming: only when it saves a lot
   else if (b.shore) base += 0.6;                                // keep off the shoreline
@@ -6211,18 +6280,30 @@ system.runInterval(() => {
       if (!isRemote(e) && !gliders.has(e.id) && !climbing.has(e.id) && wantsWalk(e, goal) && now - pz.t >= 60) {
         pz.n++; pz.t = now;
         const mk = marker(goal);
+        if (pz.n >= 2) { noteTrouble(e.dimension, l, 1); if (mk) noteTrouble(e.dimension, mk.location, 1); }   // (v6.4: learned)
         if (mk) { const fl = failSpots.get(e.id) ?? []; fl.push({ x: mk.location.x, z: mk.location.z, t: now }); failSpots.set(e.id, fl.slice(-6)); }
         const B = brain.get(e.id);
         if (B) { B.act = ""; B.decT = -999; B.reachSpot = undefined; B.spread = undefined; B.reflex = undefined; }
         drill.get(e.id) && (drill.get(e.id).scoot = undefined);
-        if (pz.n === 1) { note(e, "trying something else"); try { think(e); } catch {} }
+        // v6.4: a man on a post (put on a wall, a window, a gate) is never teleported to his squad: he gives up that move and
+        // holds where he is (the wall-top defenders who ended up on the far side of the wall)
+        if (pz.n >= 2 && POST_FUNCS.includes(sd(e).func)) { personal.delete(e.id); travelTo.delete(e.id); setGroups(e, { g: "g_none" }); note(e, "holding here"); continue; }
+        if (pz.n === 1) {
+          // v6.4: shake loose, the way a hit does it: a hop and a step back / aside (never toward a drop or lava)
+          if (mk && !dangerNear(e.dimension, l) && !inWater(e)) {
+            const dx = l.x - mk.location.x, dz = l.z - mk.location.z, L0 = Math.hypot(dx, dz) || 1, side = (e.id.charCodeAt(e.id.length - 1) & 1) ? 1 : -1;
+            const vx = (dx / L0) * 0.22 + (-dz / L0) * side * 0.18, vz = (dz / L0) * 0.22 + (dx / L0) * side * 0.18;
+            if (safeAhead(e, vx, vz)) push(e, { x: vx, y: 0.36, z: vz }, 3);
+          }
+          note(e, "trying something else"); try { think(e); } catch {}
+        }
         else if (pz.n === 2) { personal.delete(e.id); travelTo.delete(e.id); const gp = goalPoint(e); if (gp) planPersonalTo(e, "settle", { x: gp.x, y: gp.y, z: gp.z }, now); note(e, "finding a way"); }
         else if (pz.n >= 4 && !busy && now - (rescueT.get(e.id) ?? -99999) >= 1200 && rescuesNow < 2) { if (rescueTo(e, "caught up with his squad", now)) { rescuesNow++; pressing.delete(e.id); continue; } }
       }
       if (now - (rescueT.get(e.id) ?? -99999) < 1200) continue;     // one rescue a minute at most
       // 0. (v6.2) down in a pit below his route with no way up found (a trench with no steps): out, even if his whole squad
       // is down there with him (a crowd normally means "held up", not stuck)
-      { const br = belowRoute.get(e.id); if (br && br.n >= 3 && now - br.t < 300 && !busy && rescuesNow < 2) { belowRoute.delete(e.id); if (rescueTo(e, "helped out of a pit", now) || pitOut(e, m0, now)) { rescuesNow++; continue; } } }
+      { const br = belowRoute.get(e.id); if (br && br.n >= 3 && now - br.t < 300 && !busy && rescuesNow < 2) { belowRoute.delete(e.id); noteTrouble(e.dimension, l, 3); if (rescueTo(e, "helped out of a pit", now) || pitOut(e, m0, now)) { rescuesNow++; continue; } } }
       // 1. inside a block
       if (!climbing.has(e.id) && insideBlock(e)) {
         const n = (insideN.get(e.id) ?? 0) + 1; insideN.set(e.id, n);
@@ -6256,7 +6337,8 @@ system.runInterval(() => {
       const mates = m ? m.members : [];
       if (mates.some((id) => { if (id === e.id) return false; const o = world.getEntity(id); return o?.isValid && !downed.has(id) && dist(o.location, l) < 10 && doingWell(o, now, m); })) continue;   // (a mate stuck with him doesn't count)
       if (rescuesNow >= 2) continue;
-      if (rescueTo(e, "caught up with his squad", now)) rescuesNow++;
+      if (POST_FUNCS.includes(sd(e).func)) { personal.delete(e.id); travelTo.delete(e.id); continue; }   // (v6.4: never off his post: give up the move)
+      if (rescueTo(e, "caught up with his squad", now)) { rescuesNow++; noteTrouble(e.dimension, l, 2); }
     } catch {}
   }
   if (now % 1200 < 20) for (const id of [...rescueMark.keys()]) if (!world.getEntity(id)) { rescueMark.delete(id); rescueT.delete(id); insideN.delete(id); ladderFail.delete(id); combatLock.delete(id); remoteMemo.delete(id); remoteSettled.delete(id); pressing.delete(id); failSpots.delete(id); belowRoute.delete(id); }
@@ -6273,15 +6355,27 @@ const travelTo = new Map(); // id -> destination of his current personal route
 const belowRoute = new Map(); // id -> { n, t }: times he was found below his route with no way up onto it (v6.2)
 const failSpots = new Map(); // id -> [{ x, z, t }] spots he pressed toward and never reached (v6.2)
 const failedNear = (e, q, now) => (failSpots.get(e.id) ?? []).some((f) => now - f.t < 300 && Math.hypot(f.x - q.x, f.z - q.z) < 2);
+// v6.4: a firing slot: a gap in a battlement (an embrasure between two merlons, or a window in a wall-walk). It's next to
+// the drop, but the drop is only straight ahead and there's solid cover on both sides at body height: a soldier stands
+// there to shoot down at the enemy, he doesn't walk along it. v6.2 counted it as a ledge and never let anyone into it:
+// wall defenders stood back from the merlons, saw nothing, and "took a firing position" for ever.
+function firingSlot(dim, q) {
+  const x = Math.floor(q.x), y = Math.floor(q.y + 0.01), z = Math.floor(q.z);
+  let ax = 0, az = 0, n = 0;
+  for (let dx = -1; dx <= 1; dx++) for (let dz = -1; dz <= 1; dz++) if ((dx || dz) && dropOrHazard(dim, x + dx + 0.5, y, z + dz + 0.5)) { ax += dx; az += dz; n++; if (hazardCell(dim, x + dx + 0.5, y, z + dz + 0.5)) return false; }
+  if (!n || (ax && az)) return false;                               // drops on two sides (a corner, a bare wall-top): not a slot
+  const solid = (bx, bz) => { try { const a = tBlock(dim, bx + 0.5, y, bz + 0.5), b = tBlock(dim, bx + 0.5, y + 1, bz + 0.5); return !!a && !!b && !(a.isAir || passable(a)) && !(b.isAir || passable(b)); } catch { return false; } };
+  return ax ? solid(x, z - 1) && solid(x, z + 1) : solid(x - 1, z) && solid(x + 1, z);   // cover on both sides
+}
 function safeSpot(e, spot, now) {
   const dim = e.dimension;
   if (!spot) return undefined;
-  if (!dangerNear(dim, spot) && !claimedByOther(spot, e.id, now) && !failedNear(e, spot, now)) return spot;
+  if ((!dangerNear(dim, spot) || firingSlot(dim, spot)) && !claimedByOther(spot, e.id, now) && !failedNear(e, spot, now) && troubleAt(dim.id, spot.x, spot.z) < 3) return spot;
   const bx = Math.floor(spot.x), by = Math.floor(spot.y + 0.01), bz = Math.floor(spot.z);
   let best, bd = 1e9;
   for (let dx = -3; dx <= 3; dx++) for (let dz = -3; dz <= 3; dz++) for (const dy of [0, 1, -1]) {
     const q = { x: bx + dx + 0.5, y: by + dy, z: bz + dz + 0.5 };
-    if (!standAt(dim, bx + dx, by + dy, bz + dz, now) || dangerNear(dim, q) || claimedByOther(q, e.id, now) || failedNear(e, q, now)) continue;
+    if (!standAt(dim, bx + dx, by + dy, bz + dz, now) || (dangerNear(dim, q) && !firingSlot(dim, q)) || claimedByOther(q, e.id, now) || failedNear(e, q, now) || troubleAt(dim.id, q.x, q.z) >= 3) continue;
     const dd = Math.hypot(dx, dz) + Math.abs(dy);
     if (dd < bd) { bd = dd; best = q; }
   }
@@ -6757,6 +6851,32 @@ world.afterEvents.playerInteractWithEntity.subscribe((ev) => {
   });
 });
 
+// ---- v6.4: trouble memory (the army learns the map). Every spot where a soldier got properly stuck (pressing into a
+// wall, needing a rescue, trapped below his route, giving up a swim, a carried step that kept failing) is remembered
+// in the world, per 2x2 cell, with a weight. Routes go round remembered trouble when there's another way, and fight
+// moves don't pick those spots. It persists with the world, fades if a spot stops causing trouble, and is capped.
+const TROUBLE = new Map(); // "dim|cx|cz" -> { n, t }
+let troubleDirty = false;
+const troubleKey = (dimId, x, z) => `${dimId}|${Math.floor(x) >> 1}|${Math.floor(z) >> 1}`;
+function noteTrouble(dim, l, w = 1) {
+  try {
+    const k = troubleKey(dim.id ?? dim, l.x, l.z), r = TROUBLE.get(k) ?? { n: 0, t: 0 };
+    r.n = Math.min(8, r.n + w); r.t = tick(); TROUBLE.set(k, r); troubleDirty = true;
+    if (TROUBLE.size > 400) { let ok, ot = Infinity; for (const [kk, v] of TROUBLE) if (v.t < ot) { ot = v.t; ok = kk; } TROUBLE.delete(ok); }
+  } catch {}
+}
+const troubleAt = (dimId, x, z) => TROUBLE.size ? (TROUBLE.get(troubleKey(dimId, x, z))?.n ?? 0) : 0;
+system.runInterval(() => {
+  const now = tick();
+  if (now === 40 || (TROUBLE.size === 0 && now % 600 === 40)) {            // load once (after the world is up)
+    try { const raw = world.getDynamicProperty("war:trouble"); if (typeof raw === "string" && !TROUBLE.size) for (const [k, n] of Object.entries(JSON.parse(raw))) TROUBLE.set(k, { n: Number(n) || 0, t: now }); } catch {}
+  }
+  if (now % 6000 === 0) for (const [k, v] of [...TROUBLE]) if (now - v.t > 6000) { v.n -= 1; v.t = now; troubleDirty = true; if (v.n <= 0) TROUBLE.delete(k); }   // fades: -1 every 5 min untouched
+  if (troubleDirty && now % 600 === 0) {
+    troubleDirty = false;
+    try { const o = {}; for (const [k, v] of TROUBLE) o[k] = v.n; world.setDynamicProperty("war:trouble", JSON.stringify(o)); } catch {}
+  }
+}, 20);
 // ---- v6.1: is the ground a step ahead (in the direction dx, dz) safe? No drop of 2+ blocks, no lava / fire / magma
 const DANGER = new Map(); // cell -> { v, t }: a drop of 2+ or a hazard right next to this cell
 function hazardCell(dim, x, y, z) {
