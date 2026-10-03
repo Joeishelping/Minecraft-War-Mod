@@ -160,6 +160,8 @@ export class Entity {
   tryTeleport(loc, opts) { this.teleport(loc, opts); return true; }
   applyImpulse(v) { count("applyImpulse"); if (this.isPlayer) return; this.vel.x += v.x; this.vel.y += v.y; this.vel.z += v.z; }
   clearVelocity() { count("clearVelocity"); this.vel = { x: 0, y: 0, z: 0 }; }
+  setOnFire(sec) { this.fireUntil = Math.max(this.fireUntil ?? 0, SIM.tick + sec * 20); (SIM.burned ??= new Set()).add(this.id); return true; }
+  extinguishFire() { this.fireUntil = 0; return true; }
   getVelocity() { count("getVelocity"); return { ...this.vel }; }
   getRotation() { count("getRotation"); return { ...this.rot }; }
   setRotation(r) { count("setRotation"); this.rot = { ...r }; }
@@ -387,6 +389,7 @@ function physTick(e) {
   if (e.isBullet) return bulletTick(e);
   const l = e._loc;
   const inW = idAt(l.x, l.y + 0.2, l.z).includes("water");
+  if ((e.fireUntil ?? 0) > SIM.tick && SIM.tick % 20 === 0) damage(e, 1, undefined, "fire");   // burning: 1 per second
   if (idAt(l.x, l.y + 0.2, l.z).includes("lava")) { SIM.lavaTicks = (SIM.lavaTicks ?? 0) + 1; (SIM.lavaIds ??= new Set()).add(e.id); if (SIM.tick % 10 === 0) damage(e, 4, undefined, "lava"); }
   // horizontal: walking intent plus whatever impulse momentum is left
   const w = e.walk ?? { x: 0, z: 0 };

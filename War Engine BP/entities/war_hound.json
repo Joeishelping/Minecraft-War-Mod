@@ -10,7 +10,7 @@
           "type": "int",
           "range": [
             0,
-            20
+            40
           ],
           "default": 0,
           "client_sync": true
@@ -337,6 +337,286 @@
                           "value": "war_f20"
                         }
                       ]
+                    },
+                    {
+                      "all_of": [
+                        {
+                          "test": "has_tag",
+                          "subject": "self",
+                          "value": "war_h21"
+                        },
+                        {
+                          "test": "has_tag",
+                          "subject": "other",
+                          "value": "war_f21"
+                        }
+                      ]
+                    },
+                    {
+                      "all_of": [
+                        {
+                          "test": "has_tag",
+                          "subject": "self",
+                          "value": "war_h22"
+                        },
+                        {
+                          "test": "has_tag",
+                          "subject": "other",
+                          "value": "war_f22"
+                        }
+                      ]
+                    },
+                    {
+                      "all_of": [
+                        {
+                          "test": "has_tag",
+                          "subject": "self",
+                          "value": "war_h23"
+                        },
+                        {
+                          "test": "has_tag",
+                          "subject": "other",
+                          "value": "war_f23"
+                        }
+                      ]
+                    },
+                    {
+                      "all_of": [
+                        {
+                          "test": "has_tag",
+                          "subject": "self",
+                          "value": "war_h24"
+                        },
+                        {
+                          "test": "has_tag",
+                          "subject": "other",
+                          "value": "war_f24"
+                        }
+                      ]
+                    },
+                    {
+                      "all_of": [
+                        {
+                          "test": "has_tag",
+                          "subject": "self",
+                          "value": "war_h25"
+                        },
+                        {
+                          "test": "has_tag",
+                          "subject": "other",
+                          "value": "war_f25"
+                        }
+                      ]
+                    },
+                    {
+                      "all_of": [
+                        {
+                          "test": "has_tag",
+                          "subject": "self",
+                          "value": "war_h26"
+                        },
+                        {
+                          "test": "has_tag",
+                          "subject": "other",
+                          "value": "war_f26"
+                        }
+                      ]
+                    },
+                    {
+                      "all_of": [
+                        {
+                          "test": "has_tag",
+                          "subject": "self",
+                          "value": "war_h27"
+                        },
+                        {
+                          "test": "has_tag",
+                          "subject": "other",
+                          "value": "war_f27"
+                        }
+                      ]
+                    },
+                    {
+                      "all_of": [
+                        {
+                          "test": "has_tag",
+                          "subject": "self",
+                          "value": "war_h28"
+                        },
+                        {
+                          "test": "has_tag",
+                          "subject": "other",
+                          "value": "war_f28"
+                        }
+                      ]
+                    },
+                    {
+                      "all_of": [
+                        {
+                          "test": "has_tag",
+                          "subject": "self",
+                          "value": "war_h29"
+                        },
+                        {
+                          "test": "has_tag",
+                          "subject": "other",
+                          "value": "war_f29"
+                        }
+                      ]
+                    },
+                    {
+                      "all_of": [
+                        {
+                          "test": "has_tag",
+                          "subject": "self",
+                          "value": "war_h30"
+                        },
+                        {
+                          "test": "has_tag",
+                          "subject": "other",
+                          "value": "war_f30"
+                        }
+                      ]
+                    },
+                    {
+                      "all_of": [
+                        {
+                          "test": "has_tag",
+                          "subject": "self",
+                          "value": "war_h31"
+                        },
+                        {
+                          "test": "has_tag",
+                          "subject": "other",
+                          "value": "war_f31"
+                        }
+                      ]
+                    },
+                    {
+                      "all_of": [
+                        {
+                          "test": "has_tag",
+                          "subject": "self",
+                          "value": "war_h32"
+                        },
+                        {
+                          "test": "has_tag",
+                          "subject": "other",
+                          "value": "war_f32"
+                        }
+                      ]
+                    },
+                    {
+                      "all_of": [
+                        {
+                          "test": "has_tag",
+                          "subject": "self",
+                          "value": "war_h33"
+                        },
+                        {
+                          "test": "has_tag",
+                          "subject": "other",
+                          "value": "war_f33"
+                        }
+                      ]
+                    },
+                    {
+                      "all_of": [
+                        {
+                          "test": "has_tag",
+                          "subject": "self",
+                          "value": "war_h34"
+                        },
+                        {
+                          "test": "has_tag",
+                          "subject": "other",
+                          "value": "war_f34"
+                        }
+                      ]
+                    },
+                    {
+                      "all_of": [
+                        {
+                          "test": "has_tag",
+                          "subject": "self",
+                          "value": "war_h35"
+                        },
+                        {
+                          "test": "has_tag",
+                          "subject": "other",
+                          "value": "war_f35"
+                        }
+                      ]
+                    },
+                    {
+                      "all_of": [
+                        {
+                          "test": "has_tag",
+                          "subject": "self",
+                          "value": "war_h36"
+                        },
+                        {
+                          "test": "has_tag",
+                          "subject": "other",
+                          "value": "war_f36"
+                        }
+                      ]
+                    },
+                    {
+                      "all_of": [
+                        {
+                          "test": "has_tag",
+                          "subject": "self",
+                          "value": "war_h37"
+                        },
+                        {
+                          "test": "has_tag",
+                          "subject": "other",
+                          "value": "war_f37"
+                        }
+                      ]
+                    },
+                    {
+                      "all_of": [
+                        {
+                          "test": "has_tag",
+                          "subject": "self",
+                          "value": "war_h38"
+                        },
+                        {
+                          "test": "has_tag",
+                          "subject": "other",
+                          "value": "war_f38"
+                        }
+                      ]
+                    },
+                    {
+                      "all_of": [
+                        {
+                          "test": "has_tag",
+                          "subject": "self",
+                          "value": "war_h39"
+                        },
+                        {
+                          "test": "has_tag",
+                          "subject": "other",
+                          "value": "war_f39"
+                        }
+                      ]
+                    },
+                    {
+                      "all_of": [
+                        {
+                          "test": "has_tag",
+                          "subject": "self",
+                          "value": "war_h40"
+                        },
+                        {
+                          "test": "has_tag",
+                          "subject": "other",
+                          "value": "war_f40"
+                        }
+                      ]
                     }
                   ]
                 },
@@ -631,6 +911,286 @@
                           "test": "has_tag",
                           "subject": "other",
                           "value": "war_f20"
+                        }
+                      ]
+                    },
+                    {
+                      "all_of": [
+                        {
+                          "test": "has_tag",
+                          "subject": "self",
+                          "value": "war_h21"
+                        },
+                        {
+                          "test": "has_tag",
+                          "subject": "other",
+                          "value": "war_f21"
+                        }
+                      ]
+                    },
+                    {
+                      "all_of": [
+                        {
+                          "test": "has_tag",
+                          "subject": "self",
+                          "value": "war_h22"
+                        },
+                        {
+                          "test": "has_tag",
+                          "subject": "other",
+                          "value": "war_f22"
+                        }
+                      ]
+                    },
+                    {
+                      "all_of": [
+                        {
+                          "test": "has_tag",
+                          "subject": "self",
+                          "value": "war_h23"
+                        },
+                        {
+                          "test": "has_tag",
+                          "subject": "other",
+                          "value": "war_f23"
+                        }
+                      ]
+                    },
+                    {
+                      "all_of": [
+                        {
+                          "test": "has_tag",
+                          "subject": "self",
+                          "value": "war_h24"
+                        },
+                        {
+                          "test": "has_tag",
+                          "subject": "other",
+                          "value": "war_f24"
+                        }
+                      ]
+                    },
+                    {
+                      "all_of": [
+                        {
+                          "test": "has_tag",
+                          "subject": "self",
+                          "value": "war_h25"
+                        },
+                        {
+                          "test": "has_tag",
+                          "subject": "other",
+                          "value": "war_f25"
+                        }
+                      ]
+                    },
+                    {
+                      "all_of": [
+                        {
+                          "test": "has_tag",
+                          "subject": "self",
+                          "value": "war_h26"
+                        },
+                        {
+                          "test": "has_tag",
+                          "subject": "other",
+                          "value": "war_f26"
+                        }
+                      ]
+                    },
+                    {
+                      "all_of": [
+                        {
+                          "test": "has_tag",
+                          "subject": "self",
+                          "value": "war_h27"
+                        },
+                        {
+                          "test": "has_tag",
+                          "subject": "other",
+                          "value": "war_f27"
+                        }
+                      ]
+                    },
+                    {
+                      "all_of": [
+                        {
+                          "test": "has_tag",
+                          "subject": "self",
+                          "value": "war_h28"
+                        },
+                        {
+                          "test": "has_tag",
+                          "subject": "other",
+                          "value": "war_f28"
+                        }
+                      ]
+                    },
+                    {
+                      "all_of": [
+                        {
+                          "test": "has_tag",
+                          "subject": "self",
+                          "value": "war_h29"
+                        },
+                        {
+                          "test": "has_tag",
+                          "subject": "other",
+                          "value": "war_f29"
+                        }
+                      ]
+                    },
+                    {
+                      "all_of": [
+                        {
+                          "test": "has_tag",
+                          "subject": "self",
+                          "value": "war_h30"
+                        },
+                        {
+                          "test": "has_tag",
+                          "subject": "other",
+                          "value": "war_f30"
+                        }
+                      ]
+                    },
+                    {
+                      "all_of": [
+                        {
+                          "test": "has_tag",
+                          "subject": "self",
+                          "value": "war_h31"
+                        },
+                        {
+                          "test": "has_tag",
+                          "subject": "other",
+                          "value": "war_f31"
+                        }
+                      ]
+                    },
+                    {
+                      "all_of": [
+                        {
+                          "test": "has_tag",
+                          "subject": "self",
+                          "value": "war_h32"
+                        },
+                        {
+                          "test": "has_tag",
+                          "subject": "other",
+                          "value": "war_f32"
+                        }
+                      ]
+                    },
+                    {
+                      "all_of": [
+                        {
+                          "test": "has_tag",
+                          "subject": "self",
+                          "value": "war_h33"
+                        },
+                        {
+                          "test": "has_tag",
+                          "subject": "other",
+                          "value": "war_f33"
+                        }
+                      ]
+                    },
+                    {
+                      "all_of": [
+                        {
+                          "test": "has_tag",
+                          "subject": "self",
+                          "value": "war_h34"
+                        },
+                        {
+                          "test": "has_tag",
+                          "subject": "other",
+                          "value": "war_f34"
+                        }
+                      ]
+                    },
+                    {
+                      "all_of": [
+                        {
+                          "test": "has_tag",
+                          "subject": "self",
+                          "value": "war_h35"
+                        },
+                        {
+                          "test": "has_tag",
+                          "subject": "other",
+                          "value": "war_f35"
+                        }
+                      ]
+                    },
+                    {
+                      "all_of": [
+                        {
+                          "test": "has_tag",
+                          "subject": "self",
+                          "value": "war_h36"
+                        },
+                        {
+                          "test": "has_tag",
+                          "subject": "other",
+                          "value": "war_f36"
+                        }
+                      ]
+                    },
+                    {
+                      "all_of": [
+                        {
+                          "test": "has_tag",
+                          "subject": "self",
+                          "value": "war_h37"
+                        },
+                        {
+                          "test": "has_tag",
+                          "subject": "other",
+                          "value": "war_f37"
+                        }
+                      ]
+                    },
+                    {
+                      "all_of": [
+                        {
+                          "test": "has_tag",
+                          "subject": "self",
+                          "value": "war_h38"
+                        },
+                        {
+                          "test": "has_tag",
+                          "subject": "other",
+                          "value": "war_f38"
+                        }
+                      ]
+                    },
+                    {
+                      "all_of": [
+                        {
+                          "test": "has_tag",
+                          "subject": "self",
+                          "value": "war_h39"
+                        },
+                        {
+                          "test": "has_tag",
+                          "subject": "other",
+                          "value": "war_f39"
+                        }
+                      ]
+                    },
+                    {
+                      "all_of": [
+                        {
+                          "test": "has_tag",
+                          "subject": "self",
+                          "value": "war_h40"
+                        },
+                        {
+                          "test": "has_tag",
+                          "subject": "other",
+                          "value": "war_f40"
                         }
                       ]
                     }
@@ -942,6 +1502,286 @@
                       "test": "has_tag",
                       "subject": "other",
                       "value": "war_f20"
+                    }
+                  ]
+                },
+                {
+                  "all_of": [
+                    {
+                      "test": "has_tag",
+                      "subject": "self",
+                      "value": "war_f21"
+                    },
+                    {
+                      "test": "has_tag",
+                      "subject": "other",
+                      "value": "war_f21"
+                    }
+                  ]
+                },
+                {
+                  "all_of": [
+                    {
+                      "test": "has_tag",
+                      "subject": "self",
+                      "value": "war_f22"
+                    },
+                    {
+                      "test": "has_tag",
+                      "subject": "other",
+                      "value": "war_f22"
+                    }
+                  ]
+                },
+                {
+                  "all_of": [
+                    {
+                      "test": "has_tag",
+                      "subject": "self",
+                      "value": "war_f23"
+                    },
+                    {
+                      "test": "has_tag",
+                      "subject": "other",
+                      "value": "war_f23"
+                    }
+                  ]
+                },
+                {
+                  "all_of": [
+                    {
+                      "test": "has_tag",
+                      "subject": "self",
+                      "value": "war_f24"
+                    },
+                    {
+                      "test": "has_tag",
+                      "subject": "other",
+                      "value": "war_f24"
+                    }
+                  ]
+                },
+                {
+                  "all_of": [
+                    {
+                      "test": "has_tag",
+                      "subject": "self",
+                      "value": "war_f25"
+                    },
+                    {
+                      "test": "has_tag",
+                      "subject": "other",
+                      "value": "war_f25"
+                    }
+                  ]
+                },
+                {
+                  "all_of": [
+                    {
+                      "test": "has_tag",
+                      "subject": "self",
+                      "value": "war_f26"
+                    },
+                    {
+                      "test": "has_tag",
+                      "subject": "other",
+                      "value": "war_f26"
+                    }
+                  ]
+                },
+                {
+                  "all_of": [
+                    {
+                      "test": "has_tag",
+                      "subject": "self",
+                      "value": "war_f27"
+                    },
+                    {
+                      "test": "has_tag",
+                      "subject": "other",
+                      "value": "war_f27"
+                    }
+                  ]
+                },
+                {
+                  "all_of": [
+                    {
+                      "test": "has_tag",
+                      "subject": "self",
+                      "value": "war_f28"
+                    },
+                    {
+                      "test": "has_tag",
+                      "subject": "other",
+                      "value": "war_f28"
+                    }
+                  ]
+                },
+                {
+                  "all_of": [
+                    {
+                      "test": "has_tag",
+                      "subject": "self",
+                      "value": "war_f29"
+                    },
+                    {
+                      "test": "has_tag",
+                      "subject": "other",
+                      "value": "war_f29"
+                    }
+                  ]
+                },
+                {
+                  "all_of": [
+                    {
+                      "test": "has_tag",
+                      "subject": "self",
+                      "value": "war_f30"
+                    },
+                    {
+                      "test": "has_tag",
+                      "subject": "other",
+                      "value": "war_f30"
+                    }
+                  ]
+                },
+                {
+                  "all_of": [
+                    {
+                      "test": "has_tag",
+                      "subject": "self",
+                      "value": "war_f31"
+                    },
+                    {
+                      "test": "has_tag",
+                      "subject": "other",
+                      "value": "war_f31"
+                    }
+                  ]
+                },
+                {
+                  "all_of": [
+                    {
+                      "test": "has_tag",
+                      "subject": "self",
+                      "value": "war_f32"
+                    },
+                    {
+                      "test": "has_tag",
+                      "subject": "other",
+                      "value": "war_f32"
+                    }
+                  ]
+                },
+                {
+                  "all_of": [
+                    {
+                      "test": "has_tag",
+                      "subject": "self",
+                      "value": "war_f33"
+                    },
+                    {
+                      "test": "has_tag",
+                      "subject": "other",
+                      "value": "war_f33"
+                    }
+                  ]
+                },
+                {
+                  "all_of": [
+                    {
+                      "test": "has_tag",
+                      "subject": "self",
+                      "value": "war_f34"
+                    },
+                    {
+                      "test": "has_tag",
+                      "subject": "other",
+                      "value": "war_f34"
+                    }
+                  ]
+                },
+                {
+                  "all_of": [
+                    {
+                      "test": "has_tag",
+                      "subject": "self",
+                      "value": "war_f35"
+                    },
+                    {
+                      "test": "has_tag",
+                      "subject": "other",
+                      "value": "war_f35"
+                    }
+                  ]
+                },
+                {
+                  "all_of": [
+                    {
+                      "test": "has_tag",
+                      "subject": "self",
+                      "value": "war_f36"
+                    },
+                    {
+                      "test": "has_tag",
+                      "subject": "other",
+                      "value": "war_f36"
+                    }
+                  ]
+                },
+                {
+                  "all_of": [
+                    {
+                      "test": "has_tag",
+                      "subject": "self",
+                      "value": "war_f37"
+                    },
+                    {
+                      "test": "has_tag",
+                      "subject": "other",
+                      "value": "war_f37"
+                    }
+                  ]
+                },
+                {
+                  "all_of": [
+                    {
+                      "test": "has_tag",
+                      "subject": "self",
+                      "value": "war_f38"
+                    },
+                    {
+                      "test": "has_tag",
+                      "subject": "other",
+                      "value": "war_f38"
+                    }
+                  ]
+                },
+                {
+                  "all_of": [
+                    {
+                      "test": "has_tag",
+                      "subject": "self",
+                      "value": "war_f39"
+                    },
+                    {
+                      "test": "has_tag",
+                      "subject": "other",
+                      "value": "war_f39"
+                    }
+                  ]
+                },
+                {
+                  "all_of": [
+                    {
+                      "test": "has_tag",
+                      "subject": "self",
+                      "value": "war_f40"
+                    },
+                    {
+                      "test": "has_tag",
+                      "subject": "other",
+                      "value": "war_f40"
                     }
                   ]
                 }
@@ -1305,6 +2145,286 @@
                           "test": "has_tag",
                           "subject": "other",
                           "value": "war_f20"
+                        }
+                      ]
+                    },
+                    {
+                      "all_of": [
+                        {
+                          "test": "has_tag",
+                          "subject": "self",
+                          "value": "war_h21"
+                        },
+                        {
+                          "test": "has_tag",
+                          "subject": "other",
+                          "value": "war_f21"
+                        }
+                      ]
+                    },
+                    {
+                      "all_of": [
+                        {
+                          "test": "has_tag",
+                          "subject": "self",
+                          "value": "war_h22"
+                        },
+                        {
+                          "test": "has_tag",
+                          "subject": "other",
+                          "value": "war_f22"
+                        }
+                      ]
+                    },
+                    {
+                      "all_of": [
+                        {
+                          "test": "has_tag",
+                          "subject": "self",
+                          "value": "war_h23"
+                        },
+                        {
+                          "test": "has_tag",
+                          "subject": "other",
+                          "value": "war_f23"
+                        }
+                      ]
+                    },
+                    {
+                      "all_of": [
+                        {
+                          "test": "has_tag",
+                          "subject": "self",
+                          "value": "war_h24"
+                        },
+                        {
+                          "test": "has_tag",
+                          "subject": "other",
+                          "value": "war_f24"
+                        }
+                      ]
+                    },
+                    {
+                      "all_of": [
+                        {
+                          "test": "has_tag",
+                          "subject": "self",
+                          "value": "war_h25"
+                        },
+                        {
+                          "test": "has_tag",
+                          "subject": "other",
+                          "value": "war_f25"
+                        }
+                      ]
+                    },
+                    {
+                      "all_of": [
+                        {
+                          "test": "has_tag",
+                          "subject": "self",
+                          "value": "war_h26"
+                        },
+                        {
+                          "test": "has_tag",
+                          "subject": "other",
+                          "value": "war_f26"
+                        }
+                      ]
+                    },
+                    {
+                      "all_of": [
+                        {
+                          "test": "has_tag",
+                          "subject": "self",
+                          "value": "war_h27"
+                        },
+                        {
+                          "test": "has_tag",
+                          "subject": "other",
+                          "value": "war_f27"
+                        }
+                      ]
+                    },
+                    {
+                      "all_of": [
+                        {
+                          "test": "has_tag",
+                          "subject": "self",
+                          "value": "war_h28"
+                        },
+                        {
+                          "test": "has_tag",
+                          "subject": "other",
+                          "value": "war_f28"
+                        }
+                      ]
+                    },
+                    {
+                      "all_of": [
+                        {
+                          "test": "has_tag",
+                          "subject": "self",
+                          "value": "war_h29"
+                        },
+                        {
+                          "test": "has_tag",
+                          "subject": "other",
+                          "value": "war_f29"
+                        }
+                      ]
+                    },
+                    {
+                      "all_of": [
+                        {
+                          "test": "has_tag",
+                          "subject": "self",
+                          "value": "war_h30"
+                        },
+                        {
+                          "test": "has_tag",
+                          "subject": "other",
+                          "value": "war_f30"
+                        }
+                      ]
+                    },
+                    {
+                      "all_of": [
+                        {
+                          "test": "has_tag",
+                          "subject": "self",
+                          "value": "war_h31"
+                        },
+                        {
+                          "test": "has_tag",
+                          "subject": "other",
+                          "value": "war_f31"
+                        }
+                      ]
+                    },
+                    {
+                      "all_of": [
+                        {
+                          "test": "has_tag",
+                          "subject": "self",
+                          "value": "war_h32"
+                        },
+                        {
+                          "test": "has_tag",
+                          "subject": "other",
+                          "value": "war_f32"
+                        }
+                      ]
+                    },
+                    {
+                      "all_of": [
+                        {
+                          "test": "has_tag",
+                          "subject": "self",
+                          "value": "war_h33"
+                        },
+                        {
+                          "test": "has_tag",
+                          "subject": "other",
+                          "value": "war_f33"
+                        }
+                      ]
+                    },
+                    {
+                      "all_of": [
+                        {
+                          "test": "has_tag",
+                          "subject": "self",
+                          "value": "war_h34"
+                        },
+                        {
+                          "test": "has_tag",
+                          "subject": "other",
+                          "value": "war_f34"
+                        }
+                      ]
+                    },
+                    {
+                      "all_of": [
+                        {
+                          "test": "has_tag",
+                          "subject": "self",
+                          "value": "war_h35"
+                        },
+                        {
+                          "test": "has_tag",
+                          "subject": "other",
+                          "value": "war_f35"
+                        }
+                      ]
+                    },
+                    {
+                      "all_of": [
+                        {
+                          "test": "has_tag",
+                          "subject": "self",
+                          "value": "war_h36"
+                        },
+                        {
+                          "test": "has_tag",
+                          "subject": "other",
+                          "value": "war_f36"
+                        }
+                      ]
+                    },
+                    {
+                      "all_of": [
+                        {
+                          "test": "has_tag",
+                          "subject": "self",
+                          "value": "war_h37"
+                        },
+                        {
+                          "test": "has_tag",
+                          "subject": "other",
+                          "value": "war_f37"
+                        }
+                      ]
+                    },
+                    {
+                      "all_of": [
+                        {
+                          "test": "has_tag",
+                          "subject": "self",
+                          "value": "war_h38"
+                        },
+                        {
+                          "test": "has_tag",
+                          "subject": "other",
+                          "value": "war_f38"
+                        }
+                      ]
+                    },
+                    {
+                      "all_of": [
+                        {
+                          "test": "has_tag",
+                          "subject": "self",
+                          "value": "war_h39"
+                        },
+                        {
+                          "test": "has_tag",
+                          "subject": "other",
+                          "value": "war_f39"
+                        }
+                      ]
+                    },
+                    {
+                      "all_of": [
+                        {
+                          "test": "has_tag",
+                          "subject": "self",
+                          "value": "war_h40"
+                        },
+                        {
+                          "test": "has_tag",
+                          "subject": "other",
+                          "value": "war_f40"
                         }
                       ]
                     }

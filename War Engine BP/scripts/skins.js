@@ -1,7 +1,7 @@
 // ============================================================
 //  CUSTOM SKIN NAMES
 // ============================================================
-// Each line matches one PNG in the RESOURCE pack: textures/war_skins/skin_01.png ... skin_32.png
+// Each line matches one PNG in the RESOURCE pack: textures/war_skins/skin_01.png ... skin_64.png
 // Slots with an empty name ("") are hidden from the menu. Don't reorder lines.
 // ============================================================
 
@@ -38,4 +38,36 @@ export const SKINS = [
   "", // skin_30
   "", // skin_31
   "", // skin_32
+  "", // skin_33
+  "", // skin_34
+  "", // skin_35
+  "", // skin_36
+  "", // skin_37
+  "", // skin_38
+  "", // skin_39
+  "", // skin_40
+  "", // skin_41
+  "", // skin_42
+  "", // skin_43
+  "", // skin_44
+  "", // skin_45
+  "", // skin_46
+  "", // skin_47
+  "", // skin_48
+  "", // skin_49
+  "", // skin_50
+  "", // skin_51
+  "", // skin_52
+  "", // skin_53
+  "", // skin_54
+  "", // skin_55
+  "", // skin_56
+  "", // skin_57
+  "", // skin_58
+  "", // skin_59
+  "", // skin_60
+  "", // skin_61
+  "", // skin_62
+  "", // skin_63
+  "", // skin_64
 ];

@@ -1,5 +1,46 @@
 # War Engine changelog
 
+## v6.6 (neutral by default, one-page diplomacy, 40 factions, 64 skins, coalition spawns, spear & molotov)
+
+- **Everyone starts neutral.** A new world starts with every faction neutral to every other (it used to be all
+  hostile). An existing world keeps its relations.
+- **Diplomacy on one page.** War Table -> Diplomacy -> pick a faction: every other faction is listed with its own
+  Neutral / Hostile / Ally choice, plus "Set everyone to..." at the top. Save applies them all, and the same page
+  comes straight back with the new values. Close it when you're done. One chat message per save, not one per
+  faction.
+- **40 factions** (was 20): Jet, Quartz, Iron, Netherite, Crimson, Emerald, Lapis, Amber, Coral, Indigo, Forest, Sand,
+  Lavender, Rust, Silver, Rose, Mint, Sky, Plum and Khaki. Each has its own uniform, medic, cavalry, hound and flag
+  colours (made from the faction 1 textures). Name them in "Name factions" as usual. Existing worlds are upgraded
+  with their relations kept, and the new factions start neutral.
+- **64 skin slots** (was 32). Slots 33-64 are ready: drop `skin_33.png`... into the resource pack's
+  `textures/war_skins/` and give the slot a name in `War Engine BP/scripts/skins.js` (empty names stay hidden).
+- **Spawn a whole coalition.** The spawn egg's faction list also offers every coalition with 2 or more factions.
+  "How many" is per faction, and each faction's group is placed side by side.
+- **Spear** (new weapon): a sword's damage with a much longer reach, a touch slower to close in. In hand: the
+  game's spear, or a trident where there is none.
+- **Molotovs** (new weapon, with a sword for close fighting):
+  - Lobbed at a group of enemies 7-18 blocks away. 3 carried, 15 s between throws, one back every 90 s, and only
+    one bottle per squad every 4 s (no volleys).
+  - Where it lands, a 2.5-block patch burns for 6 s. Anyone standing in it catches fire, so he never throws where
+    a friend is nearby, and soldiers caught in it get out.
+  - **No blocks are set alight or broken.**
+  - Test: one or two patches at a time, enemies burned, none of their own.
+- **Snowball grenadier balance.**
+  - Throws only out to 24 blocks (was 32).
+  - Never at a man closer than 6, and never where a friend stands within 3 of the target.
+  - 12 s between throws (was 10).
+  - A snowball comes back every 2 minutes, up to 3. It used to be 3 for life, then a crossbow.
+- **Gun rhythm.** The semi-auto now fires an 8-round clip and the pistol a 7-round magazine (they were 3 and 2,
+  with constant mini-reloads). The damage per second is the same. The pump shotgun takes 1 s between shots
+  (was 0.75 s).
+- **More callouts, wired and waiting for recordings:**
+  - "Medic!": a wounded man calls about every 18 s, only if no medic is already on his way, and only about half
+    of the wounded call at all.
+  - "Thanks!": after a revive.
+  - "Don't shoot!": on surrender.
+  - "Reloading!" and "Grenade!" (molotovs and snowballs).
+  - They stay silent until the clips are recorded.
+
 ## v6.5.3 (the last 3 callout languages: 18 in all)
 
 - **Chinese (Mandarin), Yucatec Maya and AAVE** added. Chinese's lines recorded in two versions ("Flanking",

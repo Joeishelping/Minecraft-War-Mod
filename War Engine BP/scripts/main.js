@@ -26,7 +26,7 @@ import "./extensions/index.js";
 // ================================================================ constants
 const SOLDIER = "war:soldier", HOUND = "war:hound", WAYPOINT = "war:waypoint", FLAG = "war:flag";
 const VEHICLES = ["war:boat", "war:plane", "war:tank"];
-const NF = 20, NSLOT = 1600;
+const NF = 40, NSLOT = 1600;   // (v6.6: 40 factions, was 20)
 // Marker numbers are two-part (row x column, 40 x 40 = 1600). A soldier and his marker share a row tag
 // and a column tag, so each soldier checks only 80 conditions for 1600 possible markers.
 const GRID = 40;
@@ -41,6 +41,11 @@ const COLORS = [
   ["Purple", "§5"], ["Orange", "§6"], ["Black", "§8"], ["Gray", "§7"], ["Pink", "§d"],
   ["Cyan", "§3"], ["Brown", "§n"], ["Lime", "§a"], ["Light Blue", "§b"], ["Magenta", "§u"],
   ["Gold", "§p"], ["Navy", "§1"], ["Maroon", "§4"], ["Olive", "§g"], ["Teal", "§s"],
+  // v6.6: 20 more
+  ["Jet", "§0"], ["Quartz", "§h"], ["Iron", "§i"], ["Netherite", "§j"], ["Crimson", "§m"],
+  ["Emerald", "§q"], ["Lapis", "§t"], ["Amber", "§v"], ["Coral", "§c"], ["Indigo", "§1"],
+  ["Forest", "§2"], ["Sand", "§e"], ["Lavender", "§d"], ["Rust", "§6"], ["Silver", "§7"],
+  ["Rose", "§c"], ["Mint", "§a"], ["Sky", "§b"], ["Plum", "§5"], ["Khaki", "§g"],
 ];
 const DIV = {
   foot: { name: "Foot Soldier", hp: "hp_40", weapon: true },
@@ -70,7 +75,10 @@ const REL_TXT = { "1": "§cHOSTILE", "0": "§7NEUTRAL", "2": "§aALLY" };
 // Gun types fire the gun pack's own NPC bullets (its script applies the damage).
 // A faction's loadout only decides which gun model is held and which gunshot plays.
 const WEAPONS = [["sword", "Sword"], ["crossbow", "Crossbow"], ["rifle", "Rifle"], ["semi", "Semi-auto"], ["smg", "SMG"],
-  ["mg", "Machine gun"], ["shotgun", "Shotgun"], ["at", "Anti-tank"], ["pistol", "Pistol"], ["sniper", "Sniper"]];
+  ["mg", "Machine gun"], ["shotgun", "Shotgun"], ["at", "Anti-tank"], ["pistol", "Pistol"], ["sniper", "Sniper"],
+  ["spear", "Spear"], ["molotov", "Molotovs (+ sword)"]];   // (v6.6: spear, molotov)
+const MELEE_W = ["sword", "spear", "molotov"];                  // hand-to-hand weapons (everything else shoots)
+const isRangedW = (w) => !MELEE_W.includes(w);
 const GUNS = ["rifle", "semi", "smg", "mg", "shotgun", "at", "pistol", "sniper"];
 const LOADOUTS = {
   american: { name: "American", rifle: "m1903", semi: "garand", smg: "thompson", mg: "bar", shotgun: "model1912", at: "bazooka", pistol: "m1911", sniper: "m1903s" },
@@ -97,8 +105,12 @@ function getRel() {
   if (relCache) return relCache;
   let r = gdp(world, "war:rel");
   if (typeof r !== "string" || r.length !== NF * NF) {
-    r = "";
-    for (let a = 1; a <= NF; a++) for (let b = 1; b <= NF; b++) r += a === b ? "2" : "1";
+    // v6.6: everyone starts NEUTRAL (was hostile). A world from before keeps the relations it had: an older, smaller
+    // table (20 factions) is copied in and the new factions start neutral to everyone
+    const old = typeof r === "string" ? r : "", on = Math.round(Math.sqrt(old.length));
+    let out = "";
+    for (let a = 1; a <= NF; a++) for (let b = 1; b <= NF; b++) out += a === b ? "2" : on * on === old.length && a <= on && b <= on ? old[(a - 1) * on + (b - 1)] : "0";
+    r = out;
     sdp(world, "war:rel", r);
   }
   return (relCache = r);
@@ -367,6 +379,7 @@ function weaponItem(e) {
   if (d.surr || d.div === "medic") return "air";
   if (d.div === "grenadier" && Number(gdp(e, "war:snow") ?? 3) > 0) return "snowball";
   if (GUNS.includes(d.weapon)) return `ww:${gunModel(d.faction, d.weapon)}`;
+  if (d.weapon === "spear") return "iron_spear";                  // (no spear in this game version: a trident)
   if (d.ranged) return "crossbow";
   return d.div === "cavalier" ? "air" : "iron_sword"; // the cavalier's lance is part of its model
 }
@@ -467,7 +480,7 @@ function setupSoldier(e, s, player, { heal = true } = {}) {
   setP(e, "war:faction", s.faction ?? 0);
   const weapon = div === "medic" || div === "grenadier" ? "sword" : (s.weapon && WEAPONS.some((w) => w[0] === s.weapon) ? s.weapon : (s.ranged ? "crossbow" : "sword"));
   sdp(e, "war:weapon", weapon);
-  setP(e, "war:ranged", weapon !== "sword");
+  setP(e, "war:ranged", isRangedW(weapon));
   setP(e, "war:skin", s.skin ?? 0);
   setP(e, "war:cav", div === "cavalier");
   setP(e, "war:medic", div === "medic");
@@ -575,6 +588,7 @@ function surrender(e, captor) {
   try { sdDrop(e); } catch {}
   const d = sd(e);
   if (d.surr) return;
+  callout(e, "Don't shoot!");                                    // (v6.6)
   sdp(e, "war:prevfunc", d.func);
   sdp(e, "war:surr", captor);
   const slot = makeWaypoint(e.dimension, e.location);
@@ -675,17 +689,22 @@ function think(e) {
   }
 
   // ---- weapon
-  let weapon = GUNS.includes(d.weapon) ? `w_${d.weapon}` : d.ranged ? "w_ranged" : d.div === "cavalier" ? "w_lance" : "w_melee";
+  let weapon = GUNS.includes(d.weapon) ? `w_${d.weapon}` : d.weapon === "spear" && d.div !== "cavalier" ? "w_spear" : d.ranged ? "w_ranged" : d.div === "cavalier" ? "w_lance" : "w_melee";
+  if (d.weapon === "molotov") molotov(e, d, now);                // (v6.6: throws one now and then, fights with the sword)
   if (d.div === "medic") weapon = "w_keepaway";
   if (d.div === "grenadier") {
-    const snow = Number(gdp(e, "war:snow") ?? 3);
+    let snow = Number(gdp(e, "war:snow") ?? 3);
+    if (snow < 3 && now - Number(gdp(e, "war:snowr") ?? now) > 2400) {   // (v6.6) one back every 2 minutes
+      snow++; sdp(e, "war:snow", snow); sdp(e, "war:snowr", snow < 3 ? now : undefined);
+      if (snow === 1) { setP(e, "war:ranged", false); equip(e, "snowball"); }
+    }
     if (snow > 0) { weapon = "w_keepaway"; grenadier(e, d, now); }
     else weapon = "w_ranged";
   }
   if (d.div === "medic") medic(e, d, now);
 
   const pat = `g_pat${d.radius <= 5 ? 4 : d.radius <= 10 ? 8 : 14}`;
-  const melee = weapon === "w_melee" || weapon === "w_lance";
+  const melee = weapon === "w_melee" || weapon === "w_lance" || weapon === "w_spear";
   let want;
   if (retreat) {
     const rally = nearestFlag(e.dimension, e.location, (f) => !!P(f, "war:rally") && isFriendly(d.faction, Number(P(f, "war:faction"))), 128);
@@ -813,11 +832,14 @@ function medic(e, d, now) {
     try { tgt.dimension.spawnParticle("minecraft:heart_particle", { x: tgt.location.x, y: tgt.location.y + 2, z: tgt.location.z }); } catch {}
   }, 12);
 }
+// v6.6 balance: 24 blocks max (a lob that far was mostly luck), never at a man closer than 6 (the blast / scatter
+// reaches the thrower), never where a friend stands within 3 of the target, 12 s between throws, and one snowball
+// back every 2 minutes (up to 3; it used to be 3 for life, then a crossbow)
 function grenadier(e, d, now) {
   if (Number(gdp(e, "war:snowt") ?? 0) > now) return;
   // only enemy soldiers, hounds, players, and tanks with an enemy crew; never mobs or empty targets
   let best, bd = -1e9;
-  for (const o of nearbyCombatants(e.dimension.id, e.location, 32)) {
+  for (const o of nearbyCombatants(e.dimension.id, e.location, 24)) {
     if (o.id === e.id) continue;
     let ok = false;
     if (o.typeId === SOLDIER || o.typeId === HOUND) ok = isHostile(d.faction, factionOf(o));
@@ -828,7 +850,8 @@ function grenadier(e, d, now) {
     }
     if (!ok) continue;
     const dd = dist(o.location, e.location);
-    if (dd <= 3) continue;
+    if (dd <= 6) continue;
+    if (nearSnap(o.dimension.id, o.location, 3).some((c) => c.id !== e.id && !c.down && (c.type === SOLDIER || c.type === "minecraft:player") && c.f && isFriendly(d.faction, c.f))) continue;   // a friend right by him
     // value: how many enemies are packed around him (tanks count triple), then distance
     let pack = o.typeId === "war:tank" ? 3 : 1;
     for (const q of nearbyCombatants(o.dimension.id, o.location, 4)) if (q.id !== o.id && (q.typeId === SOLDIER || q.typeId === "minecraft:player") && isHostile(d.faction, factionOf(q))) pack++;
@@ -839,7 +862,8 @@ function grenadier(e, d, now) {
   callout(e, "Grenade!");
   const snow = Number(gdp(e, "war:snow") ?? 3) - 1;
   sdp(e, "war:snow", snow);
-  sdp(e, "war:snowt", now + 200); // 10 s
+  sdp(e, "war:snowt", now + 240); // 12 s
+  if (!gdp(e, "war:snowr")) sdp(e, "war:snowr", now);
   try {
     const from = { x: e.location.x, y: e.location.y + 1.6, z: e.location.z };
     const sb = e.dimension.spawnEntity("minecraft:snowball", from);
@@ -851,6 +875,79 @@ function grenadier(e, d, now) {
   } catch {}
   if (snow <= 0) { setP(e, "war:ranged", true); equip(e, "crossbow"); }
 }
+
+// ================================================================ v6.6: molotovs
+// A molotov soldier fights with a sword and now and then lobs a firebomb at an enemy 5-18 blocks away: 3 carried, 15 s
+// between throws, one back every 90 s. Where it lands, a 2.5-block patch burns for 6 s: anyone standing in it catches
+// fire (friend or foe, so he never throws where a friend stands nearby). No blocks are touched (nothing is set alight,
+// nothing breaks). Soldiers caught in a burning patch get out of it.
+const MOLO = { max: 3, cd: 300, rMin: 7, rMax: 18, refill: 1800, radius: 2.5, life: 120, burn: 4, squadGap: 80 };
+const squadMolo = new Map(); // squad -> next tick one of them may throw (v6.6: one bottle at a time, not a volley)
+const fires = []; // { dim, at, until, f }
+function molotov(e, d, now) {
+  if (downed.has(e.id) || d.surr) return;
+  let n = Number(gdp(e, "war:molo") ?? MOLO.max);
+  if (n < MOLO.max && now - Number(gdp(e, "war:molor") ?? now) > MOLO.refill) { n++; sdp(e, "war:molo", n); sdp(e, "war:molor", n < MOLO.max ? now : undefined); }
+  if (n <= 0 || Number(gdp(e, "war:molot") ?? 0) > now) return;
+  const sq = `${d.faction}:${d.squad}`;
+  if (now < (squadMolo.get(sq) ?? 0)) return;
+  // the best target in reach: the enemy with the most enemies packed around him (a bottle on a crowd)
+  let t, bs = -1e9;
+  for (const c of nearSnap(e.dimension.id, e.location, MOLO.rMax)) {
+    if (c.down || !c.f || !isHostile(d.faction, c.f) || !c.e.isValid || downed.has(c.id) || c.dd < MOLO.rMin) continue;
+    let pack = 0; for (const q of nearSnap(e.dimension.id, c, MOLO.radius + 0.5)) if (!q.down && q.f && isHostile(d.faction, q.f)) pack++;
+    const sc = pack * 3 - c.dd * 0.1;
+    if (sc > bs) { bs = sc; t = c.e; }
+  }
+  if (!t?.isValid) return;
+  const dd = dist(t.location, e.location);
+  if (dd < MOLO.rMin || dd > MOLO.rMax || Math.abs(t.location.y - e.location.y) > 6) return;
+  if (!clearShot(e.dimension, headLoc(e), { x: t.location.x, y: t.location.y + 1.6, z: t.location.z })) return;   // he must see where he throws
+  if (nearSnap(t.dimension.id, t.location, MOLO.radius + 3).some((c) => !c.down && (c.type === SOLDIER || c.type === "minecraft:player" || c.type === HOUND) && c.f && isFriendly(d.faction, c.f))) return;   // never on (or near) a friend
+  sdp(e, "war:molo", n - 1); sdp(e, "war:molot", now + MOLO.cd); squadMolo.set(sq, now + MOLO.squadGap);
+  if (!gdp(e, "war:molor")) sdp(e, "war:molor", now);
+  callout(e, "Grenade!");
+  const err = Math.min(2, dd / 10);                              // a lob isn't a rifle shot
+  const at = { x: t.location.x + (Math.random() - 0.5) * err * 2, y: t.location.y, z: t.location.z + (Math.random() - 0.5) * err * 2 };
+  throwMolotov(e, at, dd);
+}
+function throwMolotov(e, at, dd) {
+  const dim = e.dimension, from = headLoc(e), T = Math.round(12 + dd * 0.9), f = Number(P(e, "war:faction") ?? 0);
+  const g = walkableNear(dim, at.x, at.z, at.y) ?? at;            // lands on the ground there
+  try { dim.playSound("random.bow", from, { volume: 0.6, pitch: 0.7 }); } catch {}
+  for (let k = 1; k <= T; k += 2) system.runTimeout(() => {      // the bottle's arc (a trail of flame)
+    try { const u = k / T, h = Math.max(3, dd * 0.35); dim.spawnParticle("minecraft:basic_flame_particle", { x: from.x + (g.x - from.x) * u, y: from.y + (g.y + 0.3 - from.y) * u + 4 * h * u * (1 - u), z: from.z + (g.z - from.z) * u }); } catch {}
+  }, k);
+  system.runTimeout(() => {
+    try { dim.playSound("random.glass", g, { volume: 1.0, pitch: 0.9 }); dim.playSound("mob.ghast.fireball", g, { volume: 0.5, pitch: 1.3 }); } catch {}
+    fires.push({ dim, at: { x: g.x, y: g.y, z: g.z }, until: tick() + MOLO.life, f });
+  }, T);
+}
+system.runInterval(() => {
+  const now = tick();
+  for (let i = fires.length - 1; i >= 0; i--) {
+    const F = fires[i];
+    if (now >= F.until) { fires.splice(i, 1); continue; }
+    try {
+      for (let k = 0; k < 7; k++) {                               // flames over the patch
+        const a = Math.random() * Math.PI * 2, r = Math.sqrt(Math.random()) * MOLO.radius;
+        F.dim.spawnParticle(k % 3 ? "minecraft:basic_flame_particle" : "minecraft:large_smoke_particle", { x: F.at.x + Math.cos(a) * r, y: F.at.y + 0.15, z: F.at.z + Math.sin(a) * r });
+      }
+      for (const o of F.dim.getEntities({ location: F.at, maxDistance: MOLO.radius + 0.6 })) {
+        if (o.typeId === "minecraft:item" || o.typeId === WAYPOINT || o.typeId === FLAG || VEHICLES.includes(o.typeId) || Math.abs(o.location.y - F.at.y) > 1.6) continue;
+        if (o.typeId === "minecraft:player") { try { if (!playerFair(o)) continue; } catch {} }
+        try { o.setOnFire(MOLO.burn, true); } catch {}
+        if (o.typeId === SOLDIER && !downed.has(o.id) && !held.has(o.id) && now - Number(fleeFire.get(o.id) ?? -99) > 20) {   // out of the fire
+          fleeFire.set(o.id, now);
+          const l = o.location, dx = l.x - F.at.x, dz = l.z - F.at.z, L = Math.hypot(dx, dz) || 1;
+          const out = walkableNear(o.dimension, F.at.x + (dx / L) * (MOLO.radius + 2), F.at.z + (dz / L) * (MOLO.radius + 2), l.y);
+          if (out && !dangerNear(o.dimension, out)) { planPersonalTo(o, "settle", out, now); note(o, "getting out of the fire"); }
+        }
+      }
+    } catch {}
+  }
+}, 10);
+const fleeFire = new Map();
 
 // Stuck detection + catch-up teleports (works across dimensions for leaders).
 function unstick(e, d, fighting) {
@@ -1752,10 +1849,12 @@ function lookedSpot(player, maxD = 64) {
   const off = { Up: [0, 1, 0], Down: [0, -1, 0], North: [0, 0, -1], South: [0, 0, 1], East: [1, 0, 0], West: [-1, 0, 0] }[hit.face] ?? [0, 1, 0];
   return { x: b.x + 0.5 + off[0], y: b.y + off[1], z: b.z + 0.5 + off[2] };
 }
-function spawnPoints(player, count) {
+function spawnPoints(player, count, shift = 0) {
   const v = player.getViewDirection();
-  const base = lookedSpot(player, 48) ?? { x: player.location.x + v.x * 3, y: player.location.y, z: player.location.z + v.z * 3 };
+  const base0 = lookedSpot(player, 48) ?? { x: player.location.x + v.x * 3, y: player.location.y, z: player.location.z + v.z * 3 };
   const len = Math.hypot(v.x, v.z) || 1, fwd = { x: v.x / len, z: v.z / len }, right = { x: -fwd.z, z: fwd.x };
+  let base = base0;                                               // (v6.6: side by side for a coalition: each faction its own block)
+  if (shift) base = walkableNear(player.dimension, base0.x + right.x * shift, base0.z + right.z * shift, base0.y) ?? { x: base0.x + right.x * shift, y: base0.y, z: base0.z + right.z * shift };
   const perRow = Math.min(6, count), pts = [];
   for (let i = 0; i < count; i++) {
     const row = Math.floor(i / perRow), col = (i % perRow) - (perRow - 1) / 2;
@@ -1763,8 +1862,8 @@ function spawnPoints(player, count) {
   }
   return { base, pts };
 }
-function spawnArmy(player, s, count) {
-  const { base, pts } = spawnPoints(player, count);
+function spawnArmy(player, s, count, shift = 0) {
+  const { base, pts } = spawnPoints(player, count, shift);
   const slot = ANCHORED.includes(s.func) ? makeWaypoint(player.dimension, base) : undefined;
   let n = 0;
   for (const p of pts) {
@@ -1772,7 +1871,7 @@ function spawnArmy(player, s, count) {
       const e = player.dimension.spawnEntity(SOLDIER, p, { spawnEvent: "war:init" });
       const MIXG = ["rifle", "smg", "semi", "mg"], MIXM = ["sword", "crossbow"];
       const w = s.weapon === "mixguns" ? MIXG[n % 4] : s.weapon === "mixmelee" ? MIXM[n % 2] : s.weapon;
-      const fin = setupSoldier(e, { ...s, weapon: w, ranged: w !== "sword", func: "__none", owner: player.id }, player);
+      const fin = setupSoldier(e, { ...s, weapon: w, ranged: isRangedW(w), func: "__none", owner: player.id }, player);
       giveFunction(fin, s.func, player, slot);
       if (s.div === "houndmaster") {
         for (let i = 0; i < 5; i++) {
@@ -1797,8 +1896,11 @@ async function eggUse(player, div) {
   const wl = WL.map((w) => (w[0] === "sword" && div === "cavalier" ? "Spear" : w[1]));
   const wIdx = Math.max(0, WL.findIndex((w) => w[0] === (def.weapon ?? (def.ranged ? "crossbow" : "sword"))));
   const funcs = FUNCS[div];
+  // v6.6: a whole coalition at once (2+ member factions): "How many" of this unit for EACH faction, side by side
+  const coals = getCoals().filter((c) => (c.members ?? []).length >= 2);
+  const facOpts = [...factionList(), ...coals.map((c) => `§l⚑ Coalition: ${c.name}§r (${c.members.length} factions)`)];
   const f = new ModalFormData().title(`Spawn: ${DIV[div].name}`)
-    .dropdown("Faction", factionList(), { defaultValueIndex: Math.max(0, def.faction - 1) })
+    .dropdown("Faction or coalition", facOpts, { defaultValueIndex: Math.min(facOpts.length - 1, def.coal !== undefined && coals[def.coal] ? NF + def.coal : Math.max(0, def.faction - 1)) })
     .dropdown("Squad", squadList(def.faction, "No squad"), { defaultValueIndex: def.squad })
     .dropdown("Function", funcs.map((x) => x[1]), { defaultValueIndex: Math.min(def.func, funcs.length - 1) })
     .dropdown("Weapon", DIV[div].weapon ? wl : [div === "medic" ? "None (heals)" : "Snowballs, then Crossbow"], { defaultValueIndex: DIV[div].weapon ? wIdx : 0 })
@@ -1807,9 +1909,17 @@ async function eggUse(player, div) {
   const r = await show(f, player);
   if (!r || r.canceled || !r.formValues) return;
   const v = r.formValues;
-  const cfg = { faction: Number(v[0]) + 1, squad: Number(v[1]), func: Number(v[2]), weapon: DIV[div].weapon ? WL[Number(v[3])][0] : "sword", count: Number(v[4]), radius: Number(v[5]) };
+  const pick = Number(v[0]), coal = pick >= NF ? coals[pick - NF] : undefined;
+  const cfg = { faction: coal ? (def.faction || 1) : pick + 1, coal: coal ? pick - NF : undefined, squad: Number(v[1]), func: Number(v[2]), weapon: DIV[div].weapon ? WL[Number(v[3])][0] : "sword", count: Number(v[4]), radius: Number(v[5]) };
   setJSON(player, key, cfg);
-  const n = spawnArmy(player, { faction: cfg.faction, squad: cfg.squad, weapon: cfg.weapon, ranged: cfg.weapon !== "sword", div, radius: cfg.radius, func: funcs[cfg.func][0] }, cfg.count);
+  if (coal) {
+    const mem = coal.members, width = Math.min(6, cfg.count) * 1.5 + 3;
+    let total = 0;
+    mem.forEach((fac, k) => { total += spawnArmy(player, { faction: fac, squad: cfg.squad, weapon: cfg.weapon, ranged: isRangedW(cfg.weapon), div, radius: cfg.radius, func: funcs[cfg.func][0] }, cfg.count, (k - (mem.length - 1) / 2) * width); });
+    player.onScreenDisplay.setActionBar(`§aSpawned ${total} ${DIV[div].name}s for §l${coal.name}§r§a: ${cfg.count} each for ${mem.map((m) => factionLabel(m)).join("§a, ")}`);
+    return;
+  }
+  const n = spawnArmy(player, { faction: cfg.faction, squad: cfg.squad, weapon: cfg.weapon, ranged: isRangedW(cfg.weapon), div, radius: cfg.radius, func: funcs[cfg.func][0] }, cfg.count);
   player.onScreenDisplay.setActionBar(`§aSpawned ${n} ${factionLabel(cfg.faction)} §a${DIV[div].name}${n > 1 ? "s" : ""} §7(${funcs[cfg.func][1]}${cfg.squad ? ", " + squadName(cfg.faction, cfg.squad) : ""})`);
 }
 
@@ -2167,21 +2277,27 @@ async function warTable(player, pre) {
   } else if (r.selection === 2) {
     const a = await pickFaction("Diplomacy: pick a faction");
     if (!a) return;
+    // v6.6: one page. Every other faction has its own Neutral / Hostile / Ally choice right there; Save applies all
+    // the changes at once and the same page comes straight back (close it when you're done)
+    const VALS = ["0", "1", "2"], LBL = ["§7Neutral", "§cHostile", "§aAlly"];
     while (true) {
       const others = Array.from({ length: NF }, (_, i) => i + 1).filter((b) => b !== a);
-      const mf = new ActionFormData().title(`Relations: ${factionLabel(a, true)}`).body("Tap a faction to set its relation. Applies to both sides instantly.");
-      for (const b of others) mf.button(`${factionLabel(b)}\n${REL_TXT[relAt(a, b)]}`);
+      const mf = new ModalFormData().title(`Relations: ${factionLabel(a, true)}`)
+        .dropdown("§lSet everyone to", ["§7(keep the choices below)", ...LBL], { defaultValueIndex: 0 });
+      for (const b of others) mf.dropdown(factionLabel(b), LBL, { defaultValueIndex: Math.max(0, VALS.indexOf(relAt(a, b))) });
+      mf.submitButton("Save (stays open)");
       const mr = await show(mf, player);
-      if (!mr || mr.canceled || mr.selection === undefined) return;
-      const b = others[mr.selection];
-      const cur = relAt(a, b);
-      const vals = ["1", "0", "2"];
-      const cf = new ActionFormData().title(`${factionLabel(a, true)} and ${factionLabel(b, true)}`).body(`Currently: ${REL_TXT[cur]}`);
-      for (const val of vals) cf.button(`${REL_TXT[val]}${val === cur ? "  §8(current)" : ""}`);
-      const cr = await show(cf, player);
-      if (!cr || cr.canceled || cr.selection === undefined) continue;
-      setRelPair(a, b, vals[cr.selection]);
-      for (const e of [...allOf(SOLDIER), ...allOf(HOUND)]) { try { applyRelations(e); } catch {} }
+      if (!mr || mr.canceled || !mr.formValues) return;
+      const all = Number(mr.formValues[0]);
+      let changed = 0;
+      others.forEach((b, i) => {
+        const v = all ? VALS[all - 1] : VALS[Number(mr.formValues[i + 1])];
+        if (relAt(a, b) !== v) { setRelPair(a, b, v, false); changed++; }
+      });
+      if (changed) {
+        for (const e of [...allOf(SOLDIER), ...allOf(HOUND)]) { try { applyRelations(e); } catch {} }
+        say(`${factionLabel(a)} §fchanged ${changed} relation${changed === 1 ? "" : "s"}${all ? `: now ${LBL[all - 1]}§f with everyone` : ""}.`);
+      }
     }
   } else if (r.selection === 3) {
     const names = getNames();
@@ -2784,12 +2900,12 @@ function hurt(ent, amount, src) {
 // Weapons differ: rifles/MGs keep accuracy at range; pistols, SMGs and shotguns fall off fast.
 const GUN_SPEC = {
   rifle:   { bullet: "ww:nrifle_projectile",   sight: 200, fire: 200, mag: 1,  gap: 0, reload: 30,  speed: 5.0, spread: 0.007 },
-  semi:    { bullet: "ww:nsemi_projectile",    sight: 200, fire: 200, mag: 3,  gap: 8, reload: 25,  speed: 5.0, spread: 0.009 },
+  semi:    { bullet: "ww:nsemi_projectile",    sight: 200, fire: 200, mag: 8,  gap: 10, reload: 45, speed: 5.0, spread: 0.009 },   // (v6.6: 8 rounds, same damage per second)
   smg:     { bullet: "ww:nsmg_projectile",     sight: 200, fire: 120, mag: 20, gap: 2, reload: 35,  speed: 4.5, spread: 0.018 },
   mg:      { bullet: "ww:nlmg_projectile",     sight: 200, fire: 200, mag: 30, gap: 2, reload: 50, speed: 5.0, spread: 0.010 },
-  shotgun: { bullet: "ww:nshotgun_projectile", sight: 200, fire: 40,  mag: 1,  gap: 0, reload: 15,  speed: 3.5, spread: 0.035 },
+  shotgun: { bullet: "ww:nshotgun_projectile", sight: 200, fire: 40,  mag: 1,  gap: 0, reload: 20,  speed: 3.5, spread: 0.035 },   // (v6.6: a pump takes a second)
   at:      { bullet: "ww:nbazooka_projectile", sight: 200, fire: 120, mag: 1,  gap: 0, reload: 70, speed: 2.3, spread: 0.010 },
-  pistol:  { bullet: "ww:nsemi_projectile",    sight: 200, fire: 200, mag: 2,  gap: 8, reload: 20,  speed: 4.5, spread: 0.015 },
+  pistol:  { bullet: "ww:nsemi_projectile",    sight: 200, fire: 200, mag: 7,  gap: 10, reload: 35, speed: 4.5, spread: 0.015 },   // (v6.6: a 7-round magazine, same damage per second)
   sniper:  { bullet: "ww:nrifle_projectile",   sight: 250, fire: 250, mag: 1,  gap: 0, reload: 45,  speed: 6.0, spread: 0.0025 },
 };
 const gunState = new Map(); // soldier id -> { target, ammo, next, seen, check, step }
@@ -3414,7 +3530,7 @@ const ANCHOR_LEASH = (d, melee) => d.func === "post" ? (melee ? 4 : 2) : d.func 
 // to the order: no more "shoot, march on, see him again, stop again" loops. A new order breaks the lock at once.
 const combatLock = new Map(); // id -> { id, ent, t (start), seenT, at }
 const LOCK_LOST = 120;   // (v6.3: 6 s, was 15: they stood scanning long after the fight was over)
-const gun0 = (d) => GUNS.includes(d.weapon) || d.weapon === "sword" || d.weapon === "crossbow";
+const gun0 = (d) => GUNS.includes(d.weapon) || MELEE_W.includes(d.weapon) || d.weapon === "crossbow";
 function updateLock(e, d, s, now) {
   let L = combatLock.get(e.id);
   const t = s?.threat;
@@ -5442,18 +5558,23 @@ function voiceOf(f) { const v = getJSON(world, "war:vlang", {})[f]; return VOICE
 // the English line (as the code calls it) -> the recorded line. Lines with no recording (Reloading, Grenade, On the gun) are silent
 const CALL_KEY = { "Enemy spotted!": "spotted", "Contact!": "contact", "Flanking!": "flanking", "Charge!": "charge", "Go, go, go!": "gogogo",
   "Moving up!": "moving_up", "Suppressing!": "suppressing", "I'm hit!": "hit", "Man down!": "man_down", "You're okay!": "okay", "Fall back!": "fall_back",
-  "Cover me!": "cover_me", "Target down!": "target_down", "Clear!": "clear", "Hold position!": "hold", "Follow me!": "follow" };
-const CALL_ALL = Object.values(CALL_KEY);
+  "Cover me!": "cover_me", "Target down!": "target_down", "Clear!": "clear", "Hold position!": "hold", "Follow me!": "follow",
+  "Medic!": "medic", "Thanks!": "thanks", "Reloading!": "reloading", "Grenade!": "grenade", "Don't shoot!": "surrender" };
+// lines each language has recordings for (the rest stay silent until recorded and added here)
+const BASE_LINES = ["spotted", "contact", "flanking", "charge", "gogogo", "moving_up", "suppressing", "hit", "man_down", "okay", "fall_back", "cover_me", "target_down", "clear", "hold", "follow"];
+const VOICE_HAS = {};
+const voiceHas = (lang, key) => (VOICE_HAS[lang] ?? BASE_LINES).includes(key);
+const CALL_ALL = BASE_LINES;
 const lastCall = new Map(); // soldier id / squad line -> tick
 let callSec = -1, callsThisSec = 0;
 function callout(e, text) {
   try {
-    if (!e?.isValid || held.has(e.id) || (downed.has(e.id) && text !== "I'm hit!")) return;
+    if (!e?.isValid || held.has(e.id) || (downed.has(e.id) && text !== "I'm hit!" && text !== "Medic!")) return;
     const test = text === "Testing!";
     const key = test ? CALL_ALL[Math.floor(Math.random() * CALL_ALL.length)] : CALL_KEY[text];
     if (!key) return;
     const f = Number(P(e, "war:faction") ?? 0), lang = voiceOf(f);
-    if (!lang || lang === "none") return;
+    if (!lang || lang === "none" || !voiceHas(lang, key)) return;
     const now = tick();
     if (!test) {
       if (now - (lastCall.get(e.id) ?? -9999) < 160) return;                    // one shout per man every ~8 s
@@ -5509,7 +5630,7 @@ async function testBattle(player) {
       if (!g) continue;
       const e = player.dimension.spawnEntity(SOLDIER, g);
       const weapon = MIX[i % MIX.length];
-      setupSoldier(e, { faction: fac, squad: 0, weapon, ranged: weapon !== "sword", div: "foot", radius: 8, func: "__none" }, player);
+      setupSoldier(e, { faction: fac, squad: 0, weapon, ranged: isRangedW(weapon), div: "foot", radius: 8, func: "__none" }, player);
       out.push(e);
     }
     return out;
@@ -5531,6 +5652,7 @@ async function testBattle(player) {
 const downed = new Map(); // id -> until tick
 const isDowned = (e) => downed.has(e.id);
 const downPos = new Map(); // id -> where he fell
+const medicCall = new Map(); // id -> last "Medic!" (v6.6)
 function goDown(e, killer) {
   const now = tick();
   try {                                                          // (v6.5) the man who dropped him calls it
@@ -5570,6 +5692,12 @@ system.runInterval(() => {
       killReal(e);
       system.runTimeout(() => { try { if (e.isValid) e.remove(); } catch {} }, 6);       // if the kill didn't take, he's removed
       continue;
+    }
+    // v6.6: calling for a medic: every ~18 s, only if no medic is already on his way, and only about half the wounded call
+    if (now % 20 === 0 && (e.id.charCodeAt(e.id.length - 1) & 1) && now - Number(medicCall.get(id) ?? -9999) > 360) {
+      medicCall.set(id, now);
+      let coming = false; for (const mt of medicTask.values()) if (mt.target === id) { coming = true; break; }
+      if (!coming) callout(e, "Medic!");
     }
     // pinned where he fell, lying down, at the edge of death: no getting up on his own
     try {
@@ -5630,7 +5758,7 @@ function medicMove(e, d, now) {
   if (best) {
     const dd = dist(best.location, e.location);
     if (dd < 3) {
-      if (isDowned(best)) { if (now % 40 < 10) { revive(best, 8); note(e, "revived a soldier"); callout(e, "You're okay!"); } }
+      if (isDowned(best)) { if (now % 40 < 10) { revive(best, 8); note(e, "revived a soldier"); callout(e, "You're okay!"); const rb = best; system.runTimeout(() => callout(rb, "Thanks!"), 30); } }
       return { g: "g_none", t: "t_off", urgent: false };
     }
     let mt = medicTask.get(e.id);

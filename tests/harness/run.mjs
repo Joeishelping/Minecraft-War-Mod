@@ -16,7 +16,7 @@ const runDir = path.join(here, `run_${process.pid}`);
 fs.mkdirSync(runDir, { recursive: true });
 fs.cpSync(scriptsDir, runDir, { recursive: true });
 // expose the add-on's internals to the scenarios (appended to the copy only)
-const HOOK = ["held", "holding", "stagger", "putDown", "allOf", "edgeFearT", "cleanupMenu", "purgeState", "gliders", "glideBan", "driveOn", "formMode", "tightAt", "combatLock", "routeProgress", "getLearned", "learned", "generals", "planRoute", "BW", "BW_F", "HEAD_K", "medicMove", "shakenMove", "waterExit", "followPersonal", "spreadMove", "combatMove", "engagement", "reinforceMove", "patrolSweep", "marker", "think", "routeOf", "lookahead", "queuedBehind", "climbing", "laneOf", "trackIdx", "giveOrder", "startMarch", "giveFunction", "setupSoldier", "sd", "perc", "squads", "getMarches", "personal", "downed", "goDown", "marker", "gunState", "brain", "notes", "setRelPair", "travel", "isDowned"];
+const HOOK = ["warTable", "eggUse", "getRel", "relAt", "fires", "coalitions", "held", "holding", "stagger", "putDown", "allOf", "edgeFearT", "cleanupMenu", "purgeState", "gliders", "glideBan", "driveOn", "formMode", "tightAt", "combatLock", "routeProgress", "getLearned", "learned", "generals", "planRoute", "BW", "BW_F", "HEAD_K", "medicMove", "shakenMove", "waterExit", "followPersonal", "spreadMove", "combatMove", "engagement", "reinforceMove", "patrolSweep", "marker", "think", "routeOf", "lookahead", "queuedBehind", "climbing", "laneOf", "trackIdx", "giveOrder", "startMarch", "giveFunction", "setupSoldier", "sd", "perc", "squads", "getMarches", "personal", "downed", "goDown", "marker", "gunState", "brain", "notes", "setRelPair", "travel", "isDowned"];
 if (opt.thinkdbg) { const f = path.join(runDir, "main.js"); fs.writeFileSync(f, fs.readFileSync(f, "utf8").replace("    // how far each stationary order may leave its spot to fight", "    if (globalThis.__thinkDbg) globalThis.__thinkDbg(e, engaged, cu, d);\n    // how far each stationary order may leave its spot to fight")); }
 fs.appendFileSync(path.join(runDir, "main.js"), `\nglobalThis.__war = {};\n${HOOK.map((n) => `try { globalThis.__war.${n} = ${n}; } catch {}`).join("\n")}\n`);
 loadDefs(path.join(root, "War Engine BP"));
@@ -680,6 +680,50 @@ const S = {
     }
     offWall = def.filter((e) => e.isValid && (e._loc.y < 5.5 || e._loc.z > 3.9 || e._loc.z < -0.1)).length;
     report({ offWall, defUp: def.filter((e) => e.isValid && !W.isDowned(e)).length, foesUp: foes.filter((e) => e.isValid && !W.isDowned(e)).length, final: def.map((e) => `${e._loc.x.toFixed(1)},${e._loc.y.toFixed(1)},${e._loc.z.toFixed(1)}`), notes: Object.fromEntries(Object.entries(M.notes).sort((a, b) => b[1] - a[1]).slice(0, 10)) });
+  },
+
+  // v6.6: weapons. mode=molotov: 6 molotov soldiers vs 6 swordsmen; mode=spear: 6 spears vs 6 swords (melee duel)
+  async weapons() {
+    SIM.bounds = { x0: -40, x1: 40, z0: -40, z1: 60, y0: -8, y1: 30 };
+    fill(-40, -4, -40, 40, -1, 60, "grass_block");
+    spawnPlayer({ x: 0, y: 0, z: -30 });
+    W.setRelPair(1, 2, "1", false);
+    const mode = opt.mode ?? "molotov";
+    const A = [], B = [];
+    for (let i = 0; i < 6; i++) A.push(soldier(1, { x: -5 + i * 2 + 0.5, y: 0, z: 0.5 }, mode === "molotov" ? "molotov" : "spear", 1, "hold"));
+    for (let i = 0; i < 6; i++) B.push(soldier(2, { x: -5 + i * 2 + 0.5, y: 0, z: (mode === "molotov" ? 16 : 10) + 0.5 }, opt.foe ?? "sword", 1, "hold"));
+    step(40);
+    await W.giveOrder(player, { faction: 2, order: 0, squad: 0, count: 0, radius: 200, stance: "aggressive", ao: 100, free: true, target: 5, cx: 0, cz: 0, cy: 0, then: "hold" });
+    let maxFires = 0, t0 = SIM.tick;
+    for (let t = 0; t < Number(opt.ticks ?? 1600); t += 10) {
+      step(10); maxFires = Math.max(maxFires, W.fires.length);
+      if (!B.some((e) => e.isValid && !W.isDowned(e)) || !A.some((e) => e.isValid && !W.isDowned(e))) break;
+    }
+    const up = (L) => L.filter((e) => e.isValid && !W.isDowned(e)).length;
+    const burnedA = A.filter((e) => SIM.burned?.has(e.id)).length, burnedB = B.filter((e) => SIM.burned?.has(e.id)).length;
+    report({ mode, ticks: SIM.tick - t0, upA: up(A), upB: up(B), maxFires, burnedA, burnedB, moloLeft: A.map((e) => e.dyn.get("war:molo") ?? 3), held: A[0].props.get("war:gun"), weaponA: A[0].dyn.get("war:weapon"), groups: [...A[0].groups].filter((g) => /w_/.test(g)) });
+  },
+  // v6.6: relations. An old world (20 factions, 2 at war, 3 allied) upgraded to 40; diplomacy on one page; a coalition spawn
+  async factions() {
+    MC.world.setDynamicProperty("war:rel", (() => { let r = ""; for (let a = 1; a <= 20; a++) for (let b = 1; b <= 20; b++) r += a === b ? "2" : (a + b === 3 ? "1" : (a + b === 4 && a !== b) ? "2" : "1"); return r; })());
+    spawnPlayer({ x: 0, y: 0, z: 0 });
+    const out = { r12: W.relAt(1, 2), r13: W.relAt(1, 3), r45: W.relAt(4, 5), r1_25: W.relAt(1, 25), r30_31: W.relAt(30, 31), len: W.getRel().length };
+    MC.world.setDynamicProperty("war:coal", JSON.stringify([{ name: "Northern Pact", members: [3, 7, 25] }]));
+    player._mainhand = "war:egg_foot";
+    globalThis.__formAnswers = [{ formValues: [40, 0, 0, 2, 4, 8] }];   // pick the coalition (index NF + 0), rifle, 4 each
+    await W.eggUse(player, "foot");
+    step(5);
+    const byF = {}; for (const e of alive()) byF[e.props.get("war:faction")] = (byF[e.props.get("war:faction")] ?? 0) + 1;
+    out.spawnedByFaction = byF;
+    out.bar = SIM.log.filter((m) => /\[bar\]/.test(m)).slice(-1);
+    // diplomacy, one page: faction 1 -> Red hostile, Blue ally (rest as they are); the page comes back; then "everyone neutral"
+    const vals = (over) => [0, ...Array.from({ length: 39 }, (_, i) => over[i + 2] ?? ["0", "1", "2"].indexOf(W.relAt(1, i + 2)))];
+    globalThis.__formAnswers = [{ selection: 2 }, { selection: 0 }, { formValues: vals({ 2: 1, 3: 2 }) }, { formValues: [1, ...Array(39).fill(0)] }];
+    await W.warTable(player);
+    out.afterFirstSave = { r12: W.relAt(1, 2), r13: W.relAt(1, 3) };
+    out.afterAllNeutral = { r12: W.relAt(1, 2), r13: W.relAt(1, 3), r1_40: W.relAt(1, 40), r2_3: W.relAt(2, 3) };
+    out.msgs = SIM.log.filter((m) => /relation/.test(m)).slice(-3);
+    report(out);
   },
 
   async cleanup() {

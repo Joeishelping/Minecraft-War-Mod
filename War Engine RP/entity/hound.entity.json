@@ -26,7 +26,27 @@
         "h17": "textures/entity/war_hound/hound_17",
         "h18": "textures/entity/war_hound/hound_18",
         "h19": "textures/entity/war_hound/hound_19",
-        "h20": "textures/entity/war_hound/hound_20"
+        "h20": "textures/entity/war_hound/hound_20",
+        "h21": "textures/entity/war_hound/hound_21",
+        "h22": "textures/entity/war_hound/hound_22",
+        "h23": "textures/entity/war_hound/hound_23",
+        "h24": "textures/entity/war_hound/hound_24",
+        "h25": "textures/entity/war_hound/hound_25",
+        "h26": "textures/entity/war_hound/hound_26",
+        "h27": "textures/entity/war_hound/hound_27",
+        "h28": "textures/entity/war_hound/hound_28",
+        "h29": "textures/entity/war_hound/hound_29",
+        "h30": "textures/entity/war_hound/hound_30",
+        "h31": "textures/entity/war_hound/hound_31",
+        "h32": "textures/entity/war_hound/hound_32",
+        "h33": "textures/entity/war_hound/hound_33",
+        "h34": "textures/entity/war_hound/hound_34",
+        "h35": "textures/entity/war_hound/hound_35",
+        "h36": "textures/entity/war_hound/hound_36",
+        "h37": "textures/entity/war_hound/hound_37",
+        "h38": "textures/entity/war_hound/hound_38",
+        "h39": "textures/entity/war_hound/hound_39",
+        "h40": "textures/entity/war_hound/hound_40"
       },
       "geometry": {
         "default": "geometry.war_hound"
