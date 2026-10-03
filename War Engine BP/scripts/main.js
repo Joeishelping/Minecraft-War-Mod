@@ -3735,8 +3735,10 @@ function startMarch(player, pool, dest, then) {
 function requestPlan(id, m, from, wide = false) {
   const dim = world.getDimension(m.dim);
   m.planning = true;
-  const far = Math.hypot(m.dest.x - from.x, m.dest.z - from.z) > 280;
-  if ((!m.legs || !m.legs.length) && far) {
+  const far = Math.hypot(m.dest.x - from.x, m.dest.z - from.z) > 160;   // (v6.2: was 280: a 200-block fine search hit its size cap and stopped short, in a trench)
+  // (v6.2: also when only the final leg is left of an earlier coarse plan, e.g. one cut short by unloaded land: a fine
+  // search all the way to a far destination took a minute of planning while the squad stood at the end of its route)
+  if ((!m.legs || m.legs.length <= 1) && far) {
     planRoute(dim, from, { x: m.dest.x, z: m.dest.z }, (pts) => {
       const mm = getMarches()[id];
       if (!mm) return;
@@ -3768,6 +3770,12 @@ function planLeg(id, m, from, wide) {
     // way long orders are planned, on the coarse map that looks ~400 blocks around, in short legs
     if ((!pts || (partial && !frontier)) && lastLeg && !mm.legs?.length && !mm.coarse) { mm.coarse = true; requestPlan(id, mm, from, wide); return; }
     mm.frontier = !!(partial && frontier);                      // stopped at unloaded land: just the next stretch, not a dead end
+    if (pts && partial) {                                       // v6.2: a route cut short never ends down in a pit (a trench with no way out)
+      const top = Math.max(...pts.slice(-8).map((q) => q.y));
+      let n = pts.length;
+      while (n > 2 && pts[n - 1].y <= top - 2 && !pts[n - 1].climb) n--;
+      if (n < pts.length) pts = pts.slice(0, n);
+    }
     if (pts) { mm.path = pts; mm.idx = 0; mm.bestIdx = 0; }
     else if (!lastLeg) {                                        // this leg point can't be reached: it was a bad corridor
       markDeadEnd(mm, target);
@@ -4055,7 +4063,7 @@ system.runInterval(() => {
 // ================================================================ Decision readout (hidden testing setting)
 // Soldiers always think; this only makes the latest decision visible above their heads.
 const notes = new Map(); // soldier id -> { text, t }
-function note(e, text) { notes.set(e.id, { text, t: tick() }); }
+function note(e, text) { if (typeof text === "string") notes.set(e.id, { text, t: tick() }); }
 system.runInterval(() => {
   const on = !!setting("readout", false);
   const now = tick();
@@ -6132,6 +6140,24 @@ function rescueTo(e, why, now) {
   afterRescue(e, now, why);
   return true;
 }
+// v6.2: nobody to rescue him to (his whole squad is down in the pit with him): up onto a free spot on his own route ahead
+function pitOut(e, m, now) {
+  if (!m?.path) return false;
+  const l = e.location, pts = m.path, pi = routeProgress(m, l, e.id);
+  const free = (q) => !nearSnap(e.dimension.id, q, 1.5).some((c) => c.id !== e.id && c.type === SOLDIER && Math.abs(c.y - q.y) < 1.5) && !claimedByOther(q, e.id, now) && !dangerNear(e.dimension, q);
+  for (let k = Math.max(0, pi - 6); k < Math.min(pts.length, pi + 16); k++) {
+    const p = pts[k];
+    if (p.y < l.y + 1.5 || p.climb || p.w || flat(p, l) > 12) continue;
+    for (const [ox, oz] of [[0, 0], [1, 0], [-1, 0], [0, 1], [0, -1]]) {
+      const q = { x: Math.floor(p.x + ox) + 0.5, y: Math.floor(p.y + 0.01), z: Math.floor(p.z + oz) + 0.5 };
+      if (!standAt(e.dimension, Math.floor(q.x), q.y, Math.floor(q.z), now) || !glideFree(e.dimension, q.x, q.y, q.z) || !free(q)) continue;
+      try { e.teleport(q); claimSpot(e, q, now); } catch { return false; }
+      afterRescue(e, now, "helped out of a pit");
+      return true;
+    }
+  }
+  return false;
+}
 function afterRescue(e, now, why) {
   rescueT.set(e.id, now); rescueMark.set(e.id, { ...e.location, t: now }); insideN.delete(e.id);
   personal.delete(e.id); travelTo.delete(e.id); gliders.delete(e.id); climbing.delete(e.id); ladderFail.delete(e.id); driveOn.delete(e.id);
@@ -6171,6 +6197,9 @@ system.runInterval(() => {
         else if (pz.n >= 4 && !busy && now - (rescueT.get(e.id) ?? -99999) >= 1200 && rescuesNow < 2) { if (rescueTo(e, "caught up with his squad", now)) { rescuesNow++; pressing.delete(e.id); continue; } }
       }
       if (now - (rescueT.get(e.id) ?? -99999) < 1200) continue;     // one rescue a minute at most
+      // 0. (v6.2) down in a pit below his route with no way up found (a trench with no steps): out, even if his whole squad
+      // is down there with him (a crowd normally means "held up", not stuck)
+      { const br = belowRoute.get(e.id); if (br && br.n >= 3 && now - br.t < 300 && !busy && rescuesNow < 2) { belowRoute.delete(e.id); if (rescueTo(e, "helped out of a pit", now) || pitOut(e, m0, now)) { rescuesNow++; continue; } } }
       // 1. inside a block
       if (!climbing.has(e.id) && insideBlock(e)) {
         const n = (insideN.get(e.id) ?? 0) + 1; insideN.set(e.id, n);
@@ -6207,7 +6236,7 @@ system.runInterval(() => {
       if (rescueTo(e, "caught up with his squad", now)) rescuesNow++;
     } catch {}
   }
-  if (now % 1200 < 20) for (const id of [...rescueMark.keys()]) if (!world.getEntity(id)) { rescueMark.delete(id); rescueT.delete(id); insideN.delete(id); ladderFail.delete(id); combatLock.delete(id); remoteMemo.delete(id); remoteSettled.delete(id); pressing.delete(id); failSpots.delete(id); }
+  if (now % 1200 < 20) for (const id of [...rescueMark.keys()]) if (!world.getEntity(id)) { rescueMark.delete(id); rescueT.delete(id); insideN.delete(id); ladderFail.delete(id); combatLock.delete(id); remoteMemo.delete(id); remoteSettled.delete(id); pressing.delete(id); failSpots.delete(id); belowRoute.delete(id); }
 }, 20);
 
 // ---- one way to travel anywhere: a direct step only when it's close and plainly reachable on foot;
@@ -6218,6 +6247,7 @@ const travelTo = new Map(); // id -> destination of his current personal route
 // A spot beside lava / a drop is moved to the nearest safe cell (or the move is dropped); Minecraft's own walking is only
 // used for a plain, safe straight walk off any bridge or ledge; everything else is a route the script carries him along
 // (short ones are instant). Fixing a movement bug here fixes it for every system at once.
+const belowRoute = new Map(); // id -> { n, t }: times he was found below his route with no way up onto it (v6.2)
 const failSpots = new Map(); // id -> [{ x, z, t }] spots he pressed toward and never reached (v6.2)
 const failedNear = (e, q, now) => (failSpots.get(e.id) ?? []).some((f) => now - f.t < 300 && Math.hypot(f.x - q.x, f.z - q.z) < 2);
 function safeSpot(e, spot, now) {
@@ -6425,11 +6455,12 @@ const stepping = new Set(); // soldiers following a route of their own right now
 // out of range nobody walks to a formation spot, so at the end of the known route each man steps onto his own free
 // cell (at most 3 blocks, safe ground, 1.5 from everyone) instead of all standing on the last route point
 const remoteSettled = new Map(); // id -> cell he settled on
-function remoteSpread(e, now) {
+function remoteSpread(e, now, endK) {
   const l = e.location, dim = e.dimension;
+  const at = (q) => `${Math.floor(q.x)},${Math.floor(q.z)}|${endK}`;   // his cell, for this route end (a longer route moves him on)
   const crowded = (q) => nearSnap(dim.id, q, 1.4).some((c) => c.id !== e.id && c.type === SOLDIER && !c.down && Math.abs(c.y - q.y) < 1.5) || claimedByOther(q, e.id, now);
-  if (remoteSettled.get(e.id) === Math.floor(l.x) * 100000 + Math.floor(l.z)) return;   // he's settled here: later arrivals move, not him
-  remoteSettled.set(e.id, Math.floor(l.x) * 100000 + Math.floor(l.z));
+  if (remoteSettled.get(e.id) === at(l)) return;   // he's settled here: later arrivals move, not him
+  remoteSettled.set(e.id, at(l));
   if (!crowded(l)) return;
   const bx = Math.floor(l.x), by = Math.floor(l.y + 0.01), bz = Math.floor(l.z);
   for (let r = 1; r <= 3; r++) for (let dx = -r; dx <= r; dx++) for (let dz = -r; dz <= r; dz++) {
@@ -6437,7 +6468,7 @@ function remoteSpread(e, now) {
     for (const dy of [0, 1, -1]) {
       const q = { x: bx + dx + 0.5, y: by + dy, z: bz + dz + 0.5 };
       if (!standAt(dim, bx + dx, by + dy, bz + dz, now) || dangerNear(dim, q) || crowded(q) || !localReach(dim, l, q, 60)) continue;
-      try { e.teleport(q); claimSpot(e, q, now); remoteSettled.set(e.id, Math.floor(q.x) * 100000 + Math.floor(q.z)); } catch {}
+      try { e.teleport(q); claimSpot(e, q, now); remoteSettled.set(e.id, at(q)); } catch {}
       return;
     }
   }
@@ -6511,14 +6542,16 @@ system.runInterval(() => {
       if (!pts.guess) for (let k = Math.min(pts.length - 1, driveAhead(pts, i, 7)); k > i; k--) if (straightReach(e.dimension, e.location, pts[k])) { ahead = k; break; }
       if (pr) trackRemote(e, now, wantsWalk(e, Number(gdp(e, "war:goal") ?? 0)));
       const remote = isRemote(e);
-      if (remote && !gliders.has(e.id) && (i >= pts.length - 2 || (remoteSettled.has(e.id) && flat(e.location, pts[pts.length - 1]) < 5))) { remoteSpread(e, now); continue; }   // the end of the known route: his own spot (and he stays on it)
+      // (v6.2: also mid-glide: queued for the last point, he'd wait his turn there forever behind whoever stands on it)
+      const endK = `${Math.floor(pts[pts.length - 1].x)},${Math.floor(pts[pts.length - 1].z)}`;
+      if (remote && (i >= pts.length - 2 || remoteSettled.get(e.id)?.endsWith(`|${endK}`))) { gliders.delete(e.id); remoteSpread(e, now, endK); continue; }   // the end of the known route: his own spot (and he stays on it)
       const tight = !pts.guess && (glideBan.get(e.id) ?? 0) <= now && (remote || ahead < 0 || tightAt(e.dimension, pts, i, e.location));
       if (tight) {
         const g = gliders.get(e.id);
         const queued = queuedBehind(e, pts, i);
         const wait = queued ? (g?.wait ?? 0) + 4 : 0;
         const k = g && g.pts === pts ? g.k : glideStart(pts, i, e.location);
-        gliders.set(e.id, { pts, k, t: now, paused: queued && wait < 50 && floorUnder(e.dimension, e.location.x, e.location.y, e.location.z), wait });   // (never paused over a gap)   // never waits more than 2.5 s for anyone (no deadlocks)
+        gliders.set(e.id, { pts, k, t: now, paused: queued && wait < 50 && floorUnder(e.dimension, e.location.x, e.location.y, e.location.z), wait, blocked: g && g.pts === pts ? g.blocked : 0 });   // (v6.2: blocked kept: it was reset every refresh, so a man below his route was never let go)   // (never paused over a gap)   // never waits more than 2.5 s for anyone (no deadlocks)
         myMarker(e, e.location);
         note(e, queued && wait < 50 ? "waiting his turn" : remote ? "marching (out of range)" : "on the way through");
         continue;
@@ -6972,7 +7005,16 @@ system.runInterval(() => {
       const seg = Math.hypot(b.x - a.x, b.z - a.z) || 1;
       const f = 1 - Math.hypot(b.x - nx, b.z - nz) / seg;
       let y = b.climb ? p.y : b.y > a.y ? (f >= 0.3 ? b.y : a.y) : b.y < a.y ? (f >= 0.6 ? b.y : a.y) : b.y;   // (to a ladder: on his own level)
-      if (y > p.y + 1.1) { g.blocked = (g.blocked ?? 0) + 1; if (g.blocked > 10) { gliders.delete(id); glideBan.set(id, now + 60); personal.delete(id); travelTo.delete(id); } continue; }   // v6.0: he's below his route (fell off it): never lifted up to it
+      if (y > p.y + 1.1) {                                         // v6.0: he's below his route (fell off it): never lifted up to it
+        g.blocked = (g.blocked ?? 0) + 1;
+        if (g.blocked > 10) {                                      // v6.2: a short route of his own back up onto it (out of a trench, off a ledge below)
+          gliders.delete(id); personal.delete(id); travelTo.delete(id);
+          const bt = belowRoute.get(id); belowRoute.set(id, { n: bt && now - bt.t < 300 ? bt.n + 1 : 1, t: now });   // (again and again: no way up: the rescue lifts him out)
+          const tgt = pts[Math.min(pts.length - 1, g.k + 3)];
+          if (tgt) planPersonalTo(e, "settle", { x: tgt.x, y: tgt.y, z: tgt.z }, now); else glideBan.set(id, now + 60);
+        }
+        continue;
+      }
       if (!glideFree(e.dimension, nx, y, nz)) {                    // v6.0: up a full step as he reaches it, down only once he's over the drop
         for (const yy of [b.y, a.y, p.y]) if (yy !== y && yy <= p.y + 1.1 && glideFree(e.dimension, nx, yy, nz)) { y = yy; break; }   // (never lifted more than a step)
       }
