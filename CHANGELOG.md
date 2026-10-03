@@ -1,5 +1,22 @@
 # War Engine changelog
 
+## v6.3.1 (two squads in one spot, the long scan after a fight)
+
+- **Two squads jammed in one spot.** A soldier a little past a route point could get his carried walk (the glider)
+  started on the point *behind* him: carried half a block back, his own walking took him forward again, and round
+  it went. In a gap or doorway with another squad, that turned into a pile shuffling on one spot. Now he starts on
+  the point ahead. Also, a soldier of another squad coming the other way no longer counts as "someone to wait
+  behind" (both sides used to wait for each other).
+  - Test: two squads of 8 meeting head-on in a 3-wide gap in a wall. Before: they stood stuck up to 21 s, lots of
+    shuffling, a pile of 10, through in ~1,200 ticks. Now: the longest stop is 1 s, through in ~930 ticks.
+  - The same fix helps stairs and doorways: castle stairs ~7% faster with less bunching.
+- **Shorter scan after a fight.**
+  - Killed the man they were after: no searching at all. A killed player (who stays a valid entity) now counts as
+    gone too.
+  - Lost sight of him: a ~5 s search (was 10), 2 s on the march or on a post (was 3).
+  - Hunting someone out of sight: given up after 6 s (was 15), and after 2.5 s at the spot he was last seen.
+  - Test: after the last enemy goes down, the squad is moving on in 2-3 s.
+
 ## v6.3 (knocked into lava, wary of edges, the TP wand)
 
 - **They can be knocked off now.** v6.2's edge safety cancelled every push near a drop or lava, so hitting someone
