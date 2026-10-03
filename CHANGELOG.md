@@ -1,5 +1,32 @@
 # War Engine changelog
 
+## v5.9 (squads that stay together, no clipping through walls, 200 v 200 without the lag)
+
+- **Squads no longer fall apart.** On a march, up to four soldiers used to share one formation marker and jostle each
+  other for it (one soldier alone worked well; a squad didn't). Now every soldier has his own place in the formation
+  (line, wedge, skirmish line, extra rows behind for bigger squads, single file along the route on narrow ground and
+  indoors), from the first second of the order. The switch between "walk in formation" and "follow the route
+  myself" (stairs, doors, ladders, stragglers) has a hold time, so soldiers no longer flip back and forth between
+  the two. Formation places are placed with Minecraft's 3-block "close enough" in mind, so nobody stalls short of his
+  place. Test results (bunching = pairs of soldiers standing on top of each other, lower is better): long march
+  3.05 -> 1.8, hill march 2.68 -> 0.84, open-field battle 1.23 -> 0.52. Arrival times about the same (up the house
+  stairs a little slower in the tests, ~450 vs ~420 ticks).
+- **No more clipping through walls.** The script that carries soldiers through tight spots (stairs, doors, indoors)
+  now checks every step is open at feet and head: it slides along a wall if it can, and if it's really blocked it
+  lets go and the soldier works out a new way from where he stands. The ladder climber never moves anyone into a
+  ceiling or a shut trapdoor (it opens the trapdoor), and stepping off a ladder is only a short step into open space.
+  When no route could be found yet, the straight-line guess is never used to carry anyone. The tests now count
+  soldiers inside solid blocks: v5.8 had some in the indoor fight and the building assault; v5.9 has none in any test.
+- **Lag (many soldiers, and soldiers far apart).** Sandbags are remembered where they are placed/broken instead of
+  scanning thousands of blocks around every soldier (that scan was the lag when soldiers were spread out: 245 -> 35
+  block reads per tick with 30 soldiers far apart). Thinking and looking around run as a rotation with a fixed budget
+  per tick, so the work per tick doesn't grow in a big battle; soldiers far from every player with nothing going on
+  think less often. Perception checks only the nearest few enemies, "can I walk there" answers open ground with a
+  straight-line check, and more checks use the shared snapshot of who is where. Script time per tick in the test
+  battles (same machine): 40 v 40 2.7 -> 1.4 ms, 100 v 100 5.7 -> 2.7 ms, 200 v 200 11.7 -> 4.9 ms.
+- Fixed: soldiers could stop on the last stair below a floor and count themselves "there"; a marker made earlier in
+  the same tick could be invisible for half a second (the cause of some confusion when orders were given).
+
 ## v5.8 (ladders for every order, no teleports, reflexes, battle learning)
 
 - **Ladders for every order / no more teleporting.** Short "Hold here" / "Patrol here" orders (and Follow) sent soldiers

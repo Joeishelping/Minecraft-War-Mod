@@ -31,8 +31,11 @@ Melee soldiers and crossbows still use vanilla targeting.
 ### Routes
 `planRoute` is the A* planner (the GPS) over real terrain in 3D: floors, stairs, ladders, doors (iron ones only from
 the plate side), avoiding caves, deadly drops and lava; it shares a terrain memory and is time-sliced (no lag spikes).
-Armies march on **marches** (`startMarch`): one planned path, a guide that runs ~6 blocks ahead of the front, formation
-lanes on open ground, single file (each man on his own marker, `war:catchup`) in tight stretches. A soldier's own
+Armies march on **marches** (`startMarch`): one planned path, a guide that runs ~6 blocks ahead of the front. v5.9: each
+member walks to his own formation marker (`placeFormation`, key `war:fmk`, set as `war:catchup`); in tight stretches
+or far behind he follows the route himself on his own marker (`war:mymk`, driven by the route driver / glider), with a
+hold time before switching back (`driveOn`). The lanes (`m.lanes`) are only the march's shared goal tags and the
+arrival spots. A soldier's own
 errands are **personal routes** (`planPersonalTo` / `travel`), followed by `followPersonal` and the route driver.
 
 ## The decision chain (`think`, every second per soldier, staggered)
@@ -79,6 +82,10 @@ x1.4; returning fire x1.15); `shotAt`: the shot he'd really take now. Suppressio
 - Expensive choices go through a per-tick budget (`spendDecision`, `tacBudget`, `PLAN_BUDGET`).
 - Use `allOf(type)` (once per tick) and `nearbyCombatants` (shared scan), not `getEntities` in loops.
 - `headLoc(e)` instead of `e.getHeadLocation()` for soldiers.
+- Factions of nearby entities from the shared snapshot (`nearSnap`: `c.f`, `c.down`), not `P(o, "war:faction")` in a loop.
+- Thinking (`think`) and perception (`perceive`) are rotations with a fixed budget per tick (`THINK_MAX`, `PERC_MAX`);
+  `isHot` decides who may be looked at less often. Don't add per-soldier loops that run every tick for everyone.
+- Anything that teleports a soldier checks the target cell first (`glideFree`): never into a block.
 
 ## Adding things
 

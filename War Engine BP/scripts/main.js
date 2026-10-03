@@ -1,4 +1,4 @@
-// War Engine v5.8: faction NPC war framework
+// War Engine v5.9: faction NPC war framework
 import { world, system, Player, ItemStack, EquipmentSlot, GameMode } from "@minecraft/server";
 import { ActionFormData, ModalFormData, FormCancelationReason } from "@minecraft/server-ui";
 import { SKINS } from "./skins.js";
@@ -138,7 +138,7 @@ const DPC = new Map(); // entity id ("@world" for the world) -> Map(key -> value
 const dpMap = (h) => { const id = h === world ? "@world" : h.id; let m = DPC.get(id); if (!m) { m = new Map(); DPC.set(id, m); } return m; };
 // v5.6: bookkeeping that only matters while the world runs (stuck checks, pace rolls, heal timers) never touches the
 // game's storage at all
-const TRANSIENT = new Set(["war:lp", "war:lpt", "war:pace", "war:pacet", "war:selfheal", "war:stuck", "war:calm", "war:readout", "war:healt", "war:covert"]);
+const TRANSIENT = new Set(["p_war:firing", "p_war:aiming", "p_war:pose", "war:lp", "war:lpt", "war:pace", "war:pacet", "war:selfheal", "war:stuck", "war:calm", "war:readout", "war:healt", "war:covert"]);
 function gdp(h, k) {
   const m = dpMap(h);
   if (m.has(k)) return m.get(k);
@@ -204,12 +204,13 @@ function P(e, key) {
   return r;
 }
 function setP(e, key, val) {
+  if (gdp(e, `p_${key}`) === val) return;                       // v5.9: nothing changes: nothing to send
   sdDrop(e);
   propMemo.delete(`${e.id}|${key}`);
   sdp(e, `p_${key}`, val);
   try { e.setProperty(key, val); } catch {}
   const ent = e;
-  system.runTimeout(() => { if (ent.isValid) syncProps(ent); }, 2);
+  system.runTimeout(() => { try { if (ent.isValid && gdp(ent, `p_${key}`) === val && ent.getProperty(key) !== val) ent.setProperty(key, val); } catch {} }, 2);   // (re-applied if the game dropped it: just this one)
 }
 function syncProps(e) {
   if (e.typeId === SOLDIER) syncSkin(e);
@@ -347,16 +348,21 @@ function weaponItem(e) {
 // ================================================================ waypoints & flags
 const slotOf = (m) => Number(gdp(m, "war:slot") ?? 0);
 const markers = () => [...allOf(WAYPOINT), ...allOf(FLAG)];
+let markerIndexT = -1;
 function marker(slot) {
   if (!slot) return undefined;
-  if (!markerCache.has(slot)) markerCache.set(slot, markers().find((m) => slotOf(m) === slot));
+  if (markerIndexT !== tick() && !markerCache.has(slot)) {                 // v5.9: one pass builds the whole index (no scan per lookup)
+    markerIndexT = tick();
+    for (const m of markers()) { try { const sl = slotOf(m); if (sl && !markerCache.has(sl)) markerCache.set(sl, m); } catch {} }
+  }
+  if (!markerCache.has(slot)) markerCache.set(slot, markers().find((m) => slotOf(m) === slot));   // (made since the index: look once)
   const m = markerCache.get(slot);
   return m && m.isValid ? m : undefined;
 }
 function claimSlot(m) {
   const taken = new Set(markers().map(slotOf));
   for (const v of threatSlot.values()) taken.add(v);
-  const assign = (i) => { sdp(m, "war:slot", i); tagMarker(m, i); sdp(m, "war:born", Date.now()); markerCache.delete(i); return i; };
+  const assign = (i) => { sdp(m, "war:slot", i); tagMarker(m, i); sdp(m, "war:born", Date.now()); markerCache.set(i, m); return i; };
   for (let i = 1; i <= NSLOT; i++) if (!taken.has(i)) return assign(i);
   // all slots taken: recycle the oldest marker nobody uses any more
   const used = usedSlots();
@@ -388,7 +394,7 @@ function setGoal(e, slot) {
   sdp(e, "war:goal", slot);
   try { noteRefs(e); } catch {}
 }
-const SLOT_KEYS = ["war:goal", "war:home", "war:mwp", "war:chargegoal", "war:ordergoal", "war:catchup", "war:mymk"];
+const SLOT_KEYS = ["war:goal", "war:home", "war:mwp", "war:chargegoal", "war:ordergoal", "war:catchup", "war:mymk", "war:fmk"];
 let slotRefs = null; // soldier id -> [slots] (last known, kept while he's out of range)
 function getRefs() { if (!slotRefs) slotRefs = getJSON(world, "war:slotrefs", {}); return slotRefs; }
 function noteRefs(e) {
@@ -609,11 +615,10 @@ function think(e) {
 
   // ---- morale
   let foes = 0, friends = 0;
-  for (const o of nearbyCombatants(e.dimension.id, e.location, 12)) {
-    if (o.id === e.id || (o.typeId !== SOLDIER && o.typeId !== "minecraft:player" && o.typeId !== HOUND)) continue;
-    const of = factionOf(o);
-    if (isHostile(d.faction, of)) foes++;
-    else if (isFriendly(d.faction, of)) friends++;
+  for (const c of nearSnap(e.dimension.id, e.location, 12)) {               // (v5.9: factions from the shared snapshot)
+    if (c.id === e.id || c.down || (c.type !== SOLDIER && c.type !== "minecraft:player" && c.type !== HOUND)) continue;
+    if (isHostile(d.faction, c.f)) foes++;
+    else if (isFriendly(d.faction, c.f)) friends++;
   }
   let retreat = d.retreat;
   const canRetreat = !riding && (d.div !== "garrison" || d.func === "patrol");
@@ -671,7 +676,7 @@ function think(e) {
     const fresh = now - Number(gdp(e, "war:ordt") ?? -99999) < 100 && (["charge", "follow", "patrol"].includes(d.func) || (anchor && dist(anchor.location, e.location) > 6));
     const fight = !fresh && !wet;
     const engaged = medicMove(e, d, now) ?? shakenMove(e, d, now) ?? waterExit(e, d, now) ?? (fresh || wet ? undefined : reflexMove(e, d, now, anchor, bLeash)) ?? extDecide("first", e, d, now) ?? (personal.has(e.id) ? followPersonal(e, now) : undefined) ?? spreadMove(e, now) ?? (fight ? combatMove(e, d, now, melee, anchor, bLeash) : undefined) ?? (fight ? engagement(e, d, now, d.goal, melee) : undefined) ?? (fresh ? undefined : reinforceMove(e, d, now)) ??
-      (cu !== undefined && marker(Number(cu)) ? (note(e, "catching up"), { g: "g_wp", slot: Number(cu), t: "t_mid", urgent: true }) : undefined) ??
+      (cu !== undefined && marker(Number(cu)) ? (note(e, formMode.has(e.id) ? "marching" : "catching up"), { g: "g_wp", slot: Number(cu), t: "t_mid", urgent: true }) : undefined) ??
       patrolSweep(e, d, now) ?? followLeader(e, d, now) ?? extDecide("last", e, d, now);
     // how far each stationary order may leave its spot to fight: post barely, hold to meet a charge, sentry its whole radius
     const leash = d.func === "post" ? (melee ? 4 : 2) : d.func === "sentry" ? d.radius + 4 : d.func === "hold" ? (freeOf(e) ? aoOf(e) : 18) : (freeOf(e) && d.func === "stand" ? 12 : 4);
@@ -730,8 +735,8 @@ function think(e) {
 }
 
 function closeEnemy(e, d, r) {
-  for (const o of nearbyCombatants(e.dimension.id, e.location, r)) {
-    if (o.id !== e.id && (o.typeId === SOLDIER || o.typeId === HOUND || o.typeId === "minecraft:player") && isHostile(d.faction, factionOf(o))) return o;
+  for (const c of nearSnap(e.dimension.id, e.location, r)) {           // (v5.9: factions from the shared snapshot)
+    if (c.id !== e.id && c.f && (c.type === SOLDIER || c.type === HOUND || c.type === "minecraft:player") && isHostile(d.faction, c.f) && c.e.isValid) return c.e;
   }
   return undefined;
 }
@@ -924,23 +929,58 @@ world.afterEvents.entitySpawn.subscribe((ev) => {
 // ================================================================ main loops
 let phase = 0;
 const propSync = new Map(); // id -> tick his entity properties were last re-applied
+// v5.9: thinking is a rotation with a fixed budget per tick: up to ~480 soldiers each think every second; beyond that each
+// thinks a little less often, but the work per tick never grows (no lag spikes in 200 v 200). Soldiers in the
+// background (far from every player, not fighting, not moving, not just ordered) think every third turn.
+const THINK_MAX = 24;
+let thinkCursor = 0, thinkAcc = 0;
+const thinkPass = new Map(), g2Done = new Set();
 system.runInterval(() => {
-  markerCache = new Map();
-  phase ^= 1;
-  const v = relVersion();
-  const soldiers = allOf(SOLDIER);
-  for (const e of soldiers) {
+  if (tick() % 10 === 0) markerCache = new Map();
+  const list = allOf(SOLDIER), n = list.length;
+  if (!n) return;
+  const v = relVersion(), now = tick();
+  thinkAcc = Math.min(THINK_MAX, thinkAcc + n / 20);                  // (each soldier once per 20 ticks, not more often: re-deciding too often made squads flip-flop)
+  const per = Math.min(n, Math.floor(thinkAcc));
+  thinkAcc -= per;
+  for (let k = 0; k < per; k++) {
+    const e = list[(thinkCursor + k) % n];
     try {
+      if (!e.isValid) continue;
       if (gdp(e, "war:div") === undefined) { setupSoldier(e, { faction: 0, div: "foot", func: "hold" }, undefined); continue; }
-      if (tick() - (propSync.get(e.id) ?? -9999) > 200) { propSync.set(e.id, tick()); syncProps(e); }
+      if (now - (propSync.get(e.id) ?? -9999) > 200) { propSync.set(e.id, now); syncProps(e); }
       // old one-number goal tags (v4.2.1 and earlier): re-tag with the two-part scheme
-      if (!e.hasTag("war_g2")) { setGoal(e, Number(gdp(e, "war:goal") ?? 0)); e.addTag("war_g2"); }
+      if (!g2Done.has(e.id)) { g2Done.add(e.id); if (!e.hasTag("war_g2")) { setGoal(e, Number(gdp(e, "war:goal") ?? 0)); e.addTag("war_g2"); } }
       // soldiers armed before guns were drawn on the model: re-arm once
       if (gdp(e, "p_war:gun") === undefined && GUNS.includes(String(gdp(e, "war:weapon") ?? ""))) equip(e, weaponItem(e));
       if (gdp(e, "war:relv") !== v) applyRelations(e);
-      if ((e.id.charCodeAt(e.id.length - 1) & 1) === phase) think(e);
+      const pass = (thinkPass.get(e.id) ?? 0) + 1; thinkPass.set(e.id, pass);
+      if (!isHot(e, now) && pass % 3) continue;
+      think(e);
     } catch {}
   }
+  thinkCursor = (thinkCursor + per) % n;
+  if (now % 1200 === 0) { for (const id of [...thinkPass.keys()]) if (!world.getEntity(id)) { thinkPass.delete(id); g2Done.delete(id); hotMemo.delete(id); } }
+}, 1);
+// "hot": fighting, moving, near a player, just ordered or hurt; worked out at most every second per soldier
+const hotMemo = new Map();
+function isHot(e, now) {
+  const c = hotMemo.get(e.id);
+  if (c && now - c.t < 20) return c.v;
+  let v = false;
+  try {
+    const d = sd(e);
+    v = !!perc.get(e.id)?.threat || personal.has(e.id) || gliders.has(e.id) || climbing.has(e.id) || ["charge", "follow", "escort", "patrol"].includes(d.func) || d.retreat ||
+      now - Number(gdp(e, "war:ordt") ?? -99999) < 200 || now - Number(gdp(e, "war:hurt") ?? -99999) < 200 || !!squads.get(squadKey(e, d))?.known?.size;
+    if (!v) { const mid = laneOf.get(Number(gdp(e, "war:ordergoal") ?? gdp(e, "war:goal") ?? 0)); const m = mid ? getMarches()[mid] : undefined; if (m && !m.final) v = true; }   // marching
+    if (!v) { for (const c of nearSnap(e.dimension.id, e.location, 80)) if (!c.down && c.f && isHostile(d.faction, c.f)) { v = true; break; } }   // an enemy anywhere near
+    if (!v) { const l = e.location; for (const p of world.getAllPlayers()) { const pl = p.location; if (Math.abs(pl.x - l.x) < 96 && Math.abs(pl.z - l.z) < 96) { v = true; break; } } }
+  } catch { v = true; }
+  hotMemo.set(e.id, { t: now, v });
+  return v;
+}
+system.runInterval(() => {
+  const v = relVersion();
   for (const h of allOf(HOUND)) {
     try {
       syncProps(h);
@@ -957,7 +997,7 @@ system.runInterval(() => {
       if (gdp(h, "war:relv") !== v) applyRelations(h);
     } catch {}
   }
-  if (tick() % 200 < 10) { try { gcWaypoints(soldiers); } catch {} }
+  if (tick() % 200 < 10) { try { gcWaypoints(allOf(SOLDIER)); } catch {} }
 }, 10);
 
 const CIVILIANS = ["minecraft:villager_v2", "minecraft:villager", "minecraft:wandering_trader"];
@@ -1012,12 +1052,9 @@ world.afterEvents.entityHurt.subscribe((ev) => {
   const now = tick();
   if (v.typeId === SOLDIER) sdp(v, "war:hurt", now);
   const sq = v.typeId === SOLDIER ? sd(v).squad : 0;
-  for (const o of nearbyCombatants(v.dimension.id, v.location, 64)) {
-    if (o.typeId !== SOLDIER) continue;
-    const of = Number(P(o, "war:faction"));
-    if (!isFriendly(of, f)) continue;
-    const near = dist(o.location, v.location) <= 16;
-    if (near || (sq && of === f && sd(o).squad === sq)) alertUntil.set(o.id, now + 200); // squad shares contact
+  for (const c of nearSnap(v.dimension.id, v.location, 64)) {           // (v5.9: factions from the shared snapshot)
+    if (c.type !== SOLDIER || !isFriendly(c.f, f)) continue;
+    if (c.dd <= 16 || (sq && c.f === f && c.e.isValid && sd(c.e).squad === sq)) alertUntil.set(c.id, now + 200); // squad shares contact
   }
 });
 
@@ -2494,7 +2531,7 @@ function refreshCombatants() {
     let dim;
     try { dim = world.getDimension(did); } catch { continue; }
     const list = [];
-    const add = (arr) => { for (const o of arr) { try { const l = o.location, ty = o.typeId; list.push({ e: o, id: o.id, type: ty, x: l.x, y: l.y, z: l.z, f: ty === SOLDIER || ty === HOUND || ty === "minecraft:player" ? factionOf(o) : 0 }); } catch {} } };
+    const add = (arr) => { for (const o of arr) { try { const l = o.location, ty = o.typeId; const id = o.id; list.push({ e: o, id, type: ty, x: l.x, y: l.y, z: l.z, f: ty === SOLDIER || ty === HOUND || ty === "minecraft:player" ? factionOf(o) : 0, down: downed.has(id) || pows.has(id) }); } catch {} } };
     try { add(dim.getEntities({ type: SOLDIER })); } catch {}
     try { add(dim.getEntities({ type: HOUND })); } catch {}
     try { add(dim.getPlayers()); } catch {}
@@ -2959,6 +2996,7 @@ const noiseFrom = new Map(); // entity id -> tick it last made combat noise
 const provoked = new Map();  // "faction:attackerId" -> until tick
 const assist = new Map();    // soldier id -> { id, t } : an attacker hurting a comrade nearby
 function isProvoker(f, o, now) { return (provoked.get(`${f}:${o.id}`) ?? 0) > now; }
+const provokedT = new Map(); // faction -> tick it was last provoked (v5.9: no provocation lookups for factions nobody attacked)
 const rotMemo = new Map(); // id -> { t, y } (one rotation read per soldier per tick)
 function facingAngle(e, to) {
   let r = rotMemo.get(e.id);
@@ -3026,16 +3064,34 @@ function perceive(e, now) {
   if (d.surr || d.div === "medic") { s.threat = undefined; s.alert = "calm"; return; }
   const base = sightOf(d);
   const eye = headLoc(e);
-  // v5.7: cheap faction screen on the shared snapshot first; the full target check only for the plausible ones
-  const all = [];
-  for (const c of nearSnap(e.dimension.id, e.location, base)) {
-    if (c.id === e.id) continue;
-    if (c.type === SOLDIER || c.type === HOUND || c.type === "minecraft:player") { if (!isHostile(d.faction, c.f) && !isProvoker(d.faction, c.e, now)) continue; }
-    else if (VEHICLES.includes(c.type)) { if (d.weapon !== "at") continue; }
-    else if (c.dd > 20) continue;
-    if (!c.e.isValid || !isTargetFor(e, d, c.e)) continue;
-    all.push({ o: c.e, dd: c.dd });
+  // v5.7/5.9: cheap screen on the shared snapshot (friends, the downed, far mobs out), near ground first and wider only
+  // if it's quiet nearby; the full target check only for the nearest few
+  const prov = now - (provokedT.get(d.faction) ?? -99999) < 1200;
+  const screen = (list) => {
+    const out = [];
+    for (const c of list) {
+      if (c.id === e.id || c.down) continue;
+      if (c.type === SOLDIER || c.type === HOUND || c.type === "minecraft:player") { if (c.f === d.faction && c.f) continue; if (!isHostile(d.faction, c.f) && !(prov && isProvoker(d.faction, c.e, now))) continue; }
+      else if (VEHICLES.includes(c.type)) { if (d.weapon !== "at") continue; }
+      else if (c.dd > 20) continue;
+      out.push(c);
+    }
+    return out;
+  };
+  let near = screen(nearSnap(e.dimension.id, e.location, Math.min(base, 64)));
+  if (near.length < 4 && base > 64) near = screen(nearSnap(e.dimension.id, e.location, base));
+  if (near.length > 8) {                                              // the nearest 8 (a partial pick, not a full sort)
+    const k8 = [];
+    for (const c of near) {
+      if (k8.length === 8 && c.dd >= k8[7].dd) continue;
+      let j = Math.min(k8.length, 7);
+      while (j > 0 && k8[j - 1].dd > c.dd) { k8[j] = k8[j - 1]; j--; }
+      k8[j] = c;
+    }
+    near = k8;
   }
+  const all = [];
+  for (const c of near) { if (c.e.isValid && isTargetFor(e, d, c.e)) all.push({ o: c.e, dd: c.dd }); }
   const soldiersAround = all.some((c) => !isMob(c.o));
   const cands = all
     // mid-battle, distant mobs are ignored unless they're on top of him or attacking
@@ -3093,7 +3149,7 @@ world.afterEvents.entityHurt.subscribe((ev) => {
     const fv = v.typeId === SOLDIER || v.typeId === "minecraft:player" || v.typeId === HOUND ? factionOf(v) : 0;
     const fa = factionOf(a);
     if (fv && a.id !== v.id && !isFriendly(fv, fa)) {
-      provoked.set(`${fv}:${a.id}`, now + 1200);                       // ~1 minute
+      provoked.set(`${fv}:${a.id}`, now + 1200); provokedT.set(fv, now);   // ~1 minute
       if (!isMob(a)) { try { helpInArea(v, a, fv, now); } catch {} }
       if (isMob(a)) {
         // a mob: the closest few soldiers help (if nothing more dangerous is around)
@@ -3117,21 +3173,36 @@ world.afterEvents.entityHurt.subscribe((ev) => {
     }
   } catch {}
 });
-let percPhase = 0;
+// v5.9: perception is a rotation with a fixed budget per tick too (everyone every ~half second up to ~320 soldiers);
+// soldiers in the background look every third turn
+const PERC_MAX = 32;
+let percCursor = 0, percAcc = 0;
+const percPass = new Map();
 system.runInterval(() => {
   const now = tick();
-  percPhase ^= 1;
-  for (const e of allOf(SOLDIER)) {
-    if ((e.id.charCodeAt(e.id.length - 1) & 1) !== percPhase) continue; // each soldier ~every 10 ticks
-    if (!perc.get(e.id)?.threat && (now / 5) % 4 >= 2 && !squads.get(squadKey(e, sd(e)))?.known?.size) continue; // quiet: half as often
-    try { perceive(e, now); } catch {}
+  const list = allOf(SOLDIER), n = list.length;
+  if (n) {
+    percAcc = Math.min(PERC_MAX, percAcc + n / 10);
+    const per = Math.min(n, Math.floor(percAcc));
+    percAcc -= per;
+    for (let k = 0; k < per; k++) {
+      const e = list[(percCursor + k) % n];
+      try {
+        if (!e.isValid) continue;
+        const pass = (percPass.get(e.id) ?? 0) + 1; percPass.set(e.id, pass);
+        if (!isHot(e, now) && pass % 3) continue;
+        perceive(e, now);
+      } catch {}
+    }
+    percCursor = (percCursor + per) % n;
   }
   if (now % 400 === 0) {
     for (const id of [...perc.keys()]) if (!world.getEntity(id)) perc.delete(id);
     for (const [id, h] of [...hurtBy]) if (now - h.t > 400) hurtBy.delete(id);
     for (const [k, t] of [...squadTarget]) if (now - t.t > 400) squadTarget.delete(k);
+    for (const id of [...percPass.keys()]) if (!world.getEntity(id)) percPass.delete(id);
   }
-}, 5);
+}, 1);
 
 // ---- turning at a human speed (no instant spin)
 function turnTo(e, at, maxStep = 18) {
@@ -3387,6 +3458,45 @@ function placeLanes(m, dim, center, heading, shape) {
   });
   m.shape = shape;
 }
+// v5.9: every marching soldier's own spot in the formation: the shape's six places side by side, further rows behind
+// for bigger squads; in single file (narrow ground, indoors) the route itself, a couple of points apart. Each spot is
+// solid ground on the guide's level that he can walk to in a line from the guide, else the route behind the guide.
+const formMode = new Set(); // soldiers on a march walking to their own formation spot
+const driveOn = new Map();  // id -> { off } soldiers stepping the route themselves (with the hold time before switching back)
+// a new catch-up marker: if he was walking to the old one, he walks to the new one at once (not at his next thought)
+function setCatchup(e, slot) {
+  const old = gdp(e, "war:catchup");
+  if (old === slot) return;
+  sdp(e, "war:catchup", slot);
+  if (old !== undefined && Number(gdp(e, "war:goal") ?? 0) === Number(old)) setGoal(e, slot);
+}
+function placeFormation(m, dim, p0, list, shape) {
+  // Minecraft's walking stops 3 blocks short of a marker: the markers ride ~3 blocks of route ahead of the places
+  const path = m.path ?? [p0];
+  let ci = m.path ? Math.min(path.length - 1, m.idx ?? 0) : 0, len = 0;
+  while (ci < path.length - 1 && len < 3) { const a = path[ci], b = path[ci + 1]; len += Math.hypot(b.x - a.x, b.z - a.z); ci++; }
+  const p = m.path ? path[ci] : { x: p0.x + Math.cos(m.heading) * 3, y: p0.y, z: p0.z + Math.sin(m.heading) * 3 };
+  const S = spacingSetting() * 2, fx = Math.cos(m.heading), fz = Math.sin(m.heading), rx = -fz, rz = fx;
+  const pat = SHAPES[shape] ?? SHAPES.line;
+  const single = shape === "column" || shape === "single file";
+  const back = (k) => path[Math.max(0, ci - k)];
+  list.forEach((e, i) => {
+    if (personal.has(e.id)) return;                                 // on an errand of his own
+    const fm = Number(gdp(e, "war:fmk") ?? 0);
+    if (gdp(e, "war:ordergoal") !== undefined && (!fm || Number(gdp(e, "war:goal") ?? 0) !== fm)) return;   // fighting: the brain moves him
+    let at;
+    if (single) at = back((i + 1) * 2);
+    else {
+      const [ox, oy] = pat[i % pat.length], row = Math.floor(i / pat.length);
+      const x = p.x + rx * ox * S + fx * (oy - row * 1.5) * S, z = p.z + rz * ox * S + fz * (oy - row * 1.5) * S;
+      const w = walkableNear(dim, x, z, p.y);
+      if (w && Math.abs(w.y - p.y) <= 1 && straightReach(dim, p, w)) at = w;
+      else at = back(2 + row * 2 + (i % 2));
+    }
+    const slot = myMarker(e, at, "war:fmk");                      // (his own formation marker: never the one his fight moves use)
+    if (slot) setCatchup(e, slot);
+  });
+}
 function startMarch(player, pool, dest, then) {
   let cx = 0, cy = 0, cz = 0;
   for (const e of pool) { cx += e.location.x; cy += e.location.y; cz += e.location.z; }
@@ -3403,7 +3513,7 @@ function startMarch(player, pool, dest, then) {
   // don't stand around while the route is worked out: start walking toward the destination
   const L0 = Math.hypot(dest.x - cx, dest.z - cz) || 1, st0 = Math.min(12, L0);
   const first = walkableNear(dim, cx + ((dest.x - cx) / L0) * st0, cz + ((dest.z - cz) / L0) * st0, cy);
-  try { if (first && !isIndoorsAt(dim, from) && Math.abs(first.y - cy) <= 1 && localReach(dim, from, first)) { placeLanes(m, dim, first, m.heading, "line"); m.early = true; } } catch {}   // v5.4: no standing around (outdoors)
+  try { if (first && !isIndoorsAt(dim, from) && Math.abs(first.y - cy) <= 1 && localReach(dim, from, first)) { placeLanes(m, dim, first, m.heading, "line"); m.early = true; m.earlyAt = { x: first.x, y: first.y, z: first.z }; } } catch {}   // v5.4: no standing around (outdoors)
   requestPlan(id, m, from);
   saveMarches();
   return { id, lanes: m.lanes };
@@ -3450,6 +3560,7 @@ function planLeg(id, m, from, wide) {
       mm.path = undefined;                                      // the march loop will plan again (a new corridor)
     } else if (!mm.path) {                                      // nothing found yet: head straight and try again later
       mm.path = [{ x: from.x, y: from.y, z: from.z, w: false }, { x: target.x, y: target.y ?? from.y, z: target.z, w: false }];
+      mm.path.guess = true;                                     // v5.9: a guess, not a route: never carried along it (that went through walls)
       mm.idx = 0; mm.bestIdx = 0;
     }
     mm.progT = tick();
@@ -3536,6 +3647,12 @@ system.runInterval(() => {
       let x = 0, y = 0, z = 0; for (const e of members) { x += e.location.x; y += e.location.y; z += e.location.z; }
       requestPlan(id, m, { x: x / members.length, y: y / members.length, z: z / members.length }); changed = true; continue;
     }
+    if (!m.path && m.earlyAt && !m.final) {                     // v5.9: walking off while the route is worked out: each to his own spot too
+      const dim0 = world.getDimension(m.dim);
+      for (const e of members) if (!driveOn.has(e.id)) formMode.add(e.id);
+      placeFormation(m, dim0, m.earlyAt, members.filter((e) => formMode.has(e.id)), "line");
+      continue;
+    }
     if (m.final || m.planning || !m.path) continue;
     const dim = world.getDimension(m.dim);
     let cx = 0, cy = 0, cz = 0;
@@ -3550,15 +3667,21 @@ system.runInterval(() => {
     while (j < m.path.length - 1 && len < 6) { const a = m.path[j], b = m.path[j + 1]; len += Math.hypot(b.x - a.x, b.z - a.z) + Math.abs(b.y - a.y); j++; }
     m.idx = Math.min(m.path.length - 1, Math.max(m.idx ?? 0, j));
     if (lead > (m.bestIdx ?? 0) || fighting) { m.bestIdx = Math.max(m.bestIdx ?? 0, lead); m.progT = now; }
-    // who follows the route himself: anyone in a tight stretch, and anyone well behind the guide
+    // who follows the route himself: anyone in a tight stretch, and anyone well behind the guide. v5.9: once he
+    // drives he keeps driving until he's been clear and caught up for 1.5 s (no flip-flopping between the two); everyone
+    // else walks to his OWN formation spot (v5.4-5.8: up to four men shared one lane marker and jostled for it)
     for (const e of all) {
-      if (!marchActive(e)) { if (gdp(e, "war:catchup") !== undefined) sdp(e, "war:catchup", undefined); continue; }
+      if (!marchActive(e)) { formMode.delete(e.id); driveOn.delete(e.id); if (gdp(e, "war:catchup") !== undefined) sdp(e, "war:catchup", undefined); continue; }
       const pi = progOf.get(e.id) ?? 0;
-      const drive = m.idx - pi >= 6 || tightAt(dim, m.path, pi, e.location);
-      if (drive) {
+      const raw = m.idx - pi >= 10 || tightAt(dim, m.path, pi, e.location);   // (a straggler ~20 blocks back, or a tight stretch)
+      let dv = driveOn.get(e.id);
+      if (raw) { dv = { off: 0 }; driveOn.set(e.id, dv); }
+      else if (dv && (++dv.off >= 3 && m.idx - pi <= 6)) { driveOn.delete(e.id); dv = undefined; }
+      if (dv) {
+        formMode.delete(e.id);
         const slot = myMarker(e, m.path[Math.min(m.path.length - 1, lookahead(m.path, pi, 4))]);   // the route driver moves it from here
-        if (slot && gdp(e, "war:catchup") !== slot) sdp(e, "war:catchup", slot);
-      } else if (gdp(e, "war:catchup") !== undefined) sdp(e, "war:catchup", undefined);
+        if (slot) setCatchup(e, slot);
+      } else formMode.add(e.id);                                  // (his formation spot is placed below)
     }
     const last = m.path[m.path.length - 1];
     const atEnd = m.idx >= m.path.length - 1 && flat(last, c) < 8;
@@ -3591,8 +3714,10 @@ system.runInterval(() => {
     const p = m.path[m.idx], prev = m.path[Math.max(0, m.idx - 1)];
     m.heading = Math.atan2(p.z - prev.z, p.x - prev.x) || m.heading;
     const narrow = p.w || prev.w;
-    placeLanes(m, dim, p, m.heading, narrow ? "column" : chooseShape(dim, p, m.heading, members, now));
+    const shape = narrow ? "column" : chooseShape(dim, p, m.heading, members, now);
+    placeLanes(m, dim, p, m.heading, shape);
     m.pos = { x: p.x, y: p.y, z: p.z };
+    placeFormation(m, dim, p, members.filter((e) => formMode.has(e.id)), m.shape ?? shape);
     changed = true;
   }
   if (changed) saveMarches();
@@ -4208,10 +4333,11 @@ function helpInArea(victim, attacker, fv, now) {
   if (now - (helpT.get(hk) ?? -99) < 40) return;
   helpT.set(hk, now);
   if (helpT.size > 2000) helpT.clear();
-  for (const o of nearbyCombatants(victim.dimension.id, victim.location, 200)) {
-    if (o.typeId !== SOLDIER || o.id === victim.id) continue;
+  for (const c of nearSnap(victim.dimension.id, victim.location, 200)) {
+    if (c.type !== SOLDIER || c.id === victim.id || c.down || !isFriendly(c.f, fv)) continue;
+    const o = c.e;
     try {
-      if (!freeOf(o) || !isFriendly(Number(P(o, "war:faction")), fv)) continue;
+      if (!o.isValid || !freeOf(o)) continue;
       const d = sd(o);
       if (!["hold", "patrol", "stand", "sentry"].includes(d.func) || d.retreat || d.surr) continue;
       const a = anchorOf(o);
@@ -4273,10 +4399,9 @@ function stressOf(e, d, now) {
   const hp = e.getComponent("minecraft:health");
   if (hp && hp.currentValue / hp.effectiveMax < 0.35) st += 2;
   let foes = 0, friends = 0;
-  for (const o of nearbyCombatants(e.dimension.id, e.location, 24)) {
-    if (o.id === e.id || isMob(o) || VEHICLES.includes(o.typeId)) continue;
-    const of = factionOf(o);
-    if (isHostile(d.faction, of)) foes++; else if (isFriendly(d.faction, of)) friends++;
+  for (const c of nearSnap(e.dimension.id, e.location, 24)) {
+    if (c.id === e.id || c.down || (c.type !== SOLDIER && c.type !== HOUND && c.type !== "minecraft:player")) continue;
+    if (isHostile(d.faction, c.f)) foes++; else if (isFriendly(d.faction, c.f)) friends++;
   }
   if (foes >= (friends + 1) * 2) st += 2;                                                    // badly outnumbered here
   else if (foes > friends + 1) st += 1;                                                      // his side is losing here
@@ -4510,23 +4635,44 @@ function localReach(dim, from, to, maxNodes = 400) {
   const mk = `${dim.id[10] ?? ""}${Math.floor(from.x)},${Math.floor(from.y)},${Math.floor(from.z)}>${Math.floor(to.x)},${Math.floor(to.y)},${Math.floor(to.z)}`;
   const c = reachMemo.get(mk), now = tick();
   if (c && now - c.t < 100 && (c.v || c.n >= maxNodes)) return c.v;   // a "no" from a smaller search doesn't answer a bigger one
-  const v = localReachBFS(dim, from, to, maxNodes);
+  const v = straightReach(dim, from, to) || localReachBFS(dim, from, to, maxNodes);   // (v5.9: open ground answers with a dozen lookups)
   reachMemo.set(mk, { v, t: now, n: maxNodes });
   if (reachMemo.size > 6000) reachMemo.clear();
   return v;
 }
+// "can stand here" (feet and head open, solid floor), shared by every search (~10 s)
+function standAt(dim, x, y, z, now = tick()) {
+  const k = bkey(dim.id, x, y, z), c = STAND.get(k);
+  if (c !== undefined && now - c.t < 200) return c.v;
+  let v = false;
+  try { const f = tBlock(dim, x + 0.5, y - 1, z + 0.5), ft = tBlock(dim, x + 0.5, y, z + 0.5), h = tBlock(dim, x + 0.5, y + 1, z + 0.5);
+    v = !!f && !!ft && !!h && !f.isAir && !f.isLiquid && passable(ft) && passable(h); } catch {}
+  STAND.set(k, { v, t: now });
+  return v;
+}
+// v5.9: a walk in a straight line, a block at a time, up or down at most one block per step (most spots in the open)
+function straightReach(dim, from, to) {
+  const L = flat(from, to);
+  if (L > 16) return false;
+  const n = Math.ceil(L), now = tick();
+  let y = Math.floor(from.y + 0.01);
+  for (let k = 1; k <= n; k++) {
+    const x = Math.floor(from.x + ((to.x - from.x) * k) / n), z = Math.floor(from.z + ((to.z - from.z) * k) / n);
+    if (standAt(dim, x, y, z, now)) continue;
+    if (standAt(dim, x, y + 1, z, now)) {                                       // a step up: room over his head to jump it
+      const px = from.x + ((to.x - from.x) * (k - 1)) / n, pz = from.z + ((to.z - from.z) * (k - 1)) / n;
+      try { if (!passable(tBlock(dim, px, y + 2, pz))) return false; } catch { return false; }
+      y++; continue;
+    }
+    if (standAt(dim, x, y - 1, z, now)) { y--; continue; }
+    return false;
+  }
+  return Math.abs(y - Math.floor(to.y + 0.01)) <= 1;
+}
 function localReachBFS(dim, from, to, maxNodes) {
   const sx = Math.floor(from.x), sz = Math.floor(from.z), tx = Math.floor(to.x), tz = Math.floor(to.z);
   const did = dim.id, now = tick();
-  const stand = (x, y, z) => {                                   // v5.7: "can stand here", shared by every search (~10 s)
-    const k = bkey(did, x, y, z), c = STAND.get(k);
-    if (c !== undefined && now - c.t < 200) return c.v;
-    let v = false;
-    try { const f = tBlock(dim, x + 0.5, y - 1, z + 0.5), ft = tBlock(dim, x + 0.5, y, z + 0.5), h = tBlock(dim, x + 0.5, y + 1, z + 0.5);
-      v = !!f && !!ft && !!h && !f.isAir && !f.isLiquid && passable(ft) && passable(h); } catch {}
-    STAND.set(k, { v, t: now });
-    return v;
-  };
+  const stand = (x, y, z) => standAt(dim, x, y, z, now);
   const sy = Math.floor(from.y), rk = (x, y, z) => ((x - sx + 32) * 64 + (z - sz + 32)) * 1024 + (y - sy + 512);
   const seen = new Set([rk(sx, sy, sz)]), q = [[sx, sy, sz]];
   for (let i = 0; i < q.length && i < maxNodes; i++) {
@@ -4735,10 +4881,16 @@ const spendDecision = () => (decisionBudget-- > 0);
 
 // ---- fluid water crossings: in water a soldier only ever keeps moving: steady strokes along his route,
 // a boost up the bank as soon as he touches it. No firing / peeking / taking cover in the water.
+const wetMemo = new Map(); // id -> { t, v }  (v5.9: dry soldiers are checked once a second, not 5 times)
 system.runInterval(() => {
+  const now = tick();
   for (const e of allOf(SOLDIER)) {
     try {
-      if (isRiding(e) || !inWater(e)) continue;
+      const w = wetMemo.get(e.id);
+      if (w && !w.v && now - w.t < 20) continue;
+      const wet = !isRiding(e) && inWater(e);
+      wetMemo.set(e.id, { t: now, v: wet });
+      if (!wet) continue;
       const g = goalPoint(e);
       if (!g) continue;
       const p = e.location, dx = g.x - p.x, dz = g.z - p.z, l = Math.hypot(dx, dz) || 1;
@@ -4856,7 +5008,7 @@ world.afterEvents.entityHurt.subscribe((ev) => {
   const now = tick();
   for (const o of nearbyCombatants(a.dimension.id, a.location, 48)) {
     if (o.typeId !== SOLDIER) continue;
-    try { if (Number(P(o, "war:faction")) === f) { assist.set(o.id, { id: v.id, t: now }); provoked.set(`${f}:${v.id}`, now + 1200); } } catch {}
+    try { if (Number(P(o, "war:faction")) === f) { assist.set(o.id, { id: v.id, t: now }); provoked.set(`${f}:${v.id}`, now + 1200); provokedT.set(f, now); } } catch {}
   }
 });
 
@@ -5240,20 +5392,34 @@ const shotAtPlayer = new Map(); // player id -> tick a soldier last fired at him
 
 // ---- sandbags: soldiers know them as cover / peek spots
 const SANDBAG = "war:sandbag";
-const sandbagCache = new Map(); // "x,z" cell (8x8) -> { t, list: [{x,y,z}] }
+// v5.9: sandbags are remembered where they are placed / broken (saved in the world) instead of scanning thousands of
+// blocks around every soldier (that scan was the lag when soldiers were spread out). Sandbags placed before v5.9 are
+// found by a small scan right around soldiers (once per area).
+let sandbagReg = null; // Map "dim|x|y|z" -> {dim, x, y, z}
+function sbReg() {
+  if (!sandbagReg) { sandbagReg = new Map(); for (const s of getJSON(world, "war:sandbags", [])) sandbagReg.set(`${s.dim}|${s.x}|${s.y}|${s.z}`, s); }
+  return sandbagReg;
+}
+let sbDirty = false;
+function sbAdd(dimId, x, y, z) { const k = `${dimId}|${x}|${y}|${z}`; if (!sbReg().has(k)) { sbReg().set(k, { dim: dimId, x, y, z }); sbDirty = true; } }
+function sbDel(dimId, x, y, z) { if (sbReg().delete(`${dimId}|${x}|${y}|${z}`)) sbDirty = true; }
+system.runInterval(() => { if (!sbDirty) return; sbDirty = false; try { setJSON(world, "war:sandbags", [...sbReg().values()].slice(-3000)); } catch {} }, 200);
+try { world.afterEvents.playerPlaceBlock.subscribe((ev) => { try { const b = ev.block; if (b.typeId === SANDBAG) sbAdd(b.dimension.id, b.x, b.y, b.z); } catch {} }); } catch {}
+try { world.afterEvents.playerBreakBlock.subscribe((ev) => { try { if (ev.brokenBlockPermutation?.type?.id === SANDBAG) sbDel(ev.block.dimension.id, ev.block.x, ev.block.y, ev.block.z); } catch {} }); } catch {}
+const sbScanned = new Set(); // "dim|cx|cz" 16-block areas already scanned for old sandbags
 function sandbagsNear(dim, loc, r, now) {
-  const out = [];
-  for (let cx = Math.floor((loc.x - r) / 8); cx <= Math.floor((loc.x + r) / 8); cx++) for (let cz = Math.floor((loc.z - r) / 8); cz <= Math.floor((loc.z + r) / 8); cz++) {
-    const key = `${dim.id}:${cx},${cz}:${Math.floor(loc.y / 8)}`;
-    let c = sandbagCache.get(key);
-    if (!c || now - c.t > 400) {
-      c = { t: now, list: [] };
-      for (let x = cx * 8; x < cx * 8 + 8; x++) for (let z = cz * 8; z < cz * 8 + 8; z++) for (let y = Math.floor(loc.y) - 3; y <= Math.floor(loc.y) + 3; y++) {
-        try { const b = tBlock(dim, x, y, z); if (b?.typeId === SANDBAG) c.list.push({ x, y, z }); } catch {}
-      }
-      sandbagCache.set(key, c);
+  const area = `${dim.id}|${Math.floor(loc.x / 16)}|${Math.floor(loc.z / 16)}`;
+  if (!sbScanned.has(area)) {                                         // old sandbags: a small look around him, once per area
+    sbScanned.add(area);
+    for (let dx = -4; dx <= 4; dx++) for (let dz = -4; dz <= 4; dz++) for (const dy of [0, -1]) {
+      try { const b = tBlock(dim, loc.x + dx, loc.y + dy, loc.z + dz); if (b?.typeId === SANDBAG) sbAdd(dim.id, Math.floor(loc.x + dx), Math.floor(loc.y + dy), Math.floor(loc.z + dz)); } catch {}
     }
-    for (const s of c.list) if (Math.hypot(s.x + 0.5 - loc.x, s.z + 0.5 - loc.z) <= r) out.push(s);
+  }
+  const out = [];
+  for (const s of sbReg().values()) {
+    if (s.dim !== dim.id || Math.abs(s.y - loc.y) > 3 || Math.hypot(s.x + 0.5 - loc.x, s.z + 0.5 - loc.z) > r) continue;
+    try { const b = tBlock(dim, s.x, s.y, s.z); if (b && b.typeId !== SANDBAG) { sbDel(s.dim, s.x, s.y, s.z); continue; } } catch {}   // gone (blown up)
+    out.push(s);
   }
   return out;
 }
@@ -5415,7 +5581,7 @@ function followPersonal(e, now) {
   if (now - (pr.progT ?? now) > 120 && (pr.hold ?? 0) <= now) return drop();
   if (now - pr.t > 400 + pr.pts.length * 16) return drop();
   const end = pr.pts[pr.pts.length - 1];
-  if (i >= pr.pts.length - 2 && dist(end, e.location) < 2) { drop(); if (pr.kind === "advance") spreadOut(e, now, end); return undefined; }   // there
+  if (i >= pr.pts.length - 2 && dist(end, e.location) < 2 && Math.abs(end.y - e.location.y) < 0.6) { drop(); if (pr.kind === "advance") spreadOut(e, now, end); return undefined; }   // there
   // a fight on the way: errands are dropped (the brain fights); moving up to the enemy, he stops to take a clear shot
   const t = perc.get(e.id)?.threat;
   if (t?.isValid && ["patrol", "reinforce", "regroup"].includes(pr.kind)) return drop();
@@ -5577,15 +5743,23 @@ system.runInterval(() => {
     try {
       const y = e.location.y, dy = c.toY - y;
       if (Math.abs(dy) > 0.15) {
-        e.teleport({ x: c.x, y: y + Math.sign(dy) * Math.min(0.2, Math.abs(dy)), z: c.z });   // up or down the ladder
+        const ny = y + Math.sign(dy) * Math.min(0.2, Math.abs(dy));
+        if (!glideFree(e.dimension, c.x, ny, c.z) || (dy > 0 && !cellOpen(tBlock(e.dimension, c.x, Math.floor(ny + 0.01) + 2, c.z)) && ny + 1.8 > Math.floor(ny + 0.01) + 2)) {
+          c.blocked = (c.blocked ?? 0) + 1;                                                    // v5.9: a shut trapdoor / a ceiling: never into it
+          if (c.blocked === 3) openAt(e.dimension, { x: c.x, y: Math.floor(ny) + 2, z: c.z });
+          if (c.blocked > 12) { climbing.delete(id); glideBan.set(id, now + 60); personal.delete(id); }
+          continue;
+        }
+        e.teleport({ x: c.x, y: ny, z: c.z });                                                 // up or down the ladder
       } else {
-        if (c.exit) e.teleport({ x: c.exit.x, y: c.exit.y, z: c.exit.z });                    // step off onto the next point
+        // step off onto the next point: only a short step into open space (v5.9: never through a wall or far)
+        if (c.exit && Math.hypot(c.exit.x - c.x, c.exit.z - c.z) <= 1.6 && Math.abs(c.exit.y - y) <= 1.2 && glideFree(e.dimension, c.exit.x, c.exit.y, c.exit.z)) e.teleport({ x: c.exit.x, y: c.exit.y, z: c.exit.z });
         climbing.delete(id);
       }
     } catch { climbing.delete(id); }
   }
 }, 1);
-system.runInterval(() => { for (const e of allOf(SOLDIER)) { try { startClimbIfNeeded(e); } catch {} } }, 4);
+system.runInterval(() => { for (const e of allOf(SOLDIER)) { try { if (personal.has(e.id) || gdp(e, "war:catchup") !== undefined) startClimbIfNeeded(e); } catch {} } }, 4);   // (v5.9: only men stepping a route themselves)
 
 // ---- one way to travel anywhere: a direct step only when it's close and plainly reachable on foot;
 // otherwise a proper dense route (the same planner and follower as every march)
@@ -5609,14 +5783,14 @@ function travel(e, dest, kind, now, urgent = false) {
 // ================================================================ v5.3: route stepping, shared routes, close-combat drills
 // ---- one marker per soldier for his own moves (personal routes, short hops, brain spots). It is moved, never
 // re-spawned, so a soldier crossing a castle no longer leaves a trail of markers behind him (lag).
-function myMarker(e, loc) {
-  let s = Number(gdp(e, "war:mymk") ?? 0);
+function myMarker(e, loc, key = "war:mymk") {
+  let s = Number(gdp(e, key) ?? 0);
   const m = s ? marker(s) : undefined;
   if (!m) {
     s = makeWaypoint(e.dimension, loc, false);
     if (!s) return 0;
     try { marker(s)?.addTag("war_mine"); } catch {}
-    sdp(e, "war:mymk", s);
+    sdp(e, key, s);
     try { noteRefs(e); } catch {}
     return s;
   }
@@ -5765,8 +5939,10 @@ function settle(e, slot, m) {
   planPersonalTo(e, "settle", { x: at.x, y: at.y, z: at.z }, now);                // a short real route onto it (never a straight line off a stair)
   note(e, "taking his spot");
 }
+const stepping = new Set(); // soldiers following a route of their own right now (the edge guard watches only them)
 system.runInterval(() => {
   const now = tick();
+  stepping.clear();
   for (const e of allOf(SOLDIER)) {
     try {
       if (climbing.has(e.id) || isRiding(e) || downed.has(e.id) || pows.has(e.id)) continue;
@@ -5783,18 +5959,19 @@ system.runInterval(() => {
         const m = mid ? getMarches()[mid] : undefined;
         if (!m?.path || m.final) { settle(e, og === undefined ? goal : Number(og), m); continue; }
         pts = m.path; i = routeProgress(m, e.location, e.id);
-        own = !!cu && goal === cu;
+        own = !!cu && goal === cu && !formMode.has(e.id);
         if (!own) {                                                           // on the formation lanes: only help at a gate / when the lane is too close to walk to
           const mk = marker(goal);
           const close = !mk || dist(mk.location, e.location) <= 3.3;
-          if (close || pts.slice(i, i + 3).some((q) => q.climb || q.open)) stepAlong(e, pts, i);
+          if ((close && !formMode.has(e.id)) || pts.slice(i, i + 3).some((q) => q.climb || q.open)) stepAlong(e, pts, i);
           continue;
         }
       }
       // v5.5: a tight stretch (indoors, stairs, a ladder, door or drop near): he is CARRIED along his route by the glider,
       // in single file, at walking pace (Minecraft's own walking stays idle: it was what got lost on stairs and in
       // doorways). Open ground: the marker runs ahead and Minecraft walks him at full pace.
-      const tight = tightAt(e.dimension, pts, i, e.location);
+      stepping.add(e.id);
+      const tight = !pts.guess && (glideBan.get(e.id) ?? 0) <= now && tightAt(e.dimension, pts, i, e.location);
       if (tight) {
         const g = gliders.get(e.id);
         const queued = queuedBehind(e, pts, i);
@@ -5981,10 +6158,11 @@ world.afterEvents.playerInteractWithEntity.subscribe((ev) => {
 // ---- edge guard: a soldier on a planned route who is sliding toward a drop of 3+ blocks that his route doesn't take
 // (momentum from a push, a hop, a shove) is stopped at the edge. Drops the route really takes are left alone.
 system.runInterval(() => {
-  for (const e of allOf(SOLDIER)) {
+  for (const id of stepping) {
+    const e = world.getEntity(id);
     try {
-      if (climbing.has(e.id) || gliders.has(e.id) || downed.has(e.id) || isRiding(e)) continue;
-      if (!personal.has(e.id) && gdp(e, "war:catchup") === undefined) continue;   // v5.6: only men stepping a route themselves (formation walkers use Minecraft's own edge sense)
+      if (!e?.isValid) { stepping.delete(id); continue; }
+      if (climbing.has(e.id) || gliders.has(e.id) || downed.has(e.id) || isRiding(e)) continue;   // (v5.9: only men the route driver steps)
       const r = routeOf(e);
       if (!r) continue;
       const v = e.getVelocity(), sp = Math.hypot(v.x, v.z);
@@ -6146,6 +6324,20 @@ function combatMove(e, d, now, melee, anchor, leash) {
 // depends on Minecraft's pathing or on pushes, so he can't get lost, stuck on a stair edge, or pile into the man ahead.
 const gliders = new Map(); // id -> { pts, k (index of the point he's heading to), t (last refresh), paused, wait }
 const GLIDE_SPEED = 0.17;  // blocks per tick (~3.4 blocks/s, a brisk walk)
+const glideBan = new Map(); // id -> tick until which the glider leaves him alone (it was blocked)
+// a cell he can be carried into: open (or a stair / slab / open-able door / ladder / water) at feet and head
+function cellOpen(b) {
+  if (!b) return false;
+  if (b.isAir || b.isLiquid) return true;
+  const t = TI(b.typeId);
+  return t.pass || t.climb || t.stairs || t.openableId || t.plate;
+}
+function glideFree(dim, x, y, z) {
+  try {
+    const fy = Math.floor(y + 0.01);
+    return cellOpen(tBlock(dim, x, fy, z)) && cellOpen(tBlock(dim, x, fy + 1, z));
+  } catch { return true; }
+}
 function glideStart(pts, i, loc) {
   let k = Math.min(pts.length - 1, i + 1);
   if (i < pts.length && Math.hypot(pts[i].x - loc.x, pts[i].z - loc.z) > 0.3 && r3(pts[i], loc) < r3(pts[k], loc)) k = i;   // not at his point yet: that one first
@@ -6170,10 +6362,25 @@ system.runInterval(() => {
       const nx = L > 0.001 ? p.x + (dx / L) * stp : b.x, nz = L > 0.001 ? p.z + (dz / L) * stp : b.z;
       const seg = Math.hypot(b.x - a.x, b.z - a.z) || 1;
       const f = 1 - Math.hypot(b.x - nx, b.z - nz) / seg;
-      const y = b.climb ? p.y : b.y > a.y ? (f >= 0.3 ? b.y : a.y) : b.y < a.y ? (f >= 0.6 ? b.y : a.y) : b.y;   // (to a ladder: on his own level)
+      let y = b.climb ? p.y : b.y > a.y ? (f >= 0.3 ? b.y : a.y) : b.y < a.y ? (f >= 0.6 ? b.y : a.y) : b.y;   // (to a ladder: on his own level)
+      if (b.y > y && !glideFree(e.dimension, nx, y, nz) && glideFree(e.dimension, nx, b.y, nz)) y = b.y;   // a full-block step: up it as he reaches it
       const nb = pts[Math.min(pts.length - 1, g.k + 1)];
-      e.teleport({ x: nx, y, z: nz }, { facingLocation: { x: nb.x, y: y + 1.5, z: nb.z } });
-      if (Math.hypot(b.x - nx, b.z - nz) < 0.05) g.k++;
+      // v5.9: never into a wall. The step must be open at his feet and head (corners cut between two route points,
+      // a door shut behind someone, a block placed since the route was planned): slide along the wall if one axis is
+      // free; blocked for a moment: off the glider, and a personal route is worked out again from where he stands.
+      let tx = nx, tz = nz;
+      if (!glideFree(e.dimension, tx, y, tz)) {
+        if (glideFree(e.dimension, nx, y, p.z)) tz = p.z;
+        else if (glideFree(e.dimension, p.x, y, nz)) tx = p.x;
+        else {
+          g.blocked = (g.blocked ?? 0) + 1;
+          if (g.blocked > 10) { gliders.delete(id); glideBan.set(id, now + 60); personal.delete(id); travelTo.delete(id); }   // (the brain / settle work out a new way)
+          continue;
+        }
+      }
+      g.blocked = 0;
+      e.teleport({ x: tx, y, z: tz }, { facingLocation: { x: nb.x, y: y + 1.5, z: nb.z } });
+      if (Math.hypot(b.x - tx, b.z - tz) < 0.05) g.k++;
     } catch { gliders.delete(id); }
   }
 }, 1);

@@ -82,6 +82,7 @@ function sample(fac) {
     for (const b of list) if (a !== b && Math.hypot(a._loc.x - b._loc.x, a._loc.z - b._loc.z) < 1.0 && Math.abs(a._loc.y - b._loc.y) < 1) n++;
     pairs += n; worst = Math.max(worst, n + 1);
   }
+  if (opt.pairs && SIM.tick % 50 === 0) { const ms = Object.values(W.getMarches()); console.error("T", SIM.tick, "pairs", pairs / 2, "shape", ms.map((m) => m.shape + (m.final ? "F" : "")).join(","), "cz", (list.reduce((t, e) => t + e._loc.z, 0) / list.length).toFixed(0), "x", list.map((e) => e._loc.x.toFixed(0)).join(" "), "z", list.map((e) => e._loc.z.toFixed(0)).join(" "), "mode", list.map((e) => { const cu = e.dyn.get("war:catchup"); return cu === undefined ? "-" : cu === e.dyn.get("war:fmk") ? "F" : cu === e.dyn.get("war:mymk") ? "D" : "?"; }).join(""), "goal=cu", list.map((e) => e.dyn.get("war:goal") === e.dyn.get("war:catchup") ? 1 : 0).join("")); }
   if (opt.trace && SIM.tick % Number(opt.every ?? 50) === 0) console.error(SIM.tick, list.map((e) => `${e._loc.x.toFixed(1)},${e._loc.y.toFixed(1)},${e._loc.z.toFixed(1)}${opt.trace === "2" ? ":" + (W.notes.get(e.id)?.text ?? "") + "/" + [...e.groups].filter((g) => /g_|t_/.test(g)).join(",") : ""}`).join(" | "));
   M.bunchSamples++; M.bunchPairs += pairs / 2; M.maxCluster = Math.max(M.maxCluster, worst);
   for (const e of list) {
@@ -104,7 +105,11 @@ function shotStats(fac, from = 0) {
 // note the distance from shooter to nearest enemy at each shot
 const origPush = SIM.shots.push.bind(SIM.shots);
 SIM.shots.push = (x) => { try { const o = x.owner; let bd = 1e9; for (const e of alive()) if (e !== o && !W.isDowned(e) && e.props.get("war:faction") !== o.props.get("war:faction")) bd = Math.min(bd, Math.hypot(e._loc.x - o._loc.x, e._loc.z - o._loc.z)); x.dist = bd; const gs = W.gunState.get(o.id); x.supp = !!(gs && !gs.target && gs.supp && gs.supp.until > SIM.tick); } catch {} return origPush(x); };
-const report = (o) => { console.log(JSON.stringify({ scenario, ...o, errors: SIM.errors.slice(0, 5), errorCount: SIM.errors.length })); };
+// v5.9: no-clip watch: soldier samples (every 5 ticks) with a solid full block at his feet or head
+let clips = 0;
+const fullSolid = (x, y, z) => { const id = MC.idAt(x, y, z); return !MC.passCell(x, y, z) && !id.includes("stairs") && !id.includes("slab") && !id.includes("ladder") && !id.includes("door"); };
+MC.system.runInterval(() => { for (const e of alive()) { const l = e._loc; if (fullSolid(l.x, l.y + 0.05, l.z) || fullSolid(l.x, l.y + 1.2, l.z)) clips++; } }, 5);
+const report = (o) => { console.log(JSON.stringify({ scenario, ...o, clips, errors: SIM.errors.slice(0, 5), errorCount: SIM.errors.length })); };
 
 // ---------------------------------------------------------------- scenarios
 const S = {
@@ -141,6 +146,7 @@ const S = {
     let arrived = -1; const t0 = SIM.tick;
     for (let t = 0; t < 2400 && arrived < 0; t += 10) {
       step(10); sample(1);
+      if (opt.trace && t % 50 === 0) console.error(t, alive(1).map((e) => `${e._loc.x.toFixed(1)},${e._loc.y.toFixed(1)},${e._loc.z.toFixed(1)}${W.personal.has(e.id) ? "P" : ""}${e.dyn.get("war:catchup") !== undefined ? "C" : ""}`).join(" "));
       const n = alive(1).filter((e) => e._loc.y > 10.5 && e._loc.y < 12).length;
       if (n >= 7) arrived = SIM.tick - t0;
     }
@@ -307,6 +313,7 @@ const S = {
     await order(1, dest);
     const t0 = SIM.tick; let arrived = -1;
     for (let t = 0; t < 2400 && arrived < 0; t += 10) { step(10); sample(1); if (opt.trace && SIM.tick % 100 === 0) console.error(SIM.tick, alive(1).map((e) => `${e._loc.x.toFixed(1)},${e._loc.y.toFixed(1)},${e._loc.z.toFixed(1)}:${W.notes.get(e.id)?.text ?? ""}:${e.dyn.get("war:goal")}/${e.dyn.get("war:catchup") ?? ""}`).join(" | ")); if (alive(1).filter((e) => Math.hypot(e._loc.x - dest.x, e._loc.z - dest.z) < 10).length >= 7) arrived = SIM.tick - t0; }
+    if (opt.dump) { const ms = W.getMarches(); for (const [id, m] of Object.entries(ms)) console.error("MARCH", id, "idx", m.idx, "len", m.path?.length, "final", m.final, "pos", JSON.stringify(m.pos), "shape", m.shape, "path@idx", JSON.stringify(m.path?.slice(Math.max(0, m.idx - 3), m.idx + 2))); for (const e of alive(1)) { const cu = e.dyn.get("war:catchup"); const mk = cu ? W.marker(Number(cu)) : undefined; console.error("S", JSON.stringify(e._loc), "goal", e.dyn.get("war:goal"), "og", e.dyn.get("war:ordergoal"), "cu", cu, "mk", mk ? JSON.stringify(mk._loc) : "-", "nav", JSON.stringify(e.navGoal), "walk", JSON.stringify(e.walk)); } }
     report({ arrivedTicks: arrived, bunchAvg: +(M.bunchPairs / M.bunchSamples).toFixed(2), maxCluster: M.maxCluster, ...callsPerTick(SIM.tick) });
   },
 
@@ -350,6 +357,34 @@ const S = {
     for (let t = 0; t < Number(opt.ticks ?? 2400); t += 10) { step(10); sample(1); if (!alive(1).filter((e) => !W.isDowned(e)).length || !alive(2).filter((e) => !W.isDowned(e)).length) break; }
     const up = (f) => alive(f).filter((e) => !W.isDowned(e)).reduce((t, e) => t + e.hp / e.maxHp, 0);
     report({ ticks: SIM.tick - t0, str1: +up(1).toFixed(2), str2: +up(2).toFixed(2), left1: alive(1).filter((e) => !W.isDowned(e)).length, left2: alive(2).filter((e) => !W.isDowned(e)).length, shots1: shotStats(1), shots2: shotStats(2), bunchAvg: +(M.bunchPairs / M.bunchSamples).toFixed(2), notes: M.notes });
+  },
+
+  // soldiers spread far apart (opt spread=1) or bunched (spread=0): the lag case from the field
+  async spread() {
+    const N = Number(opt.n ?? 30);
+    SIM.bounds = { x0: -260, x1: 260, z0: -260, z1: 260, y0: -10, y1: 60 };
+    SIM.dynWorld.set("war:set_r_dmg", 0);
+    for (const [x, z] of [[-120, -80], [90, 60], [-40, 150], [150, -130]]) building(x, z);
+    for (const [x, z] of [[0, 0], [-150, 100], [120, 160]]) hill(x, z, 20, 8);
+    spawnPlayer({ x: 0, y: 30, z: 0 });
+    const W8 = ["rifle", "smg", "semi", "mg"];
+    let k = 0;
+    for (let i = 0; i < N; i++) {
+      const f = i % 2 ? 2 : 1;
+      const at = opt.spread !== "0" ? { x: (Math.random() - 0.5) * 400, z: (Math.random() - 0.5) * 400 } : { x: (Math.random() - 0.5) * 30, z: (f === 1 ? -20 : 20) + (Math.random() - 0.5) * 10 };
+      const y = (() => { for (let yy = 40; yy > -5; yy--) if (!MC.passCell(at.x, yy - 1, at.z)) return yy; return 0; })();
+      soldier(f, { x: Math.floor(at.x) + 0.5, y, z: Math.floor(at.z) + 0.5 }, W8[i % 4], 0, i % 3 ? "hold" : "patrol");
+    }
+    W.setRelPair(1, 2, "1", false);
+    step(200);
+    SIM.calls.clear(); timing.clear();
+    const ticks = Number(opt.ticks ?? 600);
+    step(ticks, true);
+    const mainMs = [...timing].filter(([kk]) => kk.includes("main.js")).reduce((t, [, v]) => t + v, 0) / ticks;
+    const top = [...timing].filter(([kk]) => kk.includes("main.js")).sort((a, b) => b[1] - a[1]).slice(0, 6).map(([kk, v]) => `${(v / ticks).toFixed(2)}ms ${kk.replace(/.*run_\d+\//, "")}`);
+    const byGB = [...SIM.callsBy].map(([kk, m]) => [kk.replace(/.*run_\d+\//, ""), (m.get("getBlock") ?? 0) / ticks, (m.get("getSkyLightLevel") ?? 0) / ticks]).filter((x) => x[1] + x[2] > 0.5).sort((a, b) => b[1] - a[1]);
+    console.error(JSON.stringify(byGB));
+    report({ n: N, mainMsPerTick: +mainMs.toFixed(2), navPaths: +((SIM.calls.get("~navPath") ?? 0) / ticks).toFixed(2), teleports: +((SIM.calls.get("teleport") ?? 0) / ticks).toFixed(2), getBlock: +((SIM.calls.get("getBlock") ?? 0) / ticks).toFixed(1), sky: +((SIM.calls.get("getSkyLightLevel") ?? 0) / ticks).toFixed(1), top, ...callsPerTick(ticks) });
   },
 
   // steady load for profiling: N v N, damage switched off (Realism slider 0), so the same fight goes on for the whole run
