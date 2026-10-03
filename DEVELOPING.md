@@ -40,7 +40,7 @@ errands are **personal routes** (`planPersonalTo` / `travel`), followed by `foll
 In order; the first that returns a move wins:
 
 1. downed / prisoner / surrendered / falling back (wounded) handling
-2. `medicMove`, `shakenMove` (rare breaks), `waterExit`
+2. `medicMove`, `shakenMove` (rare breaks), `waterExit`, `reflexMove` (under fire: cover / off the line of fire)
 3. **extensions, `when: "first"`**
 4. `followPersonal` (his current route)
 5. `spreadMove` (spreading out / making room)
@@ -59,6 +59,12 @@ Every second each squad (`squadKey`) pools what its members see (`S.known`), wor
 gunner then scores options with the weights `BW` (tuned by self-play) and commits for a moment. Positions come from the
 **tactical evaluator** `tacSpot`: candidate spots scored for cover from the known enemies, a shot, ground gained,
 height, and against crowding, doorways and long walks.
+
+### Reflexes and learning
+An enemy's hit makes him the soldier's target at once (`entityHurt` handler in "v5.8: reflexes") and triggers an
+immediate re-think. `reflexMove` gets an exposed man out of incoming fire. Battle learning ("v5.8: battle learning"):
+`learnStart`/`learnEnd` around each squad contact, weights in `LEARN_SPACE`, saved under `war:learn`; `bwOf(faction)`
+returns the learned weights, `S.bw` the squad's variation during a fight.
 
 ### Perception and fire
 `perceive` (every ~0.5 s): human reaction times by angle and distance, darkness, sneaking, poses, gunfire giving a

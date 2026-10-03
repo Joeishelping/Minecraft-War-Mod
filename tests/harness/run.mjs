@@ -16,7 +16,7 @@ const runDir = path.join(here, `run_${process.pid}`);
 fs.mkdirSync(runDir, { recursive: true });
 fs.cpSync(scriptsDir, runDir, { recursive: true });
 // expose the add-on's internals to the scenarios (appended to the copy only)
-const HOOK = ["planRoute", "BW", "BW_F", "HEAD_K", "medicMove", "shakenMove", "waterExit", "followPersonal", "spreadMove", "combatMove", "engagement", "reinforceMove", "patrolSweep", "marker", "think", "routeOf", "lookahead", "queuedBehind", "climbing", "laneOf", "trackIdx", "giveOrder", "startMarch", "giveFunction", "setupSoldier", "sd", "perc", "squads", "getMarches", "personal", "downed", "goDown", "marker", "gunState", "brain", "notes", "setRelPair", "travel", "isDowned"];
+const HOOK = ["getLearned", "learned", "generals", "planRoute", "BW", "BW_F", "HEAD_K", "medicMove", "shakenMove", "waterExit", "followPersonal", "spreadMove", "combatMove", "engagement", "reinforceMove", "patrolSweep", "marker", "think", "routeOf", "lookahead", "queuedBehind", "climbing", "laneOf", "trackIdx", "giveOrder", "startMarch", "giveFunction", "setupSoldier", "sd", "perc", "squads", "getMarches", "personal", "downed", "goDown", "marker", "gunState", "brain", "notes", "setRelPair", "travel", "isDowned"];
 if (opt.thinkdbg) { const f = path.join(runDir, "main.js"); fs.writeFileSync(f, fs.readFileSync(f, "utf8").replace("    // how far each stationary order may leave its spot to fight", "    if (globalThis.__thinkDbg) globalThis.__thinkDbg(e, engaged, cu, d);\n    // how far each stationary order may leave its spot to fight")); }
 fs.appendFileSync(path.join(runDir, "main.js"), `\nglobalThis.__war = {};\n${HOOK.map((n) => `try { globalThis.__war.${n} = ${n}; } catch {}`).join("\n")}\n`);
 loadDefs(path.join(root, "War Engine BP"));
@@ -208,6 +208,27 @@ const S = {
     for (let k = 0; k < 400 && !out; k++) step(1);
     report({ out });
   },
+  // "Hold here" on top of a wall that only a ladder reaches (the short-order path), counting teleports
+  async ladderHold() {
+    fill(-10, 0, 10, 10, 5, 14, "stone_bricks");
+    const lx = Number(opt.lx ?? 3);
+    for (let y = 0; y <= 5; y++) setBlock(lx, y, 9, "ladder");
+    spawnPlayer({ x: 0, y: 0, z: -5 });
+    for (let i = 0; i < 5; i++) soldier(1, { x: -4 + i * 2 + 0.5, y: 0, z: 1.5 }, "rifle");
+    step(20);
+    let tps = 0; const lastY = new Map();
+    W.generals.set(player.id, { cursor: { x: 0.5, y: 6, z: 12.5 } });
+    await W.giveOrder(player, { faction: 1, order: 1, squad: 0, count: 0, radius: 200, stance: "aggressive", ao: 100, free: true });
+    W.generals.delete(player.id);
+    const t0 = SIM.tick; let arrived = -1;
+    for (let t = 0; t < 2400 && arrived < 0; t += 1) {
+      step(1);
+      for (const e of alive(1)) { const ly = lastY.get(e.id); if (ly !== undefined && e._loc.y - ly > 1.5) tps++; lastY.set(e.id, e._loc.y); }
+      if (t % 10 === 0) sample(1);
+      if (alive(1).filter((e) => e._loc.y > 5.5).length >= 5) arrived = SIM.tick - t0;
+    }
+    report({ arrivedTicks: arrived, top: alive(1).filter((e) => e._loc.y > 5.5).length, upwardJumps: tps, notes: M.notes });
+  },
   // ladders: up a 6-high wall (opt up=1, default) or out of a 5-deep pit (opt pit=1)
   async ladder() {
     if (opt.pit) {
@@ -351,6 +372,31 @@ const S = {
     step(ticks, true);
     const mainMs = [...timing].filter(([k]) => k.includes("main.js")).reduce((t, [, v]) => t + v, 0) / ticks;
     report({ n: N, mainMsPerTick: +mainMs.toFixed(2), shots: SIM.shots.length });
+  },
+
+  // battle learning: many 8 v 8 fights in one world; faction 1 learns, faction 2 keeps the defaults (opt learn2=1: both learn)
+  async learn() {
+    SIM.bounds = { x0: -100, x1: 100, z0: -100, z1: 100, y0: -10, y1: 60 };
+    if (!opt.learn2) W.BW_F[2] = { ...W.BW, headK: W.HEAD_K };
+    spawnPlayer({ x: 0, y: 0, z: -90 });
+    W.setRelPair(1, 2, "1", false);
+    const W8 = ["rifle", "smg", "semi", "mg", "rifle", "semi", "smg", "rifle"];
+    const rounds = Number(opt.rounds ?? 20), res = [];
+    for (let r = 0; r < rounds; r++) {
+      for (const e of alive()) e.remove();
+      const sw = r % 2;   // swap sides each round (no side bias)
+      for (let i = 0; i < 8; i++) soldier(1, { x: (i % 4) * 2.5 - 4 + 0.5, y: 0, z: (sw ? 55 : -55) + (sw ? 1 : -1) * Math.floor(i / 4) * 2.5 + 0.5 }, W8[i]);
+      for (let i = 0; i < 8; i++) soldier(2, { x: (i % 4) * 2.5 - 4 + 0.5, y: 0, z: (sw ? -55 : 55) + (sw ? -1 : 1) * Math.floor(i / 4) * 2.5 + 0.5 }, W8[i]);
+      step(20);
+      if (sw) { await order(2, { x: 0, y: 0, z: 50 }); await order(1, { x: 0, y: 0, z: -50 }); } else { await order(1, { x: 0, y: 0, z: 50 }); await order(2, { x: 0, y: 0, z: -50 }); }
+      for (let t = 0; t < 2000; t += 20) { step(20); if (!alive(1).filter((e) => !W.isDowned(e)).length || !alive(2).filter((e) => !W.isDowned(e)).length) break; }
+      const up = (f) => alive(f).filter((e) => !W.isDowned(e)).length;
+      res.push(up(1) - up(2));
+      step(700);   // the fight is over: squads see no enemy, the engagement is scored
+    }
+    const L = W.getLearned();
+    const half = Math.floor(rounds / 2), m = (a) => +(a.reduce((x, y) => x + y, 0) / (a.length || 1)).toFixed(2);
+    report({ marginFirstHalf: m(res.slice(0, half)), marginSecondHalf: m(res.slice(half)), results: res, learned1: L[1], learned2: L[2] });
   },
 
   // open-field battle, N v N: script cost per tick (the lag)

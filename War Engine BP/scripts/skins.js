@@ -18,11 +18,11 @@ export const SKINS = [
   "Reich Soldier", // skin_10
   "Zookieville Soldier", // skin_11
   "Banditos", // skin_12
-  "DRGK Soldier", // skin_13
-  "Shlomo Castle Soldier", // skin_14
-  "Jeetya Soldier", // skin_15
-  "Tout Donner Soldier", // skin_16
-  "Gorgonzolan Army Soldier", // skin_17
+  "Gorgonzolan Army Soldier", // skin_13
+  "DRGK Soldier", // skin_14
+  "Shlomo Castle Soldier", // skin_15
+  "Jeetya Soldier", // skin_16
+  "Tout Donner Soldier", // skin_17
   "", // skin_18
   "", // skin_19
   "", // skin_20

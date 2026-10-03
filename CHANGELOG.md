@@ -1,5 +1,27 @@
 # War Engine changelog
 
+## v5.8 (ladders for every order, no teleports, reflexes, battle learning)
+
+- **Ladders for every order / no more teleporting.** Short "Hold here" / "Patrol here" orders (and Follow) sent soldiers
+  with Minecraft's own walking, which can't use ladders; when they got stuck, the stuck-recovery's last resort
+  teleported them near the goal (that was the TP onto walls). Now any spot they can't plainly walk to on their level
+  is reached by a planned route (ladders, stairs, doors), Follow uses routes when you're on another level, and stuck
+  recovery plans a route instead of teleporting. Test: "Hold here" on a wall only a ladder reaches: v5.6.1 3-4 of 5 got
+  up in 2 min (one by teleport); v5.8 all 5 by ladder in ~7 s, zero teleports.
+- **Instant self-defence.** The moment an enemy hurts a soldier, that enemy is his target, his gun re-aims at once, and
+  within arm's reach he fights hand-to-hand right away (it used to wait for his next thought, up to a second).
+- **Under-fire reflex.** Hit, or shots coming in (hits or misses), or pinned by fire, while exposed: he immediately takes
+  the best cover nearby that still lets him shoot back, or breaks the line of fire sideways. Attackers pushing into a
+  building keep pushing (ducking in front of hidden defenders only stalls the attack). Tested in 160 self-play battles
+  vs the same brain without it: wins 58%, open-field fights +0.1 strength share on both sides, defenders better, attackers
+  unchanged.
+- **Battle learning.** Each faction adapts its own tactical weights from its own fights (an evolution strategy): every
+  contact, a squad fights with a slightly varied copy of its faction's weights; the outcome (enemies put down vs own
+  losses) pulls the faction's weights toward variations that did better than its recent average. Bounded, pulled
+  gently back to the tuned defaults, saved in the world. War Table -> Settings: switch off or reset. (It needs many
+  fights to show: in 40-battle test runs no change was measurable yet.)
+- Skins 13-17 named as asked (Gorgonzolan Army, DRGK, Shlomo Castle, Jeetya, Tout Donner).
+
 ## v5.7 (lag for real, ladders fixed, smarter fire and movement)
 
 - **Lag.** v5.6 cut the game calls but the script's own computing barely moved, and Bedrock's script engine is much
