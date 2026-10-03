@@ -16,7 +16,7 @@ const runDir = path.join(here, `run_${process.pid}`);
 fs.mkdirSync(runDir, { recursive: true });
 fs.cpSync(scriptsDir, runDir, { recursive: true });
 // expose the add-on's internals to the scenarios (appended to the copy only)
-const HOOK = ["BW", "BW_F", "HEAD_K", "medicMove", "shakenMove", "waterExit", "followPersonal", "spreadMove", "combatMove", "engagement", "reinforceMove", "patrolSweep", "marker", "think", "routeOf", "lookahead", "queuedBehind", "climbing", "laneOf", "trackIdx", "giveOrder", "startMarch", "giveFunction", "setupSoldier", "sd", "perc", "squads", "getMarches", "personal", "downed", "goDown", "marker", "gunState", "brain", "notes", "setRelPair", "travel", "isDowned"];
+const HOOK = ["planRoute", "BW", "BW_F", "HEAD_K", "medicMove", "shakenMove", "waterExit", "followPersonal", "spreadMove", "combatMove", "engagement", "reinforceMove", "patrolSweep", "marker", "think", "routeOf", "lookahead", "queuedBehind", "climbing", "laneOf", "trackIdx", "giveOrder", "startMarch", "giveFunction", "setupSoldier", "sd", "perc", "squads", "getMarches", "personal", "downed", "goDown", "marker", "gunState", "brain", "notes", "setRelPair", "travel", "isDowned"];
 if (opt.thinkdbg) { const f = path.join(runDir, "main.js"); fs.writeFileSync(f, fs.readFileSync(f, "utf8").replace("    // how far each stationary order may leave its spot to fight", "    if (globalThis.__thinkDbg) globalThis.__thinkDbg(e, engaged, cu, d);\n    // how far each stationary order may leave its spot to fight")); }
 fs.appendFileSync(path.join(runDir, "main.js"), `\nglobalThis.__war = {};\n${HOOK.map((n) => `try { globalThis.__war.${n} = ${n}; } catch {}`).join("\n")}\n`);
 loadDefs(path.join(root, "War Engine BP"));
@@ -198,6 +198,44 @@ const S = {
     report({ shots: s.length, ok: s.length > 0 });
   },
 
+  async planDbg() {
+    if (!opt.flat) fill(-6, -5, -6, 6, -1, 6, "air"); fill(-7, -6, -7, 7, -6, 7, "stone");
+    for (let y = -5; y <= -1; y++) setBlock(0, y, 6, "ladder");
+    step(5);
+    let out;
+    const g = opt.g ? JSON.parse(opt.g) : { x: 0.5, y: 0, z: 12.5 };
+    W.planRoute(overworld, opt.s ? JSON.parse(opt.s) : { x: 0.5, y: -5, z: -2.5 }, g, (pts, partial) => { out = { pts: pts?.map((p) => `${p.x - 0.5},${p.y},${p.z - 0.5}${p.climb ? "L" : ""}`), partial }; }, { max: 120000, maxRadius: 300 });
+    for (let k = 0; k < 400 && !out; k++) step(1);
+    report({ out });
+  },
+  // ladders: up a 6-high wall (opt up=1, default) or out of a 5-deep pit (opt pit=1)
+  async ladder() {
+    if (opt.pit) {
+      fill(-6, -5, -6, 6, -1, 6, "air"); fill(-7, -6, -7, 7, -6, 7, "stone");                // a pit, floor at y=-5
+      const lx = Number(opt.lx ?? 0);
+      for (let y = -5; y <= -1; y++) setBlock(lx, y, 6, "ladder");                            // ladder on the north wall (opt lx: off to the side)
+      spawnPlayer({ x: 0, y: 0, z: 40 });
+      for (let i = 0; i < 6; i++) soldier(1, { x: -4 + i * 1.6 + 0.5, y: -5, z: -2.5 }, "rifle");
+    } else {
+      fill(-10, 0, 10, 10, 5, 12, "stone_bricks");                                             // a wall, top at y=6
+      for (let y = 0; y <= 5; y++) setBlock(0, y, 9, "ladder");                               // ladder on its south face
+      spawnPlayer({ x: 0, y: 0, z: -30 });
+      for (let i = 0; i < 6; i++) soldier(1, { x: -5 + i * 2 + 0.5, y: 0, z: -2.5 }, "rifle");
+    }
+    step(20);
+    const dest = opt.pit ? { x: 0, y: 0, z: 12 } : { x: 0, y: 6, z: 11 };
+    await order(1, dest);
+    const t0 = SIM.tick; let arrived = -1;
+    for (let t = 0; t < 2400 && arrived < 0; t += 10) {
+      step(10); sample(1);
+      if (opt.trace && SIM.tick % 50 === 0) console.error(SIM.tick, alive(1).map((e) => `${e._loc.x.toFixed(1)},${e._loc.y.toFixed(1)},${e._loc.z.toFixed(1)}:${W.notes.get(e.id)?.text ?? ""}${W.climbing.has(e.id) ? "[C]" : ""}`).join(" | "));
+      if (opt.path && SIM.tick - t0 === 60) for (const m of Object.values(W.getMarches())) console.error("PATH", JSON.stringify(m.path?.map((p) => `${p.x - 0.5},${p.y},${p.z - 0.5}${p.climb ? "L" : ""}`)));
+      const ok = alive(1).filter((e) => Math.abs(e._loc.y - dest.y) < 1.2 && Math.hypot(e._loc.x - dest.x, e._loc.z - dest.z) < 8).length;
+      if (ok >= (opt.all ? alive(1).length : 5)) arrived = SIM.tick - t0;
+    }
+    report({ arrivedTicks: arrived, done: alive(1).filter((e) => Math.abs(e._loc.y - dest.y) < 1.2).length, final: alive(1).map((e) => `${Math.round(e._loc.x)},${Math.round(e._loc.y)},${Math.round(e._loc.z)}`), notes: M.notes });
+  },
+
   // half the squad goes down mid-march: the rest must carry on, not wait ~30 s for them
   async downedMarch() {
     spawnPlayer({ x: 0, y: 0, z: -10 });
@@ -291,6 +329,28 @@ const S = {
     for (let t = 0; t < Number(opt.ticks ?? 2400); t += 10) { step(10); sample(1); if (!alive(1).filter((e) => !W.isDowned(e)).length || !alive(2).filter((e) => !W.isDowned(e)).length) break; }
     const up = (f) => alive(f).filter((e) => !W.isDowned(e)).reduce((t, e) => t + e.hp / e.maxHp, 0);
     report({ ticks: SIM.tick - t0, str1: +up(1).toFixed(2), str2: +up(2).toFixed(2), left1: alive(1).filter((e) => !W.isDowned(e)).length, left2: alive(2).filter((e) => !W.isDowned(e)).length, shots1: shotStats(1), shots2: shotStats(2), bunchAvg: +(M.bunchPairs / M.bunchSamples).toFixed(2), notes: M.notes });
+  },
+
+  // steady load for profiling: N v N, damage switched off (Realism slider 0), so the same fight goes on for the whole run
+  async perf() {
+    const N = Number(opt.n ?? 40);
+    SIM.bounds = { x0: -200, x1: 200, z0: -200, z1: 200, y0: -10, y1: 60 };
+    SIM.dynWorld.set("war:set_r_dmg", 0);
+    building(-6, -6);
+    spawnPlayer({ x: 0, y: 0, z: -100 });
+    const W8 = ["rifle", "smg", "semi", "mg", "rifle", "semi"];
+    for (let i = 0; i < N; i++) soldier(1, { x: (i % 10) * 2.5 - 12 + 0.5, y: 0, z: -45 - Math.floor(i / 10) * 2.5 + 0.5 }, W8[i % 6], 1 + (i % 4));
+    for (let i = 0; i < N; i++) soldier(2, { x: (i % 10) * 2.5 - 12 + 0.5, y: 0, z: 45 + Math.floor(i / 10) * 2.5 + 0.5 }, W8[i % 6], 1 + (i % 4));
+    W.setRelPair(1, 2, "1", false);
+    step(20);
+    await order(1, { x: 0, y: 0, z: 30 });
+    await order(2, { x: 0, y: 0, z: -30 });
+    step(200);
+    const t0 = performance.now(), ticks = Number(opt.ticks ?? 600);
+    timing.clear();
+    step(ticks, true);
+    const mainMs = [...timing].filter(([k]) => k.includes("main.js")).reduce((t, [, v]) => t + v, 0) / ticks;
+    report({ n: N, mainMsPerTick: +mainMs.toFixed(2), shots: SIM.shots.length });
   },
 
   // open-field battle, N v N: script cost per tick (the lag)

@@ -2490,23 +2490,38 @@ function refreshCombatants() {
     let dim;
     try { dim = world.getDimension(did); } catch { continue; }
     const list = [];
-    const add = (arr) => { for (const o of arr) { try { const l = o.location; list.push({ e: o, x: l.x, y: l.y, z: l.z }); } catch {} } };
+    const add = (arr) => { for (const o of arr) { try { const l = o.location, ty = o.typeId; list.push({ e: o, id: o.id, type: ty, x: l.x, y: l.y, z: l.z, f: ty === SOLDIER || ty === HOUND || ty === "minecraft:player" ? factionOf(o) : 0 }); } catch {} } };
     try { add(dim.getEntities({ type: SOLDIER })); } catch {}
     try { add(dim.getEntities({ type: HOUND })); } catch {}
     try { add(dim.getPlayers()); } catch {}
     for (const t of VEHICLES) { try { add(dim.getEntities({ type: t })); } catch {} }
     try { add(dim.getEntities({ families: ["monster"] })); } catch {}
+    // v5.7: a 32-block grid, so "who is near me" looks at the nearby cells only
+    const grid = new Map();
+    for (const c of list) { const k = Math.floor(c.x / 32) * 100000 + Math.floor(c.z / 32); let a = grid.get(k); if (!a) { a = []; grid.set(k, a); } a.push(c); }
+    list.grid = grid;
     next.set(`minecraft:${did}`, list); next.set(did, list);
   }
   combatants = next;
 }
+// snapshot entries within r (positions up to half a second old), each with .dd = its distance
+function nearSnap(dimId, loc, r) {
+  const list = combatants.get(dimId);
+  const out = [];
+  if (!list) return out;
+  const g = list.grid, r2 = r * r;
+  const cx0 = Math.floor((loc.x - r) / 32), cx1 = Math.floor((loc.x + r) / 32), cz0 = Math.floor((loc.z - r) / 32), cz1 = Math.floor((loc.z + r) / 32);
+  for (let cx = cx0; cx <= cx1; cx++) for (let cz = cz0; cz <= cz1; cz++) {
+    const a = g?.get(cx * 100000 + cz);
+    if (!a) continue;
+    for (const c of a) { const dx = c.x - loc.x, dy = c.y - loc.y, dz = c.z - loc.z, q = dx * dx + dy * dy + dz * dz; if (q <= r2) { c.dd = Math.sqrt(q); out.push(c); } }
+  }
+  return out;
+}
 system.runInterval(refreshCombatants, 10);
 function nearbyCombatants(dimId, loc, r) {
   const out = [];
-  for (const c of combatants.get(dimId) ?? []) {
-    const dx = c.x - loc.x, dy = c.y - loc.y, dz = c.z - loc.z;
-    if (dx * dx + dy * dy + dz * dz <= r * r && c.e.isValid) out.push(c.e);
-  }
+  for (const c of nearSnap(dimId, loc, r)) if (c.e.isValid) out.push(c.e);
   return out;
 }
 
@@ -2568,18 +2583,21 @@ const GUN_SPEC = {
 const gunState = new Map(); // soldier id -> { target, ammo, next, seen, check, step }
 function chest(o) { const l = o.location; const ps = o.typeId === SOLDIER ? (poseOf.get(o.id) ?? 0) : 0; return { x: l.x, y: l.y + (o.typeId === "war:tank" ? 1.0 : o.typeId === HOUND ? 0.5 : ps === 2 ? 0.35 : ps === 1 ? 0.85 : 1.2), z: l.z }; }
 const LOS = new Map(); let losThisTick = 0;
-system.runInterval(() => { losThisTick = 0; if (LOS.size > 20000) LOS.clear(); }, 1);
+system.runInterval(() => { losThisTick = 0; if (LOS.size > 8000) LOS.clear(); }, 1);
 function clearShot(dim, from, to) {
   const dx = to.x - from.x, dy = to.y - from.y, dz = to.z - from.z, l = Math.hypot(dx, dy, dz);
   if (l < 0.5) return true;
-  const k = `${Math.round(from.x)},${Math.round(from.y * 2)},${Math.round(from.z)}>${Math.round(to.x)},${Math.round(to.y * 2)},${Math.round(to.z)}`;
-  const c = LOS.get(k), now = tick();
+  // v5.7: two number keys (each end rounded to a block, half-blocks in height) in nested maps instead of one long text key
+  const ka = bkey("", Math.round(from.x), Math.round(from.y * 2), Math.round(from.z)), kb = bkey("", Math.round(to.x), Math.round(to.y * 2), Math.round(to.z));
+  let inner = LOS.get(ka);
+  if (!inner) { inner = new Map(); LOS.set(ka, inner); }
+  const c = inner.get(kb), now = tick();
   if (c && now - c.t < 10) return c.v;
   if (losThisTick > 350) return c ? c.v : false;                      // over the per-tick cap: reuse what we knew
   losThisTick++;
   let v = false;
   try { v = !dim.getBlockFromRay(from, { x: dx / l, y: dy / l, z: dz / l }, { maxDistance: l - 0.3, includeLiquidBlocks: false, includePassableBlocks: false }); } catch {}
-  LOS.set(k, { v, t: now });
+  inner.set(kb, { v, t: now });
   return v;
 }
 function vehicleFaction(v) { for (let i = 1; i <= NF; i++) if (v.hasTag(`war_f${i}`)) return i; return 0; }
@@ -2679,7 +2697,16 @@ function muzzleOf(e, t) {
 // v5.4: the part of him that can be hit from here: his chest, or else his head (in a window, over a wall, at a
 // parapet). A defender a step back from a window shows only his head; before, the attackers never fired back at him.
 const headOf = (t) => { const c = chest(t); return { x: c.x, y: c.y + 0.4, z: c.z }; };
+const aimMemo = new Map(); // "shooter>target" -> { t, v }  (v5.7: one aim check per pair per 3 ticks)
 function aimAt(e, t) {
+  const mk = `${e.id}>${t.id}`, c = aimMemo.get(mk), now = tick();
+  if (c && now - c.t < 3) return c.v;
+  const v = aimAtRaw(e, t);
+  aimMemo.set(mk, { t: now, v });
+  if (aimMemo.size > 4000) aimMemo.clear();
+  return v;
+}
+function aimAtRaw(e, t) {
   try {
     const m = muzzleOf(e, t), c = chest(t);
     if (clearShot(e.dimension, m, c) && clearShot(e.dimension, m, { x: c.x, y: c.y + 0.35, z: c.z })) return c;
@@ -2791,10 +2818,14 @@ function gunTick(e, now) {
 system.runInterval(() => {
   const now = tick();
   for (const e of allOf(SOLDIER)) {
-    try { if (GUNS.includes(String(gdp(e, "war:weapon") ?? "")) || ridingNest(e)) gunTick(e, now); } catch {}
+    try {
+      const st = gunState.get(e.id);
+      if (st && !st.target && !(st.supp && st.supp.until > now) && now < st.check && !(now - st.seen < 42)) continue;   // v5.7: nothing to aim at until his next look
+      if (GUNS.includes(String(gdp(e, "war:weapon") ?? "")) || ridingNest(e)) gunTick(e, now);
+    } catch {}
   }
   if (now % 200 === 0) for (const id of [...gunState.keys()]) if (!world.getEntity(id)) gunState.delete(id);
-}, 1);
+}, 2);   // v5.7: every other tick (no gun fires faster than that)
 world.afterEvents.entitySpawn.subscribe((ev) => { try { if (ev.entity.typeId === "war:blank") ev.entity.remove(); } catch {} });
 
 // ================================================================ Taking cover (experimental)
@@ -2938,6 +2969,14 @@ function reactionDelay(e, o, dd, now) {
   return t;
 }
 function attackedRecently(e, by, now, window = 100) { const h = hurtBy.get(e.id); return !!h && h.id === by.id && now - h.t < window; }
+const hpMemo = new Map(); // id -> { t, r }  (health share, re-read at most every half second)
+function hpRatio(o) {
+  const c = hpMemo.get(o.id), now = tick();
+  if (c && now - c.t < 10) return c.r;
+  let r = 1; try { const h = o.getComponent("minecraft:health"); if (h) r = h.currentValue / h.effectiveMax; } catch {}
+  hpMemo.set(o.id, { t: now, r }); if (hpMemo.size > 4000) hpMemo.clear();
+  return r;
+}
 const isMob = (o) => o.typeId !== SOLDIER && o.typeId !== HOUND && o.typeId !== "minecraft:player" && !VEHICLES.includes(o.typeId);
 function threatScore(e, d, o, dd, now) {
   let s = 100 - dd;                                              // closer = more dangerous
@@ -2964,8 +3003,7 @@ function threatScore(e, d, o, dd, now) {
       if (d.weapon === "sniper" && (od.weapon === "mg" || od.weapon === "at")) s += 20;
       const egs = gunState.get(o.id);
       if (egs && egs.ammo === (GUN_SPEC[od.weapon]?.mag ?? 1) && egs.next - now > 20) s += 8;  // caught reloading
-      const h = o.getComponent("minecraft:health");
-      if (h && h.currentValue / h.effectiveMax < 0.35) s += 15;  // finish off the wounded
+      if (hpRatio(o) < 0.35) s += 15;  // finish off the wounded
     } catch {}
   }
   if (dd < 4) s += 60;                                           // something right on top of him overrides focus fire
@@ -2977,9 +3015,16 @@ function perceive(e, now) {
   if (d.surr || d.div === "medic") { s.threat = undefined; s.alert = "calm"; return; }
   const base = sightOf(d);
   const eye = headLoc(e);
-  const all = nearbyCombatants(e.dimension.id, e.location, base)
-    .filter((o) => isTargetFor(e, d, o))
-    .map((o) => ({ o, dd: dist(o.location, e.location) }));
+  // v5.7: cheap faction screen on the shared snapshot first; the full target check only for the plausible ones
+  const all = [];
+  for (const c of nearSnap(e.dimension.id, e.location, base)) {
+    if (c.id === e.id) continue;
+    if (c.type === SOLDIER || c.type === HOUND || c.type === "minecraft:player") { if (!isHostile(d.faction, c.f) && !isProvoker(d.faction, c.e, now)) continue; }
+    else if (VEHICLES.includes(c.type)) { if (d.weapon !== "at") continue; }
+    else if (c.dd > 20) continue;
+    if (!c.e.isValid || !isTargetFor(e, d, c.e)) continue;
+    all.push({ o: c.e, dd: c.dd });
+  }
   const soldiersAround = all.some((c) => !isMob(c.o));
   const cands = all
     // mid-battle, distant mobs are ignored unless they're on top of him or attacking
@@ -3187,10 +3232,33 @@ function saveMarches() {
 const spacingSetting = () => Math.max(1, Math.min(2, Number(setting("spacing", 1.5))));
 const HAZARD = ["lava", "fire", "magma", "cactus", "sweet_berry", "powder_snow", "campfire"];
 const CLIMB = ["ladder", "vine", "scaffolding"];
-const isClimb = (b) => !!b && CLIMB.some((k) => b.typeId.includes(k));
-const isWoodDoor = (b) => !!b && b.typeId.includes("door") && !b.typeId.includes("iron") && !b.typeId.includes("trapdoor");
+// v5.7: what a block type means for walking is worked out once per type and remembered (these checks run hundreds of
+// thousands of times in a battle; scanning name lists every time was the add-on's biggest CPU cost)
+const TYPE_INFO = new Map();
+function TI(id) {
+  let t = TYPE_INFO.get(id);
+  if (t) return t;
+  const door = id.includes("door"), trap = id.includes("trapdoor"), iron = id.includes("iron");
+  t = {
+    woodDoor: door && !iron && !trap,
+    climb: CLIMB.some((k) => id.includes(k)),
+    plantish: PASSABLE.some((q) => id.includes(q)) && !id.includes("grass_block"),
+    ironDoor: id.includes("iron_door") && !trap,
+    plate: id.includes("pressure_plate"),
+    openableId: (trap && !iron) || id.includes("fence_gate") || (door && !iron),
+    openable: (trap && !iron) || id.includes("fence_gate"),
+    tall: id.includes("fence") || /_wall$/.test(id) || id.endsWith(":cobblestone_wall"),
+    trap, leaves: id.includes("leaves"), hazard: HAZARD.some((h) => id.includes(h)), water: id.includes("water"),
+    stairs: id.includes("stairs") || id.includes("slab"),
+  };
+  t.pass = t.woodDoor || t.plantish;
+  TYPE_INFO.set(id, t);
+  return t;
+}
+const isClimb = (b) => !!b && TI(b.typeId).climb;
+const isWoodDoor = (b) => !!b && TI(b.typeId).woodDoor;
 const PASSABLE = ["ladder", "vine", "scaffolding", "short_grass", "tall_grass", "fern", "flower", "dandelion", "poppy", "tulip", "orchid", "allium", "bluet", "daisy", "cornflower", "lily", "bush", "sapling", "snow_layer", "torch", "carpet", "vine", "button", "lever", "rail", "redstone_wire", "pressure_plate", "sign", "dead_bush", "seagrass"];
-const passable = (b) => !!b && (b.isAir || isWoodDoor(b) || (PASSABLE.some((p) => b.typeId.includes(p)) && !b.typeId.includes("grass_block")));
+const passable = (b) => !!b && (b.isAir || TI(b.typeId).pass);
 // a spot a soldier can stand on, searched up and down from refY; undefined if none (or not loaded)
 function walkableNear(dim, x, z, refY) {
   const bx = Math.floor(x) + 0.5, bz = Math.floor(z) + 0.5;
@@ -3798,8 +3866,15 @@ const TERRAIN = new Map();            // "dim|x|y|z" -> { typeId, isAir, isLiqui
 let freshReads = 0, readBudget = 1500;
 system.runInterval(() => { freshReads = 0; }, 1);
 system.runInterval(() => { const now = tick(); if (TERRAIN.size > 150000) TERRAIN.clear(); else for (const [k, v] of TERRAIN) if (now - v.t > 600) TERRAIN.delete(k); }, 600);
+// v5.7: terrain memory keys are numbers (no text built per lookup); far-out coordinates fall back to text
+const dimIx = (id) => id.endsWith("nether") ? 1 : id.endsWith("the_end") ? 2 : 0;
+function bkey(dimId, x, y, z) {
+  x = Math.floor(x); y = Math.floor(y); z = Math.floor(z);
+  if (x < -1048576 || x >= 1048576 || z < -1048576 || z >= 1048576 || y < -64 || y >= 448) return `${dimId}|${x}|${y}|${z}`;
+  return (((x + 1048576) * 2097152 + (z + 1048576)) * 512 + (y + 64)) * 3 + dimIx(dimId);
+}
 function tBlock(dim, x, y, z) {
-  const key = `${dim.id}|${Math.floor(x)}|${Math.floor(y)}|${Math.floor(z)}`;
+  const key = bkey(dim.id, x, y, z);
   const c = TERRAIN.get(key);
   if (c) return c;
   freshReads++;
@@ -3812,7 +3887,7 @@ function tBlock(dim, x, y, z) {
 }
 const SKY = new Map();
 function tSky(dim, x, y, z) {
-  const key = `${dim.id}|${Math.floor(x)}|${Math.floor(y)}|${Math.floor(z)}`;
+  const key = bkey(dim.id, x, y, z);
   const c = SKY.get(key);
   if (c !== undefined) return c;
   freshReads++;
@@ -3821,16 +3896,16 @@ function tSky(dim, x, y, z) {
   SKY.set(key, v);
   return v;
 }
-const isIronDoor = (b) => !!b && b.typeId.includes("iron_door") && !b.typeId.includes("trapdoor");
-const isPlate = (b) => !!b && b.typeId.includes("pressure_plate");
+const isIronDoor = (b) => !!b && TI(b.typeId).ironDoor;
+const isPlate = (b) => !!b && TI(b.typeId).plate;
 // v5.3: blocks a soldier can open himself on the way (wooden trapdoors, fence gates); the route follower opens them
-const OPENABLE_ID = (id) => (id.includes("trapdoor") && !id.includes("iron")) || id.includes("fence_gate") || (id.includes("door") && !id.includes("iron"));
-const isOpenable = (b) => !!b && ((b.typeId.includes("trapdoor") && !b.typeId.includes("iron")) || b.typeId.includes("fence_gate"));
+const OPENABLE_ID = (id) => TI(id).openableId;
+const isOpenable = (b) => !!b && TI(b.typeId).openable;
 // fences, walls and fence gates are 1.5 high: nobody steps up onto them, so they are never a floor
-const isTall = (b) => { if (!b) return false; const id = b.typeId; return id.includes("fence") || /_wall$/.test(id) || id.endsWith(":cobblestone_wall"); };
+const isTall = (b) => !!b && TI(b.typeId).tall;
 const pathable = (b) => passable(b) || isOpenable(b);
 // a real floor: solid under the feet (a ladder counts: he can stand on its top rung); not a plant, torch, open trapdoor or fence
-const isFloor = (b) => !!b && !b.isAir && !b.isLiquid && !isTall(b) && !(b.typeId.includes("trapdoor") && b.open) && (!passable(b) || isClimb(b)) && !b.typeId.includes("leaves") && !HAZARD.some((h) => b.typeId.includes(h));
+const isFloor = (b) => { if (!b || b.isAir || b.isLiquid) return false; const t = TI(b.typeId); return !t.tall && !(t.trap && b.open) && (!t.pass || t.climb) && !t.leaves && !t.hazard; };
 const PLAN_BUDGET = 700;          // node expansions per tick, shared by all plans (a big search takes a few seconds)
 function cellAt(job, x, z, refY) {
   const key = job.step > 1 ? `${x},${z}` : `${x},${z},${Math.floor(refY)}`;
@@ -4392,18 +4467,39 @@ function spotNear(e, test, anchor, leash, maxR = 4) {
 }
 // ---- each gunner's decision (about twice a second, then he commits)
 // a quick walk check (same rules as the route planner, small area): can he get there on foot from here?
-function localReach(dim, from, to) {
+const STAND = new Map();
+system.runInterval(() => { if (STAND.size > 60000) STAND.clear(); }, 200);
+const reachMemo = new Map(); // "from cell>to cell" -> { v, t }  (v5.7: the same question is asked every thought)
+function localReach(dim, from, to, maxNodes = 250) {
   if (Math.abs(to.y - from.y) > 3) return false;
   if (flat(from, to) < 1.5) return true;
+  const mk = `${dim.id[10] ?? ""}${Math.floor(from.x)},${Math.floor(from.y)},${Math.floor(from.z)}>${Math.floor(to.x)},${Math.floor(to.y)},${Math.floor(to.z)}`;
+  const c = reachMemo.get(mk), now = tick();
+  if (c && now - c.t < 100) return c.v;
+  const v = localReachBFS(dim, from, to, maxNodes);
+  reachMemo.set(mk, { v, t: now });
+  if (reachMemo.size > 6000) reachMemo.clear();
+  return v;
+}
+function localReachBFS(dim, from, to, maxNodes) {
   const sx = Math.floor(from.x), sz = Math.floor(from.z), tx = Math.floor(to.x), tz = Math.floor(to.z);
-  const stand = (x, y, z) => { try { const f = tBlock(dim, x + 0.5, y - 1, z + 0.5), ft = tBlock(dim, x + 0.5, y, z + 0.5), h = tBlock(dim, x + 0.5, y + 1, z + 0.5);
-    return !!f && !!ft && !!h && !f.isAir && !f.isLiquid && passable(ft) && passable(h); } catch { return false; } };
-  const seen = new Set([`${sx},${Math.floor(from.y)},${sz}`]), q = [[sx, Math.floor(from.y), sz]];
-  for (let i = 0; i < q.length && i < 400; i++) {
+  const did = dim.id, now = tick();
+  const stand = (x, y, z) => {                                   // v5.7: "can stand here", shared by every search (~10 s)
+    const k = bkey(did, x, y, z), c = STAND.get(k);
+    if (c !== undefined && now - c.t < 200) return c.v;
+    let v = false;
+    try { const f = tBlock(dim, x + 0.5, y - 1, z + 0.5), ft = tBlock(dim, x + 0.5, y, z + 0.5), h = tBlock(dim, x + 0.5, y + 1, z + 0.5);
+      v = !!f && !!ft && !!h && !f.isAir && !f.isLiquid && passable(ft) && passable(h); } catch {}
+    STAND.set(k, { v, t: now });
+    return v;
+  };
+  const sy = Math.floor(from.y), rk = (x, y, z) => ((x - sx + 32) * 64 + (z - sz + 32)) * 1024 + (y - sy + 512);
+  const seen = new Set([rk(sx, sy, sz)]), q = [[sx, sy, sz]];
+  for (let i = 0; i < q.length && i < maxNodes; i++) {
     const [x, y, z] = q[i];
     if (Math.abs(x - tx) <= 1 && Math.abs(z - tz) <= 1 && Math.abs(y - to.y) <= 1.5) return true;
     for (const [dx, dz] of [[1, 0], [-1, 0], [0, 1], [0, -1]]) for (const dy of [0, 1, -1, -2, -3]) {
-      const nx = x + dx, nz = z + dz, ny = y + dy, k = `${nx},${ny},${nz}`;
+      const nx = x + dx, nz = z + dz, ny = y + dy, k = rk(nx, ny, nz);
       if (seen.has(k) || Math.abs(nx - sx) > 14 || Math.abs(nz - sz) > 14) continue;
       if (!stand(nx, ny, nz)) continue;
       if (dy === 1) { try { if (!passable(tBlock(dim, x + 0.5, y + 2, z + 0.5))) continue; } catch { continue; } }
@@ -4446,7 +4542,10 @@ function brainMove(e, d, now, melee, anchor, leash) {
   let B = brain.get(e.id);
   if (!B) { B = { act: "", decT: -999 }; brain.set(e.id, B); }
   const go = (spot, urgent = true) => { if (!spot) return undefined;
-    if (!localReach(e.dimension, e.location, spot)) { B.act = ""; return undefined; }   /* not reachable on foot from here: skip it */
+    if (!(B.reachSpot && flat(B.reachSpot, spot) < 0.6 && Math.abs(B.reachSpot.y - spot.y) < 0.6)) {   /* (checked once per spot, not every thought) */
+      if (!localReach(e.dimension, e.location, spot)) { B.act = ""; return undefined; }   /* not reachable on foot from here: skip it */
+      B.reachSpot = { x: spot.x, y: spot.y, z: spot.z };
+    }
     if (isIndoors(e) || onStairs(e.dimension, e.location)) return travel(e, spot, "spot", now, urgent);   // v5.5: indoors, a real route (no getting lost at doorways)
     if (!B.slot || !B.spot || flat(B.spot, spot) > 1.5 || !marker(B.slot)) { B.slot = myMarker(e, spot); B.spot = spot; } return B.slot ? { g: "g_wp", slot: B.slot, t: "t_mid", urgent } : undefined; };
   const known = [...S.known.values()];
@@ -4499,7 +4598,7 @@ function brainMove(e, d, now, melee, anchor, leash) {
     opts.sort((a, b) => b[1] - a[1]);
     B.act = opts[0][0];
     B.spot = undefined;
-    const ts = (o) => tac ? tacSpot(e, d, S, { anchor, leash, ...o }, now) : undefined;
+    const ts = (o) => { const r = tac ? tacSpot(e, d, S, { anchor, leash, ...o }, now) : undefined; if (r?.spot) B.reachSpot = r.spot; return r; };   // (its spot is known reachable)
     if (B.act === "cover") {
       const r = ts({ rMin: 1.5, rMax: 6, wCover: 1.6, wShot: 0.7, margin: 0.3 });     // v5.6: real cover that can still fire back
       B.target = r ? r.spot : spotNear(e, (w) => !t || !clearShot(e.dimension, chest(t), { x: w.x, y: w.y + 0.5, z: w.z }), anchor, leash);
@@ -5520,7 +5619,7 @@ function openAt(dim, loc) {
     if (!b || !OPENABLE_ID(b.typeId) || b.typeId.includes("iron")) return;
     if (b.permutation.getState("open_bit")) return;
     b.setPermutation(b.permutation.withState("open_bit", true));
-    TERRAIN.delete(`${dim.id}|${p.x}|${p.y}|${p.z}`);
+    TERRAIN.delete(bkey(dim.id, p.x, p.y, p.z));
     if (!opened.some((o) => o.dim === dim.id && o.loc.x === p.x && o.loc.y === p.y && o.loc.z === p.z)) opened.push({ dim: dim.id, loc: p, at: tick() + 60 });
   } catch {}
 }
@@ -5533,7 +5632,7 @@ system.runInterval(() => {
       if (nearbyCombatants(o.dim, { x: o.loc.x + 0.5, y: o.loc.y, z: o.loc.z + 0.5 }, 2.2).some((c) => c.typeId === SOLDIER || c.typeId === "minecraft:player")) { o.at = now + 40; continue; }
       const b = world.getDimension(o.dim).getBlock(o.loc);
       if (b && OPENABLE_ID(b.typeId)) b.setPermutation(b.permutation.withState("open_bit", false));
-      TERRAIN.delete(`${o.dim}|${o.loc.x}|${o.loc.y}|${o.loc.z}`);
+      TERRAIN.delete(bkey(o.dim, o.loc.x, o.loc.y, o.loc.z));
       opened.splice(i, 1);
     } catch { if (now - o.at > 6000) opened.splice(i, 1); }
   }
@@ -6026,15 +6125,15 @@ system.runInterval(() => {
       const pts = g.pts;
       if (g.k >= pts.length) { gliders.delete(id); continue; }
       const b = pts[g.k], a = pts[Math.max(0, g.k - 1)];
-      if (b.climb) { startClimbIfNeeded(e); gliders.delete(id); continue; }   // a ladder: the climber takes him
       const p = e.location;
       const dx = b.x - p.x, dz = b.z - p.z, L = Math.hypot(dx, dz);
+      if (b.climb && L < 0.35) { beginClimb(e, pts, g.k); gliders.delete(id); continue; }   // at the ladder: the climber takes him (v5.7: walked right up to it first)
       if (L < 2.5) { openAt(e.dimension, b); openAt(e.dimension, { x: b.x, y: b.y + 1, z: b.z }); }
       const stp = Math.min(GLIDE_SPEED, L);
       const nx = L > 0.001 ? p.x + (dx / L) * stp : b.x, nz = L > 0.001 ? p.z + (dz / L) * stp : b.z;
       const seg = Math.hypot(b.x - a.x, b.z - a.z) || 1;
       const f = 1 - Math.hypot(b.x - nx, b.z - nz) / seg;
-      const y = b.y > a.y ? (f >= 0.3 ? b.y : a.y) : b.y < a.y ? (f >= 0.6 ? b.y : a.y) : b.y;
+      const y = b.climb ? p.y : b.y > a.y ? (f >= 0.3 ? b.y : a.y) : b.y < a.y ? (f >= 0.6 ? b.y : a.y) : b.y;   // (to a ladder: on his own level)
       const nb = pts[Math.min(pts.length - 1, g.k + 1)];
       e.teleport({ x: nx, y, z: nz }, { facingLocation: { x: nb.x, y: y + 1.5, z: nb.z } });
       if (Math.hypot(b.x - nx, b.z - nz) < 0.05) g.k++;
@@ -6051,7 +6150,7 @@ system.runInterval(() => {
 // fire back, to peek, and to pick firing positions when holding.
 const TW = { cover: 2.0, shot: 2.0, prog: 1.6, height: 0.2, crowd: 1.6, dist: 0.06 };
 let tacBudget = 0;
-system.runInterval(() => { tacBudget = 8; }, 1);
+system.runInterval(() => { tacBudget = 3; }, 1);
 function tacSpot(e, d, S, o, now) {
   if (tacBudget <= 0 || !S?.known?.size) return undefined;
   tacBudget--;
@@ -6062,7 +6161,7 @@ function tacSpot(e, d, S, o, now) {
   const range = engageRange(e, d, undefined, now) || 40, f = d.faction;
   const center = o.center ?? here;
   const cands = [{ x: here.x, y: Math.floor(here.y + 0.01), z: here.z, r: 0 }];
-  for (let r = o.rMin; r <= o.rMax + 0.01; r += 1.5) for (let k = 0; k < 8; k++) {
+  for (let r = o.rMin; r <= o.rMax + 0.01; r += 2) for (let k = 0; k < 8; k++) {
     const a = (k / 8) * Math.PI * 2 + r * 0.9;
     const w = walkableNear(dim, center.x + Math.cos(a) * r, center.z + Math.sin(a) * r, here.y);
     if (!w || Math.abs(w.y - here.y) > 1.5) continue;
@@ -6072,7 +6171,7 @@ function tacSpot(e, d, S, o, now) {
   const mates = nearbyCombatants(dim.id, center, o.rMax + 5).filter((m) => m.typeId === SOLDIER && m.id !== e.id && !downed.has(m.id) && Number(P(m, "war:faction") ?? 0) === f);
   const scored = [];
   for (const c of cands) {
-    if (c.r > 0 && (claimedByOther(c, e.id, now) || onWayThrough(dim, c))) continue;
+    if (c.r > 0 && claimedByOther(c, e.id, now)) continue;
     let s = -TW.dist * c.r + TW.height * Math.max(-2, Math.min(3, c.y - here.y));
     if (o.toward) {
       const g = flat(here, o.toward) - flat(c, o.toward);
@@ -6085,7 +6184,7 @@ function tacSpot(e, d, S, o, now) {
     scored.push(c);
   }
   scored.sort((a, b) => b.s - a.s);
-  const top = scored.slice(0, 6);
+  const top = scored.filter((c) => c.r === 0 || !onWayThrough(dim, c)).slice(0, 6);   // (doorway / stairs check only for the leaders)
   if (!top.includes(scored.find((c) => c.r === 0) ?? top[0])) { const h = scored.find((c) => c.r === 0); if (h) top.push(h); }   // always judge where he stands too
   let rays = 0;
   for (const c of top) {
@@ -6104,7 +6203,7 @@ function tacSpot(e, d, S, o, now) {
   for (const c of top) {
     if (c.r === 0) return { spot: undefined, stay: true, score: c.s, cover: c.cover, shot: c.shot };   // where he is is best: stay
     if (cur && c.s < cur.s + (o.margin ?? 0.4)) return { spot: undefined, stay: true, score: cur.s };   // not worth the move
-    if (localReach(dim, here, c)) { claimSpot(e, c, now); return { spot: { x: c.x, y: c.y, z: c.z }, score: c.s, cover: c.cover, shot: c.shot }; }
+    if (localReach(dim, here, c, 40 + Math.round(c.r * c.r * 1.6))) { claimSpot(e, c, now); return { spot: { x: c.x, y: c.y, z: c.z }, score: c.s, cover: c.cover, shot: c.shot, reach: true }; }
   }
   return undefined;
 }
@@ -6134,3 +6233,14 @@ WarAPI.lib = {
   shotAt, aimAt, canHit, clearShot, chest, headLoc, engageRange, tacSpot, freeSpot, spotNear, walkableNear, localReach, isIndoors, onStairs,
   tBlock, turnTo, push, radio, giveFunction, startMarch, nearestBlock, GUN_SPEC, EFFECTIVE, BW,
 };
+
+// the climb itself, from a route: up or down the run of ladder points starting at k, then onto the point after it
+function beginClimb(e, pts, k) {
+  const p = pts[k];
+  let j = k;
+  while (j + 1 < pts.length && pts[j + 1].climb && Math.hypot(pts[j + 1].x - p.x, pts[j + 1].z - p.z) < 0.6) j++;
+  const exit = pts[Math.min(pts.length - 1, j + 1)], toY = pts[j].y;
+  climbing.set(e.id, { x: Math.floor(p.x) + 0.5, z: Math.floor(p.z) + 0.5, toY, exit, t: tick() });
+  for (let yy = Math.min(e.location.y, toY) - 1; yy <= Math.max(e.location.y, toY) + 2; yy++) openAt(e.dimension, { x: p.x, y: yy, z: p.z });   // trapdoors in the shaft
+  note(e, "climbing the ladder");
+}

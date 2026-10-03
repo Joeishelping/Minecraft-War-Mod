@@ -35,7 +35,7 @@
       },
       "minecraft:physics": {
         "has_gravity": false,
-        "has_collision": true
+        "has_collision": false
       },
       "minecraft:pushable": {
         "is_pushable": false,
@@ -48,15 +48,6 @@
       "minecraft:fire_immune": {},
       "minecraft:movement": {
         "value": 0
-      },
-      "minecraft:movement.basic": {},
-      "minecraft:navigation.walk": {
-        "can_walk": false
-      },
-      "minecraft:breathable": {
-        "breathes_water": true,
-        "breathes_air": true,
-        "total_supply": 15
       },
       "minecraft:nameable": {
         "always_show": false

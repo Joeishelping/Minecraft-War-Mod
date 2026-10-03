@@ -20,7 +20,7 @@ Math.random = () => { rs ^= rs << 13; rs >>>= 0; rs ^= rs >>> 17; rs ^= rs << 5;
 // ---------------------------------------------------------------- blocks
 const PASS = ["short_grass", "tall_grass", "fern", "flower", "torch", "carpet", "pressure_plate", "ladder", "vine", "button", "sign", "rail"];
 const k3 = (x, y, z) => `${x},${y},${z}`;
-export function setBlock(x, y, z, id) { if (id === "air" || id === "minecraft:air") SIM.blocks.delete(k3(x, y, z)); else SIM.blocks.set(k3(x, y, z), id.includes(":") ? id : `minecraft:${id}`); }
+export function setBlock(x, y, z, id) { if ((id === "air" || id === "minecraft:air") && y >= SIM.groundY) SIM.blocks.delete(k3(x, y, z)); else SIM.blocks.set(k3(x, y, z), id.includes(":") ? id : `minecraft:${id}`); }
 export function fill(x0, y0, z0, x1, y1, z1, id) {
   for (let x = Math.min(x0, x1); x <= Math.max(x0, x1); x++) for (let y = Math.min(y0, y1); y <= Math.max(y0, y1); y++) for (let z = Math.min(z0, z1); z <= Math.max(z0, z1); z++) setBlock(x, y, z, id);
 }
@@ -59,7 +59,7 @@ class Block {
 }
 function skyAt(x, y, z) {
   x = Math.floor(x); z = Math.floor(z);
-  for (let yy = Math.floor(y); yy <= SIM.bounds.y1; yy++) if (SIM.blocks.has(k3(x, yy, z)) && rayStops(x, yy, z) && !idAt(x, yy, z).includes("leaves")) return 0;
+  for (let yy = Math.floor(y); yy <= SIM.bounds.y1; yy++) if ((SIM.blocks.has(k3(x, yy, z)) || yy < SIM.groundY) && rayStops(x, yy, z) && !idAt(x, yy, z).includes("leaves")) return 0;
   return 15;
 }
 
