@@ -3813,6 +3813,369 @@
           "volume": 1.0
         }
       ]
+    },
+    "war.voice.spanish.under_fire": {
+      "category": "hostile",
+      "min_distance": 6.0,
+      "max_distance": 32.0,
+      "sounds": [
+        {
+          "name": "sounds/war_voice/spanish/under_fire",
+          "volume": 1.0
+        }
+      ]
+    },
+    "war.voice.spanish.idle_quiet": {
+      "category": "hostile",
+      "min_distance": 6.0,
+      "max_distance": 32.0,
+      "sounds": [
+        {
+          "name": "sounds/war_voice/spanish/idle_quiet",
+          "volume": 1.0
+        }
+      ]
+    },
+    "war.voice.spanish.idle_sharp": {
+      "category": "hostile",
+      "min_distance": 6.0,
+      "max_distance": 32.0,
+      "sounds": [
+        {
+          "name": "sounds/war_voice/spanish/idle_sharp",
+          "volume": 1.0
+        }
+      ]
+    },
+    "war.voice.spanish.idle_smoke": {
+      "category": "hostile",
+      "min_distance": 6.0,
+      "max_distance": 32.0,
+      "sounds": [
+        {
+          "name": "sounds/war_voice/spanish/idle_smoke",
+          "volume": 1.0
+        }
+      ]
+    },
+    "war.voice.spanish.idle_done": {
+      "category": "hostile",
+      "min_distance": 6.0,
+      "max_distance": 32.0,
+      "sounds": [
+        {
+          "name": "sounds/war_voice/spanish/idle_done",
+          "volume": 1.0
+        }
+      ]
+    },
+    "war.voice.spanish.idle_legs": {
+      "category": "hostile",
+      "min_distance": 6.0,
+      "max_distance": 32.0,
+      "sounds": [
+        {
+          "name": "sounds/war_voice/spanish/idle_legs",
+          "volume": 1.0
+        }
+      ]
+    },
+    "war.voice.spanish.medic": {
+      "category": "hostile",
+      "min_distance": 6.0,
+      "max_distance": 32.0,
+      "sounds": [
+        {
+          "name": "sounds/war_voice/spanish/medic",
+          "volume": 1.0
+        }
+      ]
+    },
+    "war.voice.spanish.thanks": {
+      "category": "hostile",
+      "min_distance": 6.0,
+      "max_distance": 32.0,
+      "sounds": [
+        {
+          "name": "sounds/war_voice/spanish/thanks",
+          "volume": 1.0
+        }
+      ]
+    },
+    "war.voice.spanish.surrender": {
+      "category": "hostile",
+      "min_distance": 6.0,
+      "max_distance": 32.0,
+      "sounds": [
+        {
+          "name": "sounds/war_voice/spanish/surrender",
+          "volume": 1.0
+        }
+      ]
+    },
+    "war.voice.spanish.reloading": {
+      "category": "hostile",
+      "min_distance": 6.0,
+      "max_distance": 32.0,
+      "sounds": [
+        {
+          "name": "sounds/war_voice/spanish/reloading",
+          "volume": 1.0
+        }
+      ]
+    },
+    "war.voice.spanish.grenade": {
+      "category": "hostile",
+      "min_distance": 6.0,
+      "max_distance": 32.0,
+      "sounds": [
+        {
+          "name": "sounds/war_voice/spanish/grenade",
+          "volume": 1.0
+        }
+      ]
+    },
+    "war.voice.german.under_fire": {
+      "category": "hostile",
+      "min_distance": 6.0,
+      "max_distance": 32.0,
+      "sounds": [
+        {
+          "name": "sounds/war_voice/german/under_fire",
+          "volume": 1.0
+        }
+      ]
+    },
+    "war.voice.german.idle_quiet": {
+      "category": "hostile",
+      "min_distance": 6.0,
+      "max_distance": 32.0,
+      "sounds": [
+        {
+          "name": "sounds/war_voice/german/idle_quiet",
+          "volume": 1.0
+        }
+      ]
+    },
+    "war.voice.german.idle_sharp": {
+      "category": "hostile",
+      "min_distance": 6.0,
+      "max_distance": 32.0,
+      "sounds": [
+        {
+          "name": "sounds/war_voice/german/idle_sharp",
+          "volume": 1.0
+        }
+      ]
+    },
+    "war.voice.german.idle_smoke": {
+      "category": "hostile",
+      "min_distance": 6.0,
+      "max_distance": 32.0,
+      "sounds": [
+        {
+          "name": "sounds/war_voice/german/idle_smoke",
+          "volume": 1.0
+        }
+      ]
+    },
+    "war.voice.german.idle_done": {
+      "category": "hostile",
+      "min_distance": 6.0,
+      "max_distance": 32.0,
+      "sounds": [
+        {
+          "name": "sounds/war_voice/german/idle_done",
+          "volume": 1.0
+        }
+      ]
+    },
+    "war.voice.german.idle_legs": {
+      "category": "hostile",
+      "min_distance": 6.0,
+      "max_distance": 32.0,
+      "sounds": [
+        {
+          "name": "sounds/war_voice/german/idle_legs",
+          "volume": 1.0
+        }
+      ]
+    },
+    "war.voice.german.medic": {
+      "category": "hostile",
+      "min_distance": 6.0,
+      "max_distance": 32.0,
+      "sounds": [
+        {
+          "name": "sounds/war_voice/german/medic",
+          "volume": 1.0
+        }
+      ]
+    },
+    "war.voice.german.thanks": {
+      "category": "hostile",
+      "min_distance": 6.0,
+      "max_distance": 32.0,
+      "sounds": [
+        {
+          "name": "sounds/war_voice/german/thanks",
+          "volume": 1.0
+        }
+      ]
+    },
+    "war.voice.german.surrender": {
+      "category": "hostile",
+      "min_distance": 6.0,
+      "max_distance": 32.0,
+      "sounds": [
+        {
+          "name": "sounds/war_voice/german/surrender",
+          "volume": 1.0
+        }
+      ]
+    },
+    "war.voice.german.reloading": {
+      "category": "hostile",
+      "min_distance": 6.0,
+      "max_distance": 32.0,
+      "sounds": [
+        {
+          "name": "sounds/war_voice/german/reloading",
+          "volume": 1.0
+        }
+      ]
+    },
+    "war.voice.german.grenade": {
+      "category": "hostile",
+      "min_distance": 6.0,
+      "max_distance": 32.0,
+      "sounds": [
+        {
+          "name": "sounds/war_voice/german/grenade",
+          "volume": 1.0
+        }
+      ]
+    },
+    "war.voice.aave.under_fire": {
+      "category": "hostile",
+      "min_distance": 6.0,
+      "max_distance": 32.0,
+      "sounds": [
+        {
+          "name": "sounds/war_voice/aave/under_fire",
+          "volume": 1.0
+        }
+      ]
+    },
+    "war.voice.aave.idle_quiet": {
+      "category": "hostile",
+      "min_distance": 6.0,
+      "max_distance": 32.0,
+      "sounds": [
+        {
+          "name": "sounds/war_voice/aave/idle_quiet",
+          "volume": 1.0
+        }
+      ]
+    },
+    "war.voice.aave.idle_sharp": {
+      "category": "hostile",
+      "min_distance": 6.0,
+      "max_distance": 32.0,
+      "sounds": [
+        {
+          "name": "sounds/war_voice/aave/idle_sharp",
+          "volume": 1.0
+        }
+      ]
+    },
+    "war.voice.aave.idle_smoke": {
+      "category": "hostile",
+      "min_distance": 6.0,
+      "max_distance": 32.0,
+      "sounds": [
+        {
+          "name": "sounds/war_voice/aave/idle_smoke",
+          "volume": 1.0
+        }
+      ]
+    },
+    "war.voice.aave.idle_done": {
+      "category": "hostile",
+      "min_distance": 6.0,
+      "max_distance": 32.0,
+      "sounds": [
+        {
+          "name": "sounds/war_voice/aave/idle_done",
+          "volume": 1.0
+        }
+      ]
+    },
+    "war.voice.aave.idle_legs": {
+      "category": "hostile",
+      "min_distance": 6.0,
+      "max_distance": 32.0,
+      "sounds": [
+        {
+          "name": "sounds/war_voice/aave/idle_legs",
+          "volume": 1.0
+        }
+      ]
+    },
+    "war.voice.aave.medic": {
+      "category": "hostile",
+      "min_distance": 6.0,
+      "max_distance": 32.0,
+      "sounds": [
+        {
+          "name": "sounds/war_voice/aave/medic",
+          "volume": 1.0
+        }
+      ]
+    },
+    "war.voice.aave.thanks": {
+      "category": "hostile",
+      "min_distance": 6.0,
+      "max_distance": 32.0,
+      "sounds": [
+        {
+          "name": "sounds/war_voice/aave/thanks",
+          "volume": 1.0
+        }
+      ]
+    },
+    "war.voice.aave.surrender": {
+      "category": "hostile",
+      "min_distance": 6.0,
+      "max_distance": 32.0,
+      "sounds": [
+        {
+          "name": "sounds/war_voice/aave/surrender",
+          "volume": 1.0
+        }
+      ]
+    },
+    "war.voice.aave.reloading": {
+      "category": "hostile",
+      "min_distance": 6.0,
+      "max_distance": 32.0,
+      "sounds": [
+        {
+          "name": "sounds/war_voice/aave/reloading",
+          "volume": 1.0
+        }
+      ]
+    },
+    "war.voice.aave.grenade": {
+      "category": "hostile",
+      "min_distance": 6.0,
+      "max_distance": 32.0,
+      "sounds": [
+        {
+          "name": "sounds/war_voice/aave/grenade",
+          "volume": 1.0
+        }
+      ]
     }
   }
 }

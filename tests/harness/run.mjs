@@ -16,7 +16,7 @@ const runDir = path.join(here, `run_${process.pid}`);
 fs.mkdirSync(runDir, { recursive: true });
 fs.cpSync(scriptsDir, runDir, { recursive: true });
 // expose the add-on's internals to the scenarios (appended to the copy only)
-const HOOK = ["warTable", "eggUse", "getRel", "relAt", "fires", "coalitions", "held", "holding", "stagger", "putDown", "allOf", "edgeFearT", "cleanupMenu", "purgeState", "gliders", "glideBan", "driveOn", "formMode", "tightAt", "combatLock", "routeProgress", "getLearned", "learned", "generals", "planRoute", "BW", "BW_F", "HEAD_K", "medicMove", "shakenMove", "waterExit", "followPersonal", "spreadMove", "combatMove", "engagement", "reinforceMove", "patrolSweep", "marker", "think", "routeOf", "lookahead", "queuedBehind", "climbing", "laneOf", "trackIdx", "giveOrder", "startMarch", "giveFunction", "setupSoldier", "sd", "perc", "squads", "getMarches", "personal", "downed", "goDown", "marker", "gunState", "brain", "notes", "setRelPair", "travel", "isDowned"];
+const HOOK = ["voiceMenu", "callout", "warTable", "eggUse", "getRel", "relAt", "fires", "coalitions", "held", "holding", "stagger", "putDown", "allOf", "edgeFearT", "cleanupMenu", "purgeState", "gliders", "glideBan", "driveOn", "formMode", "tightAt", "combatLock", "routeProgress", "getLearned", "learned", "generals", "planRoute", "BW", "BW_F", "HEAD_K", "medicMove", "shakenMove", "waterExit", "followPersonal", "spreadMove", "combatMove", "engagement", "reinforceMove", "patrolSweep", "marker", "think", "routeOf", "lookahead", "queuedBehind", "climbing", "laneOf", "trackIdx", "giveOrder", "startMarch", "giveFunction", "setupSoldier", "sd", "perc", "squads", "getMarches", "personal", "downed", "goDown", "marker", "gunState", "brain", "notes", "setRelPair", "travel", "isDowned"];
 if (opt.thinkdbg) { const f = path.join(runDir, "main.js"); fs.writeFileSync(f, fs.readFileSync(f, "utf8").replace("    // how far each stationary order may leave its spot to fight", "    if (globalThis.__thinkDbg) globalThis.__thinkDbg(e, engaged, cu, d);\n    // how far each stationary order may leave its spot to fight")); }
 fs.appendFileSync(path.join(runDir, "main.js"), `\nglobalThis.__war = {};\n${HOOK.map((n) => `try { globalThis.__war.${n} = ${n}; } catch {}`).join("\n")}\n`);
 loadDefs(path.join(root, "War Engine BP"));
@@ -305,6 +305,7 @@ const S = {
     let firstUp = -1;
     for (let t = 0; t < 3600; t += 10) {
       step(10); sample(1);
+      if (opt.follow && SIM.tick % 20 === 0) { const u = alive(1); if (u.length) player._loc = { x: u.reduce((q, e) => q + e._loc.x, 0) / u.length, y: 0, z: u.reduce((q, e) => q + e._loc.z, 0) / u.length - 15 }; }
       if (firstUp < 0 && alive(1).some((e) => e._loc.y > 5.5)) firstUp = SIM.tick - t0;
       if (opt.thinkdbg && SIM.tick === Number(opt.thinkdbg)) for (const e of alive(1)) { try { const d = W.sd(e), now = SIM.tick; const r = {}; r.medic = W.medicMove(e, d, now); r.shaken = W.shakenMove(e, d, now); r.water = W.waterExit(e, d, now); r.pers = W.personal.has(e.id) ? { ...W.personal.get(e.id), pts: W.personal.get(e.id).pts?.length } : false; r.fp = W.followPersonal(e, now); r.spread = W.spreadMove(e, now); r.combat = W.combatMove(e, d, now, false, undefined, 6); r.eng = W.engagement(e, d, now, d.goal, false); r.reinf = W.reinforceMove(e, d, now); const cu = e.dyn.get("war:catchup"); r.cu = cu; r.cuMarker = !!W.marker(Number(cu)); console.error("CHAIN", e.id.slice(-5), JSON.stringify(r)); globalThis.__thinkDbg = (x, en, cu, d) => { if (x === e) console.error("  in-think engaged", JSON.stringify(en), "cu", cu, "func", d.func); }; W.think(e); globalThis.__thinkDbg = undefined; console.error("  after goal", e.dyn.get("war:goal"), "og", e.dyn.get("war:ordergoal"), [...e.groups].join(",")); } catch (err) { console.error("THINK ERR", err.stack); } }
       if (opt.dbg && SIM.tick % 100 === 0) for (const [id, m] of Object.entries(W.getMarches())) console.error("M", SIM.tick, id, "path", m.path?.length, "idx", m.idx, "planning", m.planning, "final", m.final, "early", !!m.earlyAt, "replans", m.replans, "frontier", m.frontier, "contactT", m.contactT, "fireT", m.fireT, "wides", m.wides, "pos", JSON.stringify(m.pos));
@@ -708,6 +709,32 @@ const S = {
     const up = (L) => L.filter((e) => e.isValid && !W.isDowned(e)).length;
     const burnedA = A.filter((e) => SIM.burned?.has(e.id)).length, burnedB = B.filter((e) => SIM.burned?.has(e.id)).length;
     report({ mode, ticks: SIM.tick - t0, upA: up(A), upB: up(B), maxFires, burnedA, burnedB, booms, kit: A[0].dyn.get("war:kit"), throwT: A[0].dyn.get("war:throw"), nadeLeft: A.map((e) => e.dyn.get("war:nade") ?? 3), moloLeft: A.map((e) => e.dyn.get("war:molo") ?? 3), held: A[0].props.get("war:gun"), weaponA: A[0].dyn.get("war:weapon"), groups: [...A[0].groups].filter((g) => /w_/.test(g)) });
+  },
+  // v6.8: the callout test menu. Every button: soldiers near me (a different line each), every line in turn,
+  //   one line (by language), the frequency/subtitles settings; and two men never say the same line at once
+  async voices() {
+    spawnPlayer({ x: 0, y: 0, z: 0 });
+    const men = []; for (let i = 0; i < 6; i++) men.push(soldier(1, { x: i * 2 + 0.5, y: 0, z: 4.5 }, "rifle", 1, "hold"));
+    step(20); SIM.voices = [];
+    const out = {};
+    globalThis.__formAnswers = [{ selection: 1 }]; await W.voiceMenu(player); step(400);
+    const near = SIM.voices.map((v) => v.split(" ")[1]); out.near = { n: near.length, unique: new Set(near).size };
+    SIM.voices = [];
+    globalThis.__formAnswers = [{ selection: 2 }]; await W.voiceMenu(player); step(27 * 80 + 40);
+    out.every = { n: SIM.voices.length, unique: new Set(SIM.voices.map((v) => v.split(" ")[1])).size };
+    SIM.voices = [];
+    globalThis.__formAnswers = [{ selection: 3 }, { formValues: [26, 7] }]; await W.voiceMenu(player); step(5);   // "grenade", German
+    out.one = SIM.voices.map((v) => v.split(" ")[1]);
+    SIM.voices = [];
+    globalThis.__formAnswers = [{ selection: 3 }, { formValues: [26, 1] }]; await W.voiceMenu(player); step(5);   // "grenade", British (not recorded yet)
+    out.oneMissing = { played: SIM.voices.length, msg: SIM.log.filter((m) => /recording/.test(m)).slice(-1) };
+    globalThis.__formAnswers = [{ selection: 4 }, { formValues: [2, true] }]; await W.voiceMenu(player);
+    out.settings = { vfreq: MC.world.getDynamicProperty("war:set_vfreq"), vsubs: MC.world.getDynamicProperty("war:set_vsubs") };
+    // all six shout "Enemy spotted!" in the same tick: one voice only
+    step(400); SIM.voices = [];
+    for (const e of men) W.callout(e, "Enemy spotted!");
+    out.sameLine = SIM.voices.length;
+    report(out);
   },
   // v6.6: relations. An old world (20 factions, 2 at war, 3 allied) upgraded to 40; diplomacy on one page; a coalition spawn
   async factions() {

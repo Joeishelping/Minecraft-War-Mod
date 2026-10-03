@@ -1,4 +1,4 @@
-// War Engine v6.7: faction NPC war framework
+// War Engine v6.8: faction NPC war framework
 import { world, system, Player, ItemStack, EquipmentSlot, GameMode } from "@minecraft/server";
 import { ActionFormData, ModalFormData, FormCancelationReason } from "@minecraft/server-ui";
 import { SKINS } from "./skins.js";
@@ -941,7 +941,11 @@ function grenade(e, d, now) {
   for (let k = 1; k <= T; k += 2) system.runTimeout(() => {
     try { const u = k / T, h = Math.max(3, dd * 0.35); dim.spawnParticle("minecraft:basic_smoke_particle", { x: from.x + (g.x - from.x) * u, y: from.y + (g.y + 0.3 - from.y) * u + 4 * h * u * (1 - u), z: from.z + (g.z - from.z) * u }); } catch {}
   }, k);
-  system.runTimeout(() => { try { dim.playSound("random.fuse", g, { volume: 0.8, pitch: 1.4 }); } catch {} liveNades.push({ dim, at: { x: g.x, y: g.y, z: g.z }, boom: tick() + NADE.fuse, by }); }, T);
+  system.runTimeout(() => {
+    try { dim.playSound("random.fuse", g, { volume: 0.8, pitch: 1.4 }); } catch {}
+    liveNades.push({ dim, at: { x: g.x, y: g.y, z: g.z }, boom: tick() + NADE.fuse, by });
+    try { const w = nearSnap(dim.id, g, 7).find((c) => c.type === SOLDIER && !c.down && c.id !== by?.id && c.e.isValid); if (w) callout(w.e, "Grenade!"); } catch {}   // (v6.8: the warning)
+  }, T);
 }
 system.runInterval(() => {
   const now = tick();
@@ -3161,7 +3165,7 @@ function gunTick(e, now) {
   else {
     st.ammo = spec.mag; st.next = now + spec.reload + Math.floor(Math.random() * 8);
     try { e.dimension.playSound("random.click", e.location, { volume: 0.35, pitch: 0.7 }); } catch {}   // a quiet reload
-    if (Math.random() < 0.35 && perc.get(e.id)?.threat) callout(e, "Reloading!");   // (v6.7: not every reload, and only in a fight)
+    if (Math.random() < 0.6 && perc.get(e.id)?.threat) callout(e, "Reloading!");   // (not every reload, and only in a fight)
   }
 }
 system.runInterval(() => {
@@ -3421,7 +3425,7 @@ function perceive(e, now) {
   }
   for (const id of [...s.seen.keys()]) if (!visible.has(id)) s.seen.delete(id);
   if (best) {
-    if (!s.threat || s.threat.id !== best.id) { s.threatT = now; if (!s.threat && Math.random() < 0.4) callout(e, "Enemy spotted!"); }
+    if (!s.threat || s.threat.id !== best.id) { s.threatT = now; if (!s.threat && Math.random() < 0.75) callout(e, "Enemy spotted!"); }
     if (s.threat?.id !== best.id) { if (s.threat) aimedBy.get(s.threat.id)?.delete(e.id); let set = aimedBy.get(best.id); if (!set) { set = new Set(); aimedBy.set(best.id, set); } set.add(e.id); }
     s.threat = best; s.lastSeen = { ...best.location }; s.lostT = 0; s.alert = "combat";
     if (d.squad) squadTarget.set(`${d.faction}:${d.squad}`, { id: best.id, t: now });
@@ -4916,7 +4920,7 @@ world.afterEvents.entityDie.subscribe((ev) => {
 world.afterEvents.entityHurt.subscribe((ev) => {
   const v = ev.hurtEntity;
   if (v?.typeId !== SOLDIER) return;
-  if (Math.random() < 0.3 && !downed.has(v.id)) callout(v, "I'm hit!");
+  if (Math.random() < 0.6 && !downed.has(v.id)) callout(v, "I'm hit!");
   const arr = recentHits.get(v.id) ?? []; arr.push(tick()); recentHits.set(v.id, arr.filter((t) => tick() - t < 100));
 });
 function stressOf(e, d, now) {
@@ -5383,14 +5387,14 @@ function brainMove(e, d, now, melee, anchor, leash) {
     case "suppress": {
       const q = B.supp, spec = GUN_SPEC[d.weapon], gs = gunState.get(e.id);
       if (!q || now - q.t > 60 || !q.ent?.isValid || downed.has(q.ent.id)) { B.act = ""; B.decT = -999; return undefined; }   // nothing fresh to pin down: decide again
-      note(e, "suppressing");
+      note(e, "suppressing"); if (Math.random() < 0.3) callout(e, "Suppressing!");
       if (gs) gs.supp = { p: q.aim ?? { x: q.x, y: q.y + 1.2, z: q.z }, until: now + 30, ent: q.ent };   // the gun loop keeps up the fire (bursts at the gun's own rate)
       turnTo(e, q, 20);
       // on the move (not pinning for a flank): keep walking while suppressing
       if (["charge", "follow", "patrol"].includes(d.func) && S.plan !== "fix") return undefined;
       return { g: "g_none", t: "t_mid", urgent: false };
     }
-    case "fallback": note(e, "falling back"); return B.target ? go(B.target) : undefined;
+    case "fallback": note(e, "falling back"); if (Math.random() < 0.3) callout(e, "Fall back!"); return B.target ? go(B.target) : undefined;
     case "terrain": note(e, "taking high ground"); return S.keyPt ? go(S.keyPt, false) : undefined;
     case "position": if (!B.target || flat(B.target, e.location) < 0.9) { B.act = "hold"; return undefined; } note(e, "taking a firing position"); return go(B.target, false);
     case "sandbag": {
@@ -5581,41 +5585,98 @@ const CALL_KEY = { "Enemy spotted!": "spotted", "Contact!": "contact", "Flanking
 // lines each language has recordings for (the rest stay silent until recorded and added here)
 const BASE_LINES = ["spotted", "contact", "flanking", "charge", "gogogo", "moving_up", "suppressing", "hit", "man_down", "okay", "fall_back", "cover_me", "target_down", "clear", "hold", "follow"];
 const MORE_LINES = ["under_fire", "idle_quiet", "idle_sharp", "idle_smoke", "idle_done", "idle_legs", "medic", "thanks", "surrender", "reloading", "grenade"];
-const VOICE_HAS = Object.fromEntries(["en_us", "greek", "korean", "mongolian", "hebrew"].map((l) => [l, [...BASE_LINES, ...MORE_LINES]]));   // (v6.7: recorded so far)
+const VOICE_HAS = Object.fromEntries(["en_us", "greek", "korean", "mongolian", "hebrew", "spanish", "german", "aave"].map((l) => [l, [...BASE_LINES, ...MORE_LINES]]));   // (v6.7: recorded so far)
 const IDLE_LINES = ["idle_quiet", "idle_sharp", "idle_smoke", "idle_done", "idle_legs"];
 const voiceHas = (lang, key) => (VOICE_HAS[lang] ?? BASE_LINES).includes(key);
 const CALL_ALL = BASE_LINES;
 const lastCall = new Map(); // soldier id / squad line -> tick
 let callSec = -1, callsThisSec = 0;
-function callout(e, text) {
+// v6.8: every line, what it says (English, for subtitles and the test menu) and when it's used
+const LINE_INFO = {
+  spotted: ["Enemy spotted!", "first sees an enemy"], contact: ["Contact!", "his squad first makes contact"],
+  flanking: ["Flanking!", "the squad sends men round the side"], charge: ["Charge!", "the squad assaults"],
+  gogogo: ["Go, go, go!", "the assault goes in"], moving_up: ["Moving up!", "moving forward under fire, reinforcing, a medic on his way"],
+  suppressing: ["Suppressing!", "pinning the enemy down, covering a mate who reloads"], hit: ["I'm hit!", "wounded"],
+  man_down: ["Man down!", "a squad mate falls nearby"], okay: ["You're okay!", "a medic revives someone"],
+  fall_back: ["Fall back!", "shaken, or the squad pulls back"], cover_me: ["Cover me!", "bounding forward while mates cover"],
+  target_down: ["Target down!", "the man he shot goes down"], clear: ["Clear!", "the fight is over"],
+  hold: ["Hold position!", "the march arrives"], follow: ["Follow me!", "a march starts"],
+  under_fire: ["Taking heavy fire!", "shot at, pinned down"], idle_quiet: ["Sector's locked down...", "idle"],
+  idle_sharp: ["Head on a swivel, stay frosty.", "idle"], idle_smoke: ["Anyone got a dart?", "idle (tired)"],
+  idle_done: ["So done with this deployment...", "idle (tired)"], idle_legs: ["My legs are shot...", "idle (tired)"],
+  medic: ["Medic! I'm hit!", "down, and no medic coming"], thanks: ["Good looking out, brother.", "just revived"],
+  surrender: ["Don't shoot!", "surrendering"], reloading: ["Dry, cover me while I swap!", "reloading in a fight"],
+  grenade: ["Frag out! Get down!", "throwing a grenade / molotov, or one lands near him"],
+};
+const heardLine = []; // recent lines: { key, dim, x, z, t } (nobody repeats a line someone near just said)
+const LINE_WIN = (key) => (IDLE_LINES.includes(key) ? 6000 : key === "medic" ? 240 : key === "hit" || key === "man_down" ? 100 : 160);
+const callGap = () => [200, 100, 60][Math.max(0, Math.min(2, Number(setting("vfreq", 1))))];   // per man: Low / Normal / High
+function playLine(dim, at, lang, key, pitch = 1, who) {
+  try { dim.playSound(`war.voice.${lang}.${key}`, at, { volume: 1.0, pitch }); } catch {}
+  if (setting("vsubs", false) || who?.forceSubs) {
+    const txt = `§7${who?.label ?? "Soldier"}:§f "${LINE_INFO[key]?.[0] ?? key}"`;
+    for (const p of world.getAllPlayers()) { try { if (p.dimension.id === dim.id && dist(p.location, at) <= 24) p.onScreenDisplay.setActionBar(txt); } catch {} }
+  }
+}
+function callout(e, text, opt = {}) {
   try {
-    if (!e?.isValid || held.has(e.id) || (downed.has(e.id) && text !== "I'm hit!" && text !== "Medic!")) return;
+    if (!e?.isValid || held.has(e.id) || (downed.has(e.id) && !["I'm hit!", "Medic!", "Don't shoot!"].includes(text) && !opt.force)) return false;
     const test = text === "Testing!";
-    const f = Number(P(e, "war:faction") ?? 0), lang = voiceOf(f);
-    if (!lang || lang === "none") return;
-    const has = VOICE_HAS[lang] ?? BASE_LINES;
-    const key = test ? has[Math.floor(Math.random() * has.length)] : text === "IDLE" ? IDLE_LINES[Math.floor(Math.random() * IDLE_LINES.length)] : CALL_KEY[text];
-    if (!key || !voiceHas(lang, key)) return;
-    const now = tick();
-    if (!test) {
-      if (now - (lastCall.get(e.id) ?? -9999) < 160) return;                    // one shout per man every ~8 s
-      const sk = `${f}:${sd(e).squad}:${key}`;
-      if (now - (lastCall.get(sk) ?? -9999) < 60) return;                       // squad mates don't all yell the same line
+    const f = Number(P(e, "war:faction") ?? 0), lang = opt.lang ?? voiceOf(f);
+    if (!lang || lang === "none") return false;
+    const has = VOICE_HAS[lang] ?? BASE_LINES, now = tick(), l = e.location, did = e.dimension.id;
+    const saidNear = (k, win) => heardLine.some((h) => h.key === k && h.dim === did && now - h.t < win && Math.abs(h.x - l.x) < 40 && Math.abs(h.z - l.z) < 40);
+    let key = opt.key ?? (test ? has[Math.floor(Math.random() * has.length)] : CALL_KEY[text]);
+    if (text === "IDLE") { const fresh = IDLE_LINES.filter((k) => voiceHas(lang, k) && !saidNear(k, 6000)); key = fresh[Math.floor(Math.random() * fresh.length)]; }
+    if (!key || !voiceHas(lang, key)) return false;
+    if (!test && !opt.force) {
+      if (now - (lastCall.get(e.id) ?? -9999) < callGap()) return false;        // one shout per man every few seconds
+      if (saidNear(key, LINE_WIN(key))) return false;                         // v6.8: never the same line from two men at once (any squad)
       const sec = Math.floor(now / 20); if (sec !== callSec) { callSec = sec; callsThisSec = 0; }
-      if (callsThisSec >= 3 || !playerNear(e, 32)) return;                      // a battle never becomes a wall of noise; nobody near: no sound
-      lastCall.set(sk, now);
+      if (callsThisSec >= 3 || !playerNear(e, 32)) return false;              // never a wall of noise; nobody near: no sound
     }
     lastCall.set(e.id, now); callsThisSec++;
     if (lastCall.size > 4000) lastCall.clear();
-    const pitch = 0.92 + ((e.id.charCodeAt(e.id.length - 1) * 7) % 17) / 100;   // each man his own voice, always the same one
-    e.dimension.playSound(`war.voice.${lang}.${key}`, headLoc(e), { volume: 1.0, pitch });
-  } catch {}
+    heardLine.push({ key, dim: did, x: l.x, z: l.z, t: now });
+    while (heardLine.length && now - heardLine[0].t > 6000) heardLine.shift();
+    if (heardLine.length > 300) heardLine.splice(0, heardLine.length - 300);
+    const pitch = 0.92 + ((e.id.charCodeAt(e.id.length - 1) * 7) % 17) / 100 - (downed.has(e.id) ? 0.05 : 0);   // his own voice (weaker when he's down)
+    playLine(e.dimension, headLoc(e), lang, key, pitch, { label: `${factionLabel(f)}§7 ${squadName(f, sd(e).squad)}`, forceSubs: opt.subs });
+    if (!opt.force) afterLine(e, key, now);                                  // (a test line gets no answer)
+    return true;
+  } catch { return false; }
+}
+// v6.8: the squad answers. A man reloading gets cover ("Suppressing!"), a wounded man's call is answered by the medic
+// coming ("Moving up!"), "Contact!" gets "Enemy spotted!" from someone else, idle talk is sometimes answered.
+function afterLine(e, key, now) {
+  // (the mate is looked up on the reply's own tick: nearSnap rewrites each entry's distance, and a line can be said
+  //  in the middle of someone's target scan over that same list)
+  const d = sd(e), dimId = e.dimension.id, at = { ...e.location };
+  const mate = (r) => { for (const c of nearSnap(dimId, at, r)) if (c.id !== e.id && c.type === SOLDIER && !c.down && c.f === d.faction && c.e.isValid && sd(c.e).squad === d.squad) return c.e; };
+  const reply = (r, text, delay) => system.runTimeout(() => { try { const who = mate(r); if (who?.isValid) callout(who, text); } catch {} }, delay);
+  if (key === "reloading" && Math.random() < 0.6) reply(10, "Suppressing!", 18);
+  else if (key === "contact" && Math.random() < 0.5) reply(16, "Enemy spotted!", 30);
+  else if (key === "hit" && Math.random() < 0.4) reply(10, "Man down!", 20);
+  else if (IDLE_LINES.includes(key) && Math.random() < 0.45) reply(10, "IDLE", 70 + Math.floor(Math.random() * 40));
+  else if (key === "clear" && Math.random() < 0.35) reply(16, "Hold position!", 40);
 }
 async function voiceMenu(player) {
-  const pick = await show(new ActionFormData().title("Callout language").button("Set the language per faction").button("Test callouts (soldiers near you)").button("« Back"), player);
+  const pick = await show(new ActionFormData().title("Callouts")
+    .button("Set the language per faction").button("Test: soldiers near me each say a line").button("Test: play EVERY line, one by one")
+    .button("Test: play one line...").button("How often they talk / subtitles").button("« Back"), player);
   if (!pick || pick.canceled || pick.selection === undefined) return;
   if (pick.selection === 1) { testCallouts(player); return; }
-  if (pick.selection === 2) return;
+  if (pick.selection === 2) { testEveryLine(player); return; }
+  if (pick.selection === 3) { await testOneLine(player); return; }
+  if (pick.selection === 4) {
+    const r = await show(new ModalFormData().title("Callouts").dropdown("How often they talk", ["Less", "Normal", "A lot"], { defaultValueIndex: Number(setting("vfreq", 1)) })
+      .toggle("Subtitles (the line, in English, on screen)", { defaultValue: !!setting("vsubs", false) }), player);
+    if (!r || r.canceled || !r.formValues) return;
+    sdp(world, "war:set_vfreq", Number(r.formValues[0])); sdp(world, "war:set_vsubs", !!r.formValues[1]);
+    player.sendMessage("§aCallout settings saved.");
+    return;
+  }
+  if (pick.selection === 5) return;
   const all = getJSON(world, "war:vlang", {});
   const f = new ModalFormData().title("Callout language");
   COLORS.forEach((_, i) => f.dropdown(factionLabel(i + 1), VOICE_NAMES, { defaultValueIndex: Math.max(0, VOICE_KEYS.indexOf(voiceOf(i + 1))) }));
@@ -5679,7 +5740,7 @@ world.afterEvents.entityHurt.subscribe((ev) => {
   try {
     const v = ev.hurtEntity, src = ev.damageSource?.damagingEntity;
     if (v?.typeId !== SOLDIER || downed.has(v.id) || ev.damageSource?.cause !== "projectile" || !src?.isValid) return;
-    if (Math.random() < 0.3 && isHostile(Number(P(v, "war:faction") ?? 0), factionOf(src))) callout(v, "Taking fire!");
+    if (Math.random() < 0.45 && isHostile(Number(P(v, "war:faction") ?? 0), factionOf(src))) callout(v, "Taking fire!");
   } catch {}
 });
 // v6.7: idle talk. A squad near a player that's had nothing to do for a minute (no enemy seen, not marching, nobody
@@ -5698,10 +5759,10 @@ system.runInterval(() => {
       if (!groups.has(k)) groups.set(k, []); groups.get(k).push(c.e);
     }
   }
-  if (now - idleAnyT < 600) return;
+  if (now - idleAnyT < 300) return;
   for (const [k, list] of groups) {
-    if (now - (squadBusyT.get(k) ?? -9999) < 1200 || now - (squadIdleT.get(k) ?? -9999) < 1800 + ((k.length * 97) % 1200)) continue;
-    if (Math.random() > 0.35) continue;
+    if (now - (squadBusyT.get(k) ?? -9999) < 800 || now - (squadIdleT.get(k) ?? -9999) < 900 + ((k.length * 97) % 900)) continue;   // (v6.8: calm 40 s, then a line every 45-90 s)
+    if (Math.random() > 0.5) continue;
     squadIdleT.set(k, now); idleAnyT = now;
     callout(list[Math.floor(Math.random() * list.length)], "IDLE");
     break;
@@ -5820,6 +5881,7 @@ function medicMove(e, d, now) {
       const slot = makeWaypoint(e.dimension, best.location);
       if (!slot) return undefined;
       mt = { target: best.id, slot }; medicTask.set(e.id, mt);
+      if (isDowned(best)) callout(e, "Moving up!");                 // (v6.8: the medic answers "Medic!": he's on his way)
     }
     note(e, isDowned(best) ? "going to a downed soldier" : "treating the wounded");
     const mv = travel(e, best.location, "medic", now, true);
@@ -6010,11 +6072,43 @@ function powMove(e, now) {
 // ---- callouts: test button (every soldier near you calls out once, right now)
 function testCallouts(player) {
   let n = 0;
+  const used = new Set();
   for (const e of player.dimension.getEntities({ type: SOLDIER, location: player.location, maxDistance: 24 })) {
-    lastCall.delete(e.id); try { lastCall.delete(squadKey(e, sd(e))); } catch {}
-    callout(e, "Testing!"); n++;
+    const lang = voiceOf(Number(P(e, "war:faction") ?? 0)), has = (VOICE_HAS[lang] ?? BASE_LINES).filter((k) => !used.has(k));
+    if (!has.length || lang === "none") continue;
+    const key = has[Math.floor(Math.random() * has.length)]; used.add(key);   // (every soldier a different line)
+    system.runTimeout(() => callout(e, "", { key, force: true, subs: true }), n * 50); n++;
+    if (n >= 8) break;
   }
   player.sendMessage(n ? `§7${n} soldier${n === 1 ? "" : "s"} called out. Heard nothing? Check the "Hostile creatures" volume slider.` : "§7No soldiers within 24 blocks.");
+}
+
+// v6.8: hear every line in turn from the soldier nearest you (in his faction's language), with what it is on screen
+function testEveryLine(player) {
+  const e = player.dimension.getEntities({ type: SOLDIER, location: player.location, maxDistance: 24, closest: 1 })[0];
+  if (!e) { player.sendMessage("§7No soldier within 24 blocks."); return; }
+  const lang = voiceOf(Number(P(e, "war:faction") ?? 0));
+  if (lang === "none") { player.sendMessage("§7His faction's callouts are set to None."); return; }
+  const keys = Object.keys(LINE_INFO).filter((k) => voiceHas(lang, k));
+  keys.forEach((k, i) => system.runTimeout(() => {
+    try {
+      if (!e.isValid) return;
+      callout(e, "", { key: k, force: true });
+      player.onScreenDisplay.setActionBar(`§e${i + 1}/${keys.length} §f"${LINE_INFO[k][0]}" §7(when: ${LINE_INFO[k][1]})`);
+    } catch {}
+  }, i * 80));
+  player.sendMessage(`§7Playing ${keys.length} lines (${VOICE_NAMES[VOICE_KEYS.indexOf(lang)] ?? lang}), one every 4 s.`);
+}
+async function testOneLine(player) {
+  const keys = Object.keys(LINE_INFO);
+  const r = await show(new ModalFormData().title("Play one line").dropdown("Line", keys.map((k) => `${LINE_INFO[k][0]}  §7(${LINE_INFO[k][1]})`))
+    .dropdown("Language", VOICE_NAMES.slice(1), { defaultValueIndex: 0 }), player);
+  if (!r || r.canceled || !r.formValues) return;
+  const key = keys[Number(r.formValues[0])], lang = VOICE_KEYS[Number(r.formValues[1]) + 1];
+  if (!voiceHas(lang, key)) { player.sendMessage(`§7No ${VOICE_NAMES[VOICE_KEYS.indexOf(lang)]} recording of that line yet.`); return; }
+  const e = player.dimension.getEntities({ type: SOLDIER, location: player.location, maxDistance: 24, closest: 1 })[0];
+  if (e) callout(e, "", { key, lang, force: true, subs: true });
+  else playLine(player.dimension, player.location, lang, key, 1, { label: "Test", forceSubs: true });
 }
 
 // ---- soldier damage to players follows the Realism slider too (gun-pack bullets often carry no shooter)
@@ -6936,7 +7030,7 @@ function drillMove(e, d, now, melee, anchor, leash) {
     if (!moving && t?.isValid && shotAt(e, d, t, now)) { note(e, "covering the advance"); return { g: "g_none", t: "t_mid", urgent: false }; }
     if (!moving) {                                                       // v5.4: no aimed shot: covering fire on the window / doorway they were just seen in
       const q = ["mg", "rifle", "semi"].includes(d.weapon) ? suppressPoint(e, d, S, now) : undefined, gs = gunState.get(e.id);
-      if (q && gs && now - q.t <= 40) { gs.supp = { p: q.aim, until: now + 30, ent: q.ent }; turnTo(e, q, 20); note(e, "covering fire"); return { g: "g_none", t: "t_mid", urgent: false }; }
+      if (q && gs && now - q.t <= 40) { gs.supp = { p: q.aim, until: now + 30, ent: q.ent }; turnTo(e, q, 20); note(e, "covering fire"); if (Math.random() < 0.2) callout(e, "Suppressing!"); return { g: "g_none", t: "t_mid", urgent: false }; }
     }
     if (moving && mv && underFire && S.enemyC && !isIndoors(e)) {
       const dx = S.enemyC.x - e.location.x, dz = S.enemyC.z - e.location.z, L = Math.hypot(dx, dz) || 1;
@@ -6945,7 +7039,7 @@ function drillMove(e, d, now, melee, anchor, leash) {
       const w = walkableNear(e.dimension, sx, sz, e.location.y);
       if (w && Math.abs(w.y - e.location.y) <= 0.6) push(e, { x: (-dz / L) * side * 0.14, y: 0, z: (dx / L) * side * 0.14 }, 2);   // weave, never off a ledge
       note(e, S.plan === "assault" ? "assaulting (bounding)" : "advancing (bounding)");
-      if (Math.random() < 0.15) callout(e, "Cover me!");
+      if (Math.random() < 0.4) callout(e, "Cover me!"); else if (Math.random() < 0.3) callout(e, "Moving up!");   // (v6.8: more often)
     }
   }
   return mv;

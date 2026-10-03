@@ -1,5 +1,32 @@
 # War Engine changelog
 
+## v6.8 (Callouts: more often, never doubled, a test menu)
+
+- **They talk a lot more.** Most triggers fire more often: "Enemy spotted!" (3 in 4), "I'm hit!", "Taking heavy
+  fire!", "Dry, cover me!" (reloading), "Cover me!" / "Moving up!" when bounding forward.
+- **New triggers:** "Suppressing!" when pinning an enemy or giving covering fire; "Fall back!" when pulling back; a
+  medic heading to a downed man calls "Moving up!"; when a grenade lands, the nearest soldier shouts "Frag out! Get
+  down!".
+- **The squad answers each other:**
+  - a man reloading gets a "Suppressing!" from a mate;
+  - "Contact!" gets an "Enemy spotted!";
+  - "I'm hit!" gets a "Man down!";
+  - "Clear!" gets a "Hold position!";
+  - idle talk is sometimes answered with another idle line.
+- **Never the same line twice at once.** Nobody within 40 blocks repeats a line someone just said, from any squad
+  (8 s for most lines, 5 min for idle lines). There are still at most 3 voices a second, and each man pauses
+  between lines.
+- **Idle talk:** after 40 s of calm, a squad near you says something about every 45-90 s.
+- **Callouts menu** (Settings, Callouts):
+  - **Soldiers near me each say a line:** each one a different line, with subtitles.
+  - **Play EVERY line, one by one:** the nearest soldier says each of the 27 lines in his faction's language, 4 s
+    apart. The screen shows the line and when it's used.
+  - **Play one line...:** pick any line and any language.
+  - **How often they talk** (Less / Normal / A lot) and **subtitles** (the line in English on screen).
+- **Spanish, German and Young Jamal (AAVE)** now have all 27 lines. That makes 8 full languages: US English, Greek,
+  Korean, Mongolian, Hebrew, Spanish, German, AAVE. The other languages have the 16 base lines.
+- Fix: a callout could garble the distances a soldier's target scan was using, in the same tick.
+
 ## v6.7 (Demolition unit, real grenades, more callouts, idle talk)
 
 - **The snowball grenadier is now the Demolition unit** (Demolition Egg). It's the only unit with these weapons.
