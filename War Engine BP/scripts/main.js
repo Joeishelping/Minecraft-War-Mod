@@ -71,41 +71,41 @@ let relCache, namesCache, squadsCache;
 let markerCache = new Map();
 function getRel() {
   if (relCache) return relCache;
-  let r = world.getDynamicProperty("war:rel");
+  let r = gdp(world, "war:rel");
   if (typeof r !== "string" || r.length !== NF * NF) {
     r = "";
     for (let a = 1; a <= NF; a++) for (let b = 1; b <= NF; b++) r += a === b ? "2" : "1";
-    world.setDynamicProperty("war:rel", r);
+    sdp(world, "war:rel", r);
   }
   return (relCache = r);
 }
 const relAt = (a, b) => (a && b ? getRel()[(a - 1) * NF + (b - 1)] : "0");
-const relVersion = () => Number(world.getDynamicProperty("war:relv") ?? 0);
+const relVersion = () => Number(gdp(world, "war:relv") ?? 0);
 function setRelPair(a, b, v, announce = true) {
   if (!a || !b || a === b || relAt(a, b) === v) return;
   const arr = getRel().split("");
   arr[(a - 1) * NF + (b - 1)] = v;
   arr[(b - 1) * NF + (a - 1)] = v;
   relCache = arr.join("");
-  world.setDynamicProperty("war:rel", relCache);
-  world.setDynamicProperty("war:relv", relVersion() + 1);
+  sdp(world, "war:rel", relCache);
+  sdp(world, "war:relv", relVersion() + 1);
   if (announce) say(`${factionLabel(a)} §fis now ${REL_TXT[v]}§r§f with ${factionLabel(b)}`);
 }
 const isHostile = (a, b) => !!a && !!b && a !== b && relAt(a, b) === "1";
 const isFriendly = (a, b) => !!a && !!b && (a === b || relAt(a, b) === "2");
 function getNames() {
   if (namesCache) return namesCache;
-  try { const n = JSON.parse(String(world.getDynamicProperty("war:names") ?? "[]")); if (Array.isArray(n)) return (namesCache = n); } catch {}
+  try { const n = JSON.parse(String(gdp(world, "war:names") ?? "[]")); if (Array.isArray(n)) return (namesCache = n); } catch {}
   return (namesCache = []);
 }
 function getSquads() {
   if (squadsCache) return squadsCache;
-  try { const s = JSON.parse(String(world.getDynamicProperty("war:squads") ?? "{}")); if (s && typeof s === "object") return (squadsCache = s); } catch {}
+  try { const s = JSON.parse(String(gdp(world, "war:squads") ?? "{}")); if (s && typeof s === "object") return (squadsCache = s); } catch {}
   return (squadsCache = {});
 }
 const squadName = (f, n) => (n ? (getSquads()[f]?.[n - 1] || `Squad ${n}`) : "No squad");
 const squadList = (f, first) => [first, ...[1, 2, 3, 4, 5, 6, 7, 8, 9].map((n) => `${n}: ${squadName(f, n)}`)];
-const setting = (k, def) => { const v = world.getDynamicProperty(`war:set_${k}`); return v === undefined ? def : v; };
+const setting = (k, def) => { const v = gdp(world, `war:set_${k}`); return v === undefined ? def : v; };
 function factionLabel(f, plain = false) {
   if (!f) return plain ? "None" : "§7None§r";
   const [color, code] = COLORS[f - 1];
@@ -126,10 +126,28 @@ async function show(form, player) {
   return undefined;
 }
 function getJSON(h, key, fallback) {
-  try { const v = h.getDynamicProperty(key); if (typeof v === "string") return JSON.parse(v); } catch {}
+  try { const v = gdp(h, key); if (typeof v === "string") return JSON.parse(v); } catch {}
   return fallback;
 }
-const setJSON = (h, key, val) => h.setDynamicProperty(key, JSON.stringify(val));
+const setJSON = (h, key, val) => sdp(h, key, JSON.stringify(val));
+// v5.4: dynamic properties are mirrored in memory. Reading one from the game is a slow native call and the brain
+// reads hundreds per tick; only this add-on writes them, so the mirror is always right. Unchanged values aren't rewritten.
+const DPC = new Map(); // entity id ("@world" for the world) -> Map(key -> value)
+const dpMap = (h) => { const id = h === world ? "@world" : h.id; let m = DPC.get(id); if (!m) { m = new Map(); DPC.set(id, m); } return m; };
+function gdp(h, k) {
+  const m = dpMap(h);
+  if (m.has(k)) return m.get(k);
+  const v = h.getDynamicProperty(k);
+  m.set(k, v);
+  return v;
+}
+function sdp(h, k, v) {
+  const m = dpMap(h);
+  if (m.has(k) && m.get(k) === v && (v === undefined || typeof v !== "object")) return;
+  h.setDynamicProperty(k, v);
+  m.set(k, v && typeof v === "object" ? { ...v } : v);
+}
+system.runInterval(() => { for (const id of [...DPC.keys()]) if (id !== "@world" && !world.getEntity(id)) DPC.delete(id); }, 1200);
 const dist = (a, b) => Math.hypot(a.x - b.x, a.y - b.y, a.z - b.z);
 const flat = (a, b) => Math.hypot(a.x - b.x, a.z - b.z);
 const findPlayer = (id) => (id ? world.getAllPlayers().find((p) => p.id === id) : undefined);
@@ -138,13 +156,24 @@ const DIMS = ["overworld", "nether", "the_end"];
 const allOfCache = new Map(); // type -> { t, list }  (one world search per type per tick)
 function allOf(type) {
   const now = system.currentTick, c = allOfCache.get(type);
-  if (c && c.t === now) return c.list.filter((e) => e.isValid);
+  if (c && c.t === now) { if (!c.checked) { c.list = c.list.filter((e) => e.isValid); c.checked = true; } return c.list; }
   const out = [];
   for (const d of DIMS) { try { out.push(...world.getDimension(d).getEntities({ type })); } catch {} }
   allOfCache.set(type, { t: now, list: out });
   return out;
 }
-const isRiding = (e) => { try { return !!e.getComponent("minecraft:riding"); } catch { return false; } };
+const rideMemo = new Map(); // id -> { t, v, on }
+function rideInfo(e) {
+  const now = system.currentTick, c = rideMemo.get(e.id);
+  if (c && now - c.t < 5) return c;
+  let on;
+  try { on = e.getComponent("minecraft:riding")?.entityRidingOn; } catch {}
+  const r = { t: now, v: !!on, on: on?.typeId };
+  rideMemo.set(e.id, r);
+  if (rideMemo.size > 4000) rideMemo.clear();
+  return r;
+}
+const isRiding = (e) => { try { return rideInfo(e).v; } catch { return false; } };
 const fwdFromYaw = (yaw) => ({ x: -Math.sin((yaw * Math.PI) / 180), z: Math.cos((yaw * Math.PI) / 180) });
 function giveItem(player, id) {
   try { player.getComponent("minecraft:inventory").container.addItem(new ItemStack(id, 1)); } catch {}
@@ -158,13 +187,13 @@ function mainhand(player) {
 // property is mirrored in a dynamic property and re-applied until it sticks.
 const PROPS = ["war:faction", "war:skin", "war:ranged", "war:cav", "war:medic", "war:rally", "war:gun", "war:firing", "war:aiming", "war:down", "war:nest", "war:pose"];
 function P(e, key) {
-  const v = e.getDynamicProperty(`p_${key}`);
+  const v = gdp(e, `p_${key}`);
   if (v !== undefined) return v;
   try { return e.getProperty(key); } catch { return undefined; }
 }
 function setP(e, key, val) {
   sdDrop(e);
-  e.setDynamicProperty(`p_${key}`, val);
+  sdp(e, `p_${key}`, val);
   try { e.setProperty(key, val); } catch {}
   const ent = e;
   system.runTimeout(() => { if (ent.isValid) syncProps(ent); }, 2);
@@ -173,7 +202,7 @@ function syncProps(e) {
   if (e.typeId === SOLDIER) syncSkin(e);
   for (const k of PROPS) {
     if (k === "war:skin" && e.typeId === SOLDIER) continue;
-    const v = e.getDynamicProperty(`p_${k}`);
+    const v = gdp(e, `p_${k}`);
     if (v === undefined) continue;
     try { if (e.getProperty(k) !== v) e.setProperty(k, v); } catch {}
   }
@@ -189,7 +218,7 @@ function setPlayerFaction(p, f) {
   if (f) p.addTag(`war_f${f}`);
   try { p.nameTag = f ? `${COLORS[f - 1][1]}[${COLORS[f - 1][0]}]§r ${p.name}` : p.name; } catch {}
 }
-const factionOf = (e) => (e.typeId === "minecraft:player" ? playerFaction(e) : e.getDynamicProperty("war:surr") ? 0 : Number(P(e, "war:faction") ?? 0));
+const factionOf = (e) => (e.typeId === "minecraft:player" ? playerFaction(e) : gdp(e, "war:surr") ? 0 : Number(P(e, "war:faction") ?? 0));
 
 // ================================================================ soldier data
 const sdCache = new Map(); // id -> { t, d }
@@ -207,18 +236,18 @@ function sdRead(e) {
     faction: Number(P(e, "war:faction") ?? 0),
     skin: Number(P(e, "war:skin") ?? 0),
     ranged: Boolean(P(e, "war:ranged")),
-    weapon: String(e.getDynamicProperty("war:weapon") ?? (P(e, "war:ranged") ? "crossbow" : "sword")),
-    div: String(e.getDynamicProperty("war:div") ?? "foot"),
-    func: String(e.getDynamicProperty("war:func") ?? "hold"),
-    squad: Number(e.getDynamicProperty("war:squad") ?? 0),
-    radius: Number(e.getDynamicProperty("war:radius") ?? 8),
-    owner: e.getDynamicProperty("war:owner"),
-    leader: e.getDynamicProperty("war:leader"),
-    goal: Number(e.getDynamicProperty("war:goal") ?? 0),
-    custom: String(e.getDynamicProperty("war:custom") ?? ""),
-    retreat: Boolean(e.getDynamicProperty("war:retreat")),
-    surr: Number(e.getDynamicProperty("war:surr") ?? 0),
-    armor: String(e.getDynamicProperty("war:armor") ?? "none"),
+    weapon: String(gdp(e, "war:weapon") ?? (P(e, "war:ranged") ? "crossbow" : "sword")),
+    div: String(gdp(e, "war:div") ?? "foot"),
+    func: String(gdp(e, "war:func") ?? "hold"),
+    squad: Number(gdp(e, "war:squad") ?? 0),
+    radius: Number(gdp(e, "war:radius") ?? 8),
+    owner: gdp(e, "war:owner"),
+    leader: gdp(e, "war:leader"),
+    goal: Number(gdp(e, "war:goal") ?? 0),
+    custom: String(gdp(e, "war:custom") ?? ""),
+    retreat: Boolean(gdp(e, "war:retreat")),
+    surr: Number(gdp(e, "war:surr") ?? 0),
+    armor: String(gdp(e, "war:armor") ?? "none"),
   };
 }
 const snapshot = (e) => {
@@ -227,7 +256,7 @@ const snapshot = (e) => {
 };
 
 function applyRelations(e) {
-  const surr = !!e.getDynamicProperty("war:surr");
+  const surr = !!gdp(e, "war:surr");
   const f = Number(P(e, "war:faction") ?? 0);
   for (let i = 1; i <= NF; i++) {
     const wantH = !surr && f > 0 && i !== f && relAt(f, i) === "1";
@@ -235,7 +264,7 @@ function applyRelations(e) {
     const wantF = !surr && i === f;
     if (wantF !== e.hasTag(`war_f${i}`)) wantF ? e.addTag(`war_f${i}`) : e.removeTag(`war_f${i}`);
   }
-  e.setDynamicProperty("war:relv", relVersion());
+  sdp(e, "war:relv", relVersion());
   updateName(e);
 }
 function updateName(e) {
@@ -251,7 +280,7 @@ function updateName(e) {
     else if (d.surr) txt += " §7(surrendered)";
     else if (d.retreat) txt += " §c(falling back)";
     if (e.typeId === SOLDIER) txt += `\n${healthBar(e)}`;
-    const ro = String(e.getDynamicProperty("war:readout") ?? "");
+    const ro = String(gdp(e, "war:readout") ?? "");
     if (ro) txt += `\n§8${ro}`;
   }
   try { e.nameTag = `${code}[${factionLabel(f, true)}]§r ${txt}`; } catch {}
@@ -275,7 +304,7 @@ function equip(e, item) {
       return;
     }
     catch {
-      e.setDynamicProperty("war:weapon", "crossbow");
+      sdp(e, "war:weapon", "crossbow");
       try { e.runCommand("replaceitem entity @s slot.weapon.mainhand 0 crossbow"); } catch {}
       if (!gunPackWarned) { gunPackWarned = true; world.sendMessage("§cGun soldiers need the TWW Gun Pack active in this world. Using crossbows instead."); }
       return;
@@ -296,14 +325,14 @@ function equipArmor(e, tier) {
 function weaponItem(e) {
   const d = sd(e);
   if (d.surr || d.div === "medic") return "air";
-  if (d.div === "grenadier" && Number(e.getDynamicProperty("war:snow") ?? 3) > 0) return "snowball";
+  if (d.div === "grenadier" && Number(gdp(e, "war:snow") ?? 3) > 0) return "snowball";
   if (GUNS.includes(d.weapon)) return `ww:${gunModel(d.faction, d.weapon)}`;
   if (d.ranged) return "crossbow";
   return d.div === "cavalier" ? "air" : "iron_sword"; // the cavalier's lance is part of its model
 }
 
 // ================================================================ waypoints & flags
-const slotOf = (m) => Number(m.getDynamicProperty("war:slot") ?? 0);
+const slotOf = (m) => Number(gdp(m, "war:slot") ?? 0);
 const markers = () => [...allOf(WAYPOINT), ...allOf(FLAG)];
 function marker(slot) {
   if (!slot) return undefined;
@@ -314,14 +343,14 @@ function marker(slot) {
 function claimSlot(m) {
   const taken = new Set(markers().map(slotOf));
   for (const v of threatSlot.values()) taken.add(v);
-  const assign = (i) => { m.setDynamicProperty("war:slot", i); tagMarker(m, i); m.setDynamicProperty("war:born", Date.now()); markerCache.delete(i); return i; };
+  const assign = (i) => { sdp(m, "war:slot", i); tagMarker(m, i); sdp(m, "war:born", Date.now()); markerCache.delete(i); return i; };
   for (let i = 1; i <= NSLOT; i++) if (!taken.has(i)) return assign(i);
   // all slots taken: recycle the oldest marker nobody uses any more
   const used = usedSlots();
   let old, ob = Infinity;
   for (const w of allOf(WAYPOINT)) {
     if (w.id === m.id) continue;
-    const sl = slotOf(w), b = Number(w.getDynamicProperty("war:born") ?? 0);
+    const sl = slotOf(w), b = Number(gdp(w, "war:born") ?? 0);
     if (!used.has(sl) && b < ob) { ob = b; old = w; }
   }
   if (old) { const sl = slotOf(old); try { old.remove(); } catch {} return assign(sl); }
@@ -343,14 +372,14 @@ function makeWaypoint(dim, loc, reuse = true) {
 function setGoal(e, slot) {
   for (const t of e.getTags()) if (t.startsWith("war_go") || t.startsWith("war_gr") || t.startsWith("war_gc")) e.removeTag(t);
   if (slot) { e.addTag(`war_gr${rowOf(slot)}`); e.addTag(`war_gc${colOf(slot)}`); }
-  e.setDynamicProperty("war:goal", slot);
+  sdp(e, "war:goal", slot);
   try { noteRefs(e); } catch {}
 }
 const SLOT_KEYS = ["war:goal", "war:home", "war:mwp", "war:chargegoal", "war:ordergoal", "war:catchup", "war:mymk"];
 let slotRefs = null; // soldier id -> [slots] (last known, kept while he's out of range)
 function getRefs() { if (!slotRefs) slotRefs = getJSON(world, "war:slotrefs", {}); return slotRefs; }
 function noteRefs(e) {
-  const r = SLOT_KEYS.map((k) => Number(e.getDynamicProperty(k) ?? 0)).filter((x) => x > 0);
+  const r = SLOT_KEYS.map((k) => Number(gdp(e, k) ?? 0)).filter((x) => x > 0);
   getRefs()[e.id] = [...new Set(r)];
 }
 function usedSlots() {
@@ -370,7 +399,7 @@ function gcWaypoints(soldiers) {
   for (const m of allOf(WAYPOINT)) {
     try {
       m.addEffect("invisibility", 20000000, { showParticles: false });   // no shadow "dots"
-      const born = Number(m.getDynamicProperty("war:born") ?? 0);
+      const born = Number(gdp(m, "war:born") ?? 0);
       if (!used.has(slotOf(m)) && now - born > 30000) m.remove();
     } catch {}
   }
@@ -392,17 +421,17 @@ function setupSoldier(e, s, player, { heal = true } = {}) {
   const div = DIV[s.div] ? s.div : "foot";
   setP(e, "war:faction", s.faction ?? 0);
   const weapon = div === "medic" || div === "grenadier" ? "sword" : (s.weapon && WEAPONS.some((w) => w[0] === s.weapon) ? s.weapon : (s.ranged ? "crossbow" : "sword"));
-  e.setDynamicProperty("war:weapon", weapon);
+  sdp(e, "war:weapon", weapon);
   setP(e, "war:ranged", weapon !== "sword");
   setP(e, "war:skin", s.skin ?? 0);
   setP(e, "war:cav", div === "cavalier");
   setP(e, "war:medic", div === "medic");
-  e.setDynamicProperty("war:div", div);
-  e.setDynamicProperty("war:squad", s.squad ?? 0);
-  e.setDynamicProperty("war:radius", s.radius ?? 8);
-  e.setDynamicProperty("war:custom", s.custom ?? "");
-  e.setDynamicProperty("war:armor", s.armor ?? "none");
-  if (div === "guard") e.setDynamicProperty("war:owner", s.owner ?? player?.id);
+  sdp(e, "war:div", div);
+  sdp(e, "war:squad", s.squad ?? 0);
+  sdp(e, "war:radius", s.radius ?? 8);
+  sdp(e, "war:custom", s.custom ?? "");
+  sdp(e, "war:armor", s.armor ?? "none");
+  if (div === "guard") sdp(e, "war:owner", s.owner ?? player?.id);
   if (div === "houndmaster") e.addTag("war_hm"); else e.removeTag("war_hm");
   e.triggerEvent(div === "cavalier" ? "war:body_cav" : "war:body_foot");
   if (heal) e.triggerEvent(`war:${DIV[div].hp}`);
@@ -415,7 +444,7 @@ function setupSoldier(e, s, player, { heal = true } = {}) {
 }
 
 function replaceSoldier(e) {
-  const s = { ...snapshot(e), owner: e.getDynamicProperty("war:owner") };
+  const s = { ...snapshot(e), owner: gdp(e, "war:owner") };
   const hp = e.getComponent("minecraft:health");
   const cur = hp ? hp.currentValue : undefined;
   const n = e.dimension.spawnEntity(SOLDIER, e.location, { spawnEvent: "war:init" });
@@ -460,36 +489,36 @@ function freshMind(e) {
   const s = perc.get(e.id);
   if (s) { s.threat = undefined; s.searchUntil = 0; s.lastSeen = undefined; s.noise = undefined; s.noiseT = -999; s.alert = "calm"; s.seen.clear(); }
   crossing.delete(e.id); exitSpot.delete(e.id); wetSince.delete(e.id); assist.delete(e.id);
-  e.setDynamicProperty("war:retreat", false); e.setDynamicProperty("war:retreatUntil", 0);
-  e.setDynamicProperty("war:calm", 0); e.setDynamicProperty("war:stuck", 0);
-  e.setDynamicProperty("war:ordergoal", undefined); e.setDynamicProperty("war:catchup", undefined);
+  sdp(e, "war:retreat", false); sdp(e, "war:retreatUntil", 0);
+  sdp(e, "war:calm", 0); sdp(e, "war:stuck", 0);
+  sdp(e, "war:ordergoal", undefined); sdp(e, "war:catchup", undefined);
 }
 function giveFunction(e, func, player, goalSlot) {
   sdDrop(e);
-  e.setDynamicProperty("war:ordergoal", undefined);
-  e.setDynamicProperty("war:catchup", undefined);
+  sdp(e, "war:ordergoal", undefined);
+  sdp(e, "war:catchup", undefined);
   const d = sd(e);
-  e.setDynamicProperty("war:func", func);
-  e.setDynamicProperty("war:retreat", false);
+  sdp(e, "war:func", func);
+  sdp(e, "war:retreat", false);
   if (func === "follow" || func === "escort") {
     const leader = func === "escort" ? findPlayer(d.owner) ?? player : player;
-    if (leader) { e = retame(e, leader); e.setDynamicProperty("war:leader", leader.id); }
+    if (leader) { e = retame(e, leader); sdp(e, "war:leader", leader.id); }
     setGoal(e, 0);
   } else if (func === "charge") {
     setGoal(e, goalSlot ?? 0);
-    e.setDynamicProperty("war:chargegoal", goalSlot ?? 0);
+    sdp(e, "war:chargegoal", goalSlot ?? 0);
   } else if (func === "squad") {
-    let slot = Number(e.getDynamicProperty("war:mwp") ?? 0);
-    if (!marker(slot)) { slot = makeWaypoint(e.dimension, e.location, false); e.setDynamicProperty("war:mwp", slot); }
+    let slot = Number(gdp(e, "war:mwp") ?? 0);
+    if (!marker(slot)) { slot = makeWaypoint(e.dimension, e.location, false); sdp(e, "war:mwp", slot); }
     setGoal(e, slot);
   } else {
     const slot = goalSlot ?? makeWaypoint(e.dimension, e.location);
     setGoal(e, slot);
-    e.setDynamicProperty("war:home", slot);
+    sdp(e, "war:home", slot);
   }
   updateName(e);
   setJSON(e, "war:st", {});
-  try { marchMembership(e, Number(e.getDynamicProperty("war:goal") ?? 0)); } catch {}
+  try { marchMembership(e, Number(gdp(e, "war:goal") ?? 0)); } catch {}
   think(e);
   return e;
 }
@@ -499,34 +528,34 @@ function surrender(e, captor) {
   try { sdDrop(e); } catch {}
   const d = sd(e);
   if (d.surr) return;
-  e.setDynamicProperty("war:prevfunc", d.func);
-  e.setDynamicProperty("war:surr", captor);
+  sdp(e, "war:prevfunc", d.func);
+  sdp(e, "war:surr", captor);
   const slot = makeWaypoint(e.dimension, e.location);
   setGoal(e, slot);
-  e.setDynamicProperty("war:home", slot);
+  sdp(e, "war:home", slot);
   equip(e, "air");
   applyRelations(e);
   setGroups(e, { w: "w_none", t: "t_off", g: "g_post", s: "s_1", d: "d_off", r: "r_off" });
 }
 function resume(e) {
   try { sdDrop(e); } catch {}
-  if (!e.getDynamicProperty("war:surr")) return;
-  e.setDynamicProperty("war:surr", 0);
+  if (!gdp(e, "war:surr")) return;
+  sdp(e, "war:surr", 0);
   equip(e, weaponItem(e));
   applyRelations(e);
-  const prev = String(e.getDynamicProperty("war:prevfunc") ?? "hold");
+  const prev = String(gdp(e, "war:prevfunc") ?? "hold");
   const d = sd(e);
   giveFunction(e, prev === "follow" || prev === "escort" ? prev : prev === "charge" ? "hold" : prev, findPlayer(d.leader));
 }
 
 // ================================================================ the brain
 function speedGroup(e, urgent) {
-  const until = Number(e.getDynamicProperty("war:pacet") ?? 0), was = e.getDynamicProperty("war:pace");
+  const until = Number(gdp(e, "war:pacet") ?? 0), was = gdp(e, "war:pace");
   const mode = urgent ? "u" : "w";
   if (typeof was === "string" && was.startsWith(mode) && tick() < until) return was.slice(1);
   const g = speedGroupRoll(e, urgent);
-  e.setDynamicProperty("war:pace", mode + g);
-  e.setDynamicProperty("war:pacet", tick() + 160 + Math.floor(Math.random() * 80));
+  sdp(e, "war:pace", mode + g);
+  sdp(e, "war:pacet", tick() + 160 + Math.floor(Math.random() * 80));
   return g;
 }
 function speedGroupRoll(e, urgent) {
@@ -540,16 +569,16 @@ function speedGroupRoll(e, urgent) {
 
 function think(e) {
   sdDrop(e);
-  if (!downed.has(e.id) && e.getDynamicProperty("war:downed") !== undefined) downed.set(e.id, tick() + 300);   // still down after a reload
+  if (!downed.has(e.id) && gdp(e, "war:downed") !== undefined) downed.set(e.id, tick() + 300);   // still down after a reload
   if (downed.has(e.id)) { setGroups(e, { w: "w_none", t: "t_off", g: "g_none", s: "s_1", d: "d_off", r: "r_off" }); return; }
-  if (!pows.has(e.id) && e.getDynamicProperty("war:pow") !== undefined) { try { pows.set(e.id, JSON.parse(String(e.getDynamicProperty("war:pow")))); } catch {} }
-  if (!ridingNest(e) && (P(e, "war:nest") || e.getDynamicProperty("war:gunSaved"))) { setP(e, "war:nest", false); e.setDynamicProperty("war:gunSaved", undefined); if (!pows.has(e.id)) equip(e, weaponItem(e)); }
+  if (!pows.has(e.id) && gdp(e, "war:pow") !== undefined) { try { pows.set(e.id, JSON.parse(String(gdp(e, "war:pow")))); } catch {} }
+  if (!ridingNest(e) && (P(e, "war:nest") || gdp(e, "war:gunSaved"))) { setP(e, "war:nest", false); sdp(e, "war:gunSaved", undefined); if (!pows.has(e.id)) equip(e, weaponItem(e)); }
   if (pows.has(e.id) && Number(P(e, "war:gun") ?? 0) !== 0) { setP(e, "war:gun", 0); equip(e, "air"); }   // stays disarmed
   if (pows.has(e.id)) { const pm = powMove(e, tick()); if (pm) { if (pm.slot !== undefined) setGoal(e, pm.g === "g_wp" ? pm.slot : 0); setGroups(e, { w: pm.w, t: pm.t, g: pm.g, s: pm.s, d: pm.d, r: pm.r }); } return; }
   const d = sd(e);
   const now = tick();
   // while engaging, the order's own goal is parked in war:ordergoal
-  const parked = e.getDynamicProperty("war:ordergoal");
+  const parked = gdp(e, "war:ordergoal");
   if (parked !== undefined) d.goal = Number(parked);
   if (d.surr) {
     // resume when the war with the captor is over
@@ -560,8 +589,8 @@ function think(e) {
   const riding = isRiding(e);
   const hp = e.getComponent("minecraft:health");
   const hpr = hp ? hp.currentValue / hp.effectiveMax : 1;
-  const lastHurt = Number(e.getDynamicProperty("war:hurt") ?? -9999);
-  const alert = Number(e.getDynamicProperty("war:alert") ?? -9999) > now;
+  const lastHurt = Number(gdp(e, "war:hurt") ?? -9999);
+  const alert = (alertUntil.get(e.id) ?? -9999) > now;
   const fighting = now - lastHurt < 80;
 
   // ---- morale
@@ -576,26 +605,26 @@ function think(e) {
   const canRetreat = !riding && (d.div !== "garrison" || d.func === "patrol");
   if (!retreat && canRetreat && (hpr < 0.3 || (hpr < 0.6 && foes >= friends * 2 + 3))) {
     retreat = true;
-    e.setDynamicProperty("war:retreat", true);
-    if (e.getDynamicProperty("war:ordergoal") !== undefined) { setGoal(e, Number(e.getDynamicProperty("war:ordergoal"))); e.setDynamicProperty("war:ordergoal", undefined); }
+    sdp(e, "war:retreat", true);
+    if (gdp(e, "war:ordergoal") !== undefined) { setGoal(e, Number(gdp(e, "war:ordergoal"))); sdp(e, "war:ordergoal", undefined); }
     updateName(e);
-  } else if (retreat && hpr > 0.75 && foes <= friends + 1 && now > Number(e.getDynamicProperty("war:retreatUntil") ?? 0) &&
+  } else if (retreat && hpr > 0.75 && foes <= friends + 1 && now > Number(gdp(e, "war:retreatUntil") ?? 0) &&
              (hpr >= 0.95 || !nearestFlag(e.dimension, e.location, (f) => !!P(f, "war:rally") && isFriendly(d.faction, Number(P(f, "war:faction"))), 128))) {
     retreat = false;
-    e.setDynamicProperty("war:retreat", false);
-    const home = Number(e.getDynamicProperty("war:home") ?? 0);
+    sdp(e, "war:retreat", false);
+    const home = Number(gdp(e, "war:home") ?? 0);
     if (ANCHORED.includes(d.func)) setGoal(e, home);
-    else if (d.func === "squad") setGoal(e, Number(e.getDynamicProperty("war:mwp") ?? 0));
-    else if (d.func === "charge") setGoal(e, Number(e.getDynamicProperty("war:chargegoal") ?? 0)); // rejoin the charge
+    else if (d.func === "squad") setGoal(e, Number(gdp(e, "war:mwp") ?? 0));
+    else if (d.func === "charge") setGoal(e, Number(gdp(e, "war:chargegoal") ?? 0)); // rejoin the charge
     else setGoal(e, 0);
-    d.goal = Number(e.getDynamicProperty("war:goal") ?? 0);
+    d.goal = Number(gdp(e, "war:goal") ?? 0);
     updateName(e);
   }
   if (hp && hpr < 1 && now - lastHurt > 200) {
     const rf = nearestFlag(e.dimension, e.location, (f) => !!P(f, "war:rally") && isFriendly(d.faction, Number(P(f, "war:faction"))), 8);
     let heal = 0;
     if (rf) heal = 2;                                              // at a rally point: real healing
-    else if (now - Number(e.getDynamicProperty("war:selfheal") ?? -9999) > 340) { heal = 1; e.setDynamicProperty("war:selfheal", now); } // alone: ~1 HP per 17 s
+    else if (now - Number(gdp(e, "war:selfheal") ?? -9999) > 340) { heal = 1; sdp(e, "war:selfheal", now); } // alone: ~1 HP per 17 s
     if (heal) hp.setCurrentValue(Math.min(hp.effectiveMax, hp.currentValue + heal));
   }
 
@@ -603,7 +632,7 @@ function think(e) {
   let weapon = GUNS.includes(d.weapon) ? `w_${d.weapon}` : d.ranged ? "w_ranged" : d.div === "cavalier" ? "w_lance" : "w_melee";
   if (d.div === "medic") weapon = "w_keepaway";
   if (d.div === "grenadier") {
-    const snow = Number(e.getDynamicProperty("war:snow") ?? 3);
+    const snow = Number(gdp(e, "war:snow") ?? 3);
     if (snow > 0) { weapon = "w_keepaway"; grenadier(e, d, now); }
     else weapon = "w_ranged";
   }
@@ -616,23 +645,23 @@ function think(e) {
     const rally = nearestFlag(e.dimension, e.location, (f) => !!P(f, "war:rally") && isFriendly(d.faction, Number(P(f, "war:faction"))), 128);
     // falling back along a real route to the rally flag (not a straight line Minecraft has to work out)
     const mv = rally ? travel(e, rally.location, "rally", now, true) : undefined;
-    const slot = mv?.slot ?? (rally ? slotOf(rally) : Number(e.getDynamicProperty("war:home") ?? 0));
+    const slot = mv?.slot ?? (rally ? slotOf(rally) : Number(gdp(e, "war:home") ?? 0));
     if (slot !== d.goal) setGoal(e, slot);
     want = { w: weapon, t: "t_off", g: mv ? mv.g : slot ? "g_wp" : "g_flee", s: speedGroup(e, true), d: "d_off", r: "r_off" }; // no fighting back while falling back
   } else {
     const anchor = ["hold", "post", "sentry", "stand"].includes(d.func) ? marker(d.goal) : undefined;
-    const cu = d.func === "charge" ? e.getDynamicProperty("war:catchup") : undefined;
+    const cu = d.func === "charge" ? gdp(e, "war:catchup") : undefined;
     const bLeash = d.func === "post" ? 2 : d.func === "sentry" ? d.radius + 4 : d.func === "hold" ? (freeOf(e) ? aoOf(e) : 18) : 6;
     const wet = inWater(e);
-    const engaged = medicMove(e, d, now) ?? shakenMove(e, d, now) ?? waterExit(e, d, now) ?? (personal.has(e.id) ? followPersonal(e, now) : undefined) ?? regroupMove(e, d, now) ?? (wet ? undefined : drillMove(e, d, now, melee, anchor, bLeash)) ?? (wet ? undefined : engagement(e, d, now, d.goal, melee)) ?? reinforceMove(e, d, now) ??
+    const engaged = medicMove(e, d, now) ?? shakenMove(e, d, now) ?? waterExit(e, d, now) ?? (personal.has(e.id) ? followPersonal(e, now) : undefined) ?? spreadMove(e, now) ?? (wet ? undefined : combatMove(e, d, now, melee, anchor, bLeash)) ?? (wet ? undefined : engagement(e, d, now, d.goal, melee)) ?? reinforceMove(e, d, now) ??
       (cu !== undefined && marker(Number(cu)) ? (note(e, "catching up"), { g: "g_wp", slot: Number(cu), t: "t_mid", urgent: true }) : undefined) ??
       patrolSweep(e, d, now);
     // how far each stationary order may leave its spot to fight: post barely, hold to meet a charge, sentry its whole radius
     const leash = d.func === "post" ? (melee ? 4 : 2) : d.func === "sentry" ? d.radius + 4 : d.func === "hold" ? (freeOf(e) ? aoOf(e) : 18) : (freeOf(e) && d.func === "stand" ? 12 : 4);
-    if (anchor && !riding && dist(e.location, anchor.location) > leash + 2 && Number(e.getDynamicProperty("war:calm") ?? 0) <= now) {
-      e.setDynamicProperty("war:calm", now + 60); // chased too far: walk back to the line
+    if (anchor && !riding && dist(e.location, anchor.location) > leash + 2 && Number(gdp(e, "war:calm") ?? 0) <= now) {
+      sdp(e, "war:calm", now + 60); // chased too far: walk back to the line
     }
-    const calm = Number(e.getDynamicProperty("war:calm") ?? 0) > now;
+    const calm = Number(gdp(e, "war:calm") ?? 0) > now;
     const walk = speedGroup(e, fighting || alert);
     switch (d.func) {
       case "hold": want = { w: weapon, t: melee ? "t_short" : "t_mid", g: "g_wp", s: walk, d: "d_off" }; break;
@@ -646,7 +675,9 @@ function think(e) {
       case "charge": {
         const m = marker(d.goal);
         if (arriveCharge(e, d)) return; // arrived: take a formation spot, then hold or patrol
-        want = { w: weapon, t: "t_mid", g: m ? "g_wp" : "g_none", s: speedGroup(e, true), d: "d_off" };
+        const mm = laneOf.has(d.goal) ? getMarches()[laneOf.get(d.goal)] : undefined;
+        const waitRoute = !!mm && !mm.path && !mm.early && !mm.final;          // v5.4: the lanes aren't placed yet (indoors): wait where he is, don't all walk to one spot
+        want = { w: weapon, t: "t_mid", g: m && !waitRoute ? "g_wp" : "g_none", s: speedGroup(e, true), d: "d_off" };
         break;
       }
       default: want = { w: weapon, t: "t_mid", g: "g_wp", s: walk, d: "d_off" };
@@ -656,22 +687,25 @@ function think(e) {
     // (contact is handled by perception/engagement below)
     if (d.weapon === "at") want.t = "t_at";                                        // anti-tank: only enemy-crewed vehicles
     else if (["rifle", "mg"].includes(d.weapon) && want.t === "t_mid") want.t = "t_far"; // long guns see farther
-    // a gunner with an enemy right on top of him fights hand-to-hand, then goes back to shooting
-    if (GUNS.includes(d.weapon) && d.weapon !== "at" && closeEnemy(e, d, 2.5)) want.w = "w_melee";
     if (d.div === "medic") want.t = "t_off";
     if (calm) { want.w = "w_none"; want.t = "t_off"; }
     // ---- perception overrides the order while there's something to deal with; then the order resumes
     if (engaged && !calm) {
-      if (e.getDynamicProperty("war:ordergoal") === undefined) e.setDynamicProperty("war:ordergoal", d.goal);
+      if (gdp(e, "war:ordergoal") === undefined) sdp(e, "war:ordergoal", d.goal);
       setGoal(e, engaged.slot ?? 0);
-      e.setDynamicProperty("war:ordergoal", d.goal);
+      sdp(e, "war:ordergoal", d.goal);
       want.g = engaged.g;
       if (want.t !== "t_at") want.t = engaged.t;
       want.s = engaged.slow ? "s_1" : speedGroup(e, engaged.urgent);
-    } else if (e.getDynamicProperty("war:ordergoal") !== undefined) {
-      setGoal(e, Number(e.getDynamicProperty("war:ordergoal")));  // back to the order
-      e.setDynamicProperty("war:ordergoal", undefined);
+    } else if (gdp(e, "war:ordergoal") !== undefined) {
+      setGoal(e, Number(gdp(e, "war:ordergoal")));  // back to the order
+      sdp(e, "war:ordergoal", undefined);
     }
+    // v5.4: gunners are aimed, fired and moved by the script alone. Vanilla targeting would walk them at the enemy on
+    // its own (straight at a building, off the route) and override their orders: it stays off for them.
+    if (GUNS.includes(d.weapon)) { want.t = "t_off"; want.r = "r_off"; }
+    // a gunner with an enemy right on top of him fights hand-to-hand, then goes back to shooting
+    if (GUNS.includes(d.weapon) && d.weapon !== "at" && !calm && closeEnemy(e, d, 2.5)) { want.w = "w_melee"; want.t = "t_short"; want.r = "r_on"; }
   }
   setGroups(e, want);
   if (!riding) unstick(e, d, fighting);
@@ -686,7 +720,7 @@ function closeEnemy(e, d, r) {
 
 // Medic waypoint drifts to the centre of its squad (or nearby allies).
 function medicAnchor(e, d) {
-  const m = marker(Number(e.getDynamicProperty("war:mwp") ?? 0));
+  const m = marker(Number(gdp(e, "war:mwp") ?? 0));
   if (!m) return;
   let sx = 0, sy = 0, sz = 0, n = 0;
   for (const o of e.dimension.getEntities({ type: SOLDIER, location: e.location, maxDistance: d.squad ? 64 : 16 })) {
@@ -699,7 +733,7 @@ function medicAnchor(e, d) {
   if (dist(c, m.location) > 3) { try { m.teleport(c); } catch {} }
 }
 function medic(e, d, now) {
-  if (Number(e.getDynamicProperty("war:healt") ?? 0) > now) return;
+  if (Number(gdp(e, "war:healt") ?? 0) > now) return;
   let best, bestR = 0.8;
   for (const o of e.dimension.getEntities({ location: e.location, maxDistance: 8 })) {
     if (o.id === e.id || (o.typeId !== SOLDIER && o.typeId !== "minecraft:player" && o.typeId !== HOUND)) continue;
@@ -710,7 +744,7 @@ function medic(e, d, now) {
     if (r < bestR) { bestR = r; best = o; }
   }
   if (!best) return;
-  e.setDynamicProperty("war:healt", now + 60);
+  sdp(e, "war:healt", now + 60);
   const tgt = best;
   try {
     const from = { x: e.location.x, y: e.location.y + 1.5, z: e.location.z };
@@ -727,7 +761,7 @@ function medic(e, d, now) {
   }, 12);
 }
 function grenadier(e, d, now) {
-  if (Number(e.getDynamicProperty("war:snowt") ?? 0) > now) return;
+  if (Number(gdp(e, "war:snowt") ?? 0) > now) return;
   // only enemy soldiers, hounds, players, and tanks with an enemy crew; never mobs or empty targets
   let best, bd = -1e9;
   for (const o of nearbyCombatants(e.dimension.id, e.location, 32)) {
@@ -750,9 +784,9 @@ function grenadier(e, d, now) {
   }
   if (!best) return;
   callout(e, "Grenade!");
-  const snow = Number(e.getDynamicProperty("war:snow") ?? 3) - 1;
-  e.setDynamicProperty("war:snow", snow);
-  e.setDynamicProperty("war:snowt", now + 200); // 10 s
+  const snow = Number(gdp(e, "war:snow") ?? 3) - 1;
+  sdp(e, "war:snow", snow);
+  sdp(e, "war:snowt", now + 200); // 10 s
   try {
     const from = { x: e.location.x, y: e.location.y + 1.6, z: e.location.z };
     const sb = e.dimension.spawnEntity("minecraft:snowball", from);
@@ -777,7 +811,7 @@ function unstick(e, d, fighting) {
       goalLoc = p.location;
     }
   } else {
-    const m = marker(Number(e.getDynamicProperty("war:goal") ?? 0));
+    const m = marker(Number(gdp(e, "war:goal") ?? 0));
     if (m) { goalLoc = m.location; stop = d.func === "patrol" ? d.radius + 2 : 4; }
   }
   if (!goalLoc || fighting) return;
@@ -804,19 +838,19 @@ function unstick(e, d, fighting) {
     }
   }
   // ---- stuck recovery (every 5 s): side-step, then back off, then a short teleport as last resort
-  const lpt = Number(e.getDynamicProperty("war:lpt") ?? 0);
+  const lpt = Number(gdp(e, "war:lpt") ?? 0);
   if (now - lpt < 100) return;
-  const lp = e.getDynamicProperty("war:lp");
+  const lp = gdp(e, "war:lp");
   const moved = lp && typeof lp === "object" ? dist(lp, p0) : 99;
-  e.setDynamicProperty("war:lp", { x: p0.x, y: p0.y, z: p0.z });
-  e.setDynamicProperty("war:lpt", now);
-  let stage = Number(e.getDynamicProperty("war:stuck") ?? 0);
-  if (moved >= 1) { if (stage) e.setDynamicProperty("war:stuck", 0); return; }
+  sdp(e, "war:lp", { x: p0.x, y: p0.y, z: p0.z });
+  sdp(e, "war:lpt", now);
+  let stage = Number(gdp(e, "war:stuck") ?? 0);
+  if (moved >= 1) { if (stage) sdp(e, "war:stuck", 0); return; }
   stage++;
-  if (stage >= 2 && personal.has(e.id) && !personal.get(e.id).planning) { personal.delete(e.id); travelTo.delete(e.id); rTrack.delete(e.id); e.setDynamicProperty("war:stuck", 0); return; }   // his route didn't work from here: plan again
-  if (stage >= 2 && isIndoors(e) && !personal.has(e.id)) { planPersonal(e, "exit", outsideGoal, now); e.setDynamicProperty("war:stuck", 0); return; }
-  if (stage >= 2 && canBuild(e, now) && (breakSoft(e, goalLoc, now) || placeStep(e, goalLoc, now))) { e.setDynamicProperty("war:stuck", 0); return; }
-  e.setDynamicProperty("war:stuck", stage);
+  if (stage >= 2 && personal.has(e.id) && !personal.get(e.id).planning) { personal.delete(e.id); travelTo.delete(e.id); rTrack.delete(e.id); sdp(e, "war:stuck", 0); return; }   // his route didn't work from here: plan again
+  if (stage >= 2 && isIndoors(e) && !personal.has(e.id)) { planPersonal(e, "exit", outsideGoal, now); sdp(e, "war:stuck", 0); return; }
+  if (stage >= 2 && canBuild(e, now) && (breakSoft(e, goalLoc, now) || placeStep(e, goalLoc, now))) { sdp(e, "war:stuck", 0); return; }
+  sdp(e, "war:stuck", stage);
   const side = e.id.charCodeAt(e.id.length - 1) % 2 ? 1 : -1;
   try {
     if (stage === 1) push(e, { x: -hz * side * 0.6, y: 0.2, z: hx * side * 0.6 }, 2);
@@ -828,7 +862,7 @@ function unstick(e, d, fighting) {
       }
       else if (far < 10) tpNear(e, goalLoc, dim);
       else tpNear(e, { x: p0.x + hx * 4, y: p0.y, z: p0.z + hz * 4 }, dim, true);
-      e.setDynamicProperty("war:stuck", 0);
+      sdp(e, "war:stuck", 0);
     }
   } catch {}
 }
@@ -881,30 +915,30 @@ system.runInterval(() => {
   const soldiers = allOf(SOLDIER);
   for (const e of soldiers) {
     try {
-      if (e.getDynamicProperty("war:div") === undefined) { setupSoldier(e, { faction: 0, div: "foot", func: "hold" }, undefined); continue; }
+      if (gdp(e, "war:div") === undefined) { setupSoldier(e, { faction: 0, div: "foot", func: "hold" }, undefined); continue; }
       syncProps(e);
       // old one-number goal tags (v4.2.1 and earlier): re-tag with the two-part scheme
-      if (!e.hasTag("war_g2")) { setGoal(e, Number(e.getDynamicProperty("war:goal") ?? 0)); e.addTag("war_g2"); }
+      if (!e.hasTag("war_g2")) { setGoal(e, Number(gdp(e, "war:goal") ?? 0)); e.addTag("war_g2"); }
       // soldiers armed before guns were drawn on the model: re-arm once
-      if (e.getDynamicProperty("p_war:gun") === undefined && GUNS.includes(String(e.getDynamicProperty("war:weapon") ?? ""))) equip(e, weaponItem(e));
-      if (e.getDynamicProperty("war:relv") !== v) applyRelations(e);
+      if (gdp(e, "p_war:gun") === undefined && GUNS.includes(String(gdp(e, "war:weapon") ?? ""))) equip(e, weaponItem(e));
+      if (gdp(e, "war:relv") !== v) applyRelations(e);
       if ((e.id.charCodeAt(e.id.length - 1) & 1) === phase) think(e);
     } catch {}
   }
   for (const h of allOf(HOUND)) {
     try {
       syncProps(h);
-      const m = world.getEntity(String(h.getDynamicProperty("war:master") ?? ""));
+      const m = world.getEntity(String(gdp(h, "war:master") ?? ""));
       if (m && m.isValid) {
         // hounds always share their master's faction and stay near him
-        if (P(h, "war:faction") !== P(m, "war:faction") || !!m.getDynamicProperty("war:surr") !== !!h.getDynamicProperty("war:surr")) {
+        if (P(h, "war:faction") !== P(m, "war:faction") || !!gdp(m, "war:surr") !== !!gdp(h, "war:surr")) {
           setP(h, "war:faction", P(m, "war:faction"));
-          h.setDynamicProperty("war:surr", m.getDynamicProperty("war:surr") ?? 0);
+          sdp(h, "war:surr", gdp(m, "war:surr") ?? 0);
           applyRelations(h);
         }
         if (m.dimension.id !== h.dimension.id || dist(m.location, h.location) > 24) tpNear(h, m.location, m.dimension);
       }
-      if (h.getDynamicProperty("war:relv") !== v) applyRelations(h);
+      if (gdp(h, "war:relv") !== v) applyRelations(h);
     } catch {}
   }
   if (tick() % 200 < 10) { try { gcWaypoints(soldiers); } catch {} }
@@ -960,14 +994,14 @@ world.afterEvents.entityHurt.subscribe((ev) => {
   const f = factionOf(v);
   if (!f) return;
   const now = tick();
-  if (v.typeId === SOLDIER) v.setDynamicProperty("war:hurt", now);
+  if (v.typeId === SOLDIER) sdp(v, "war:hurt", now);
   const sq = v.typeId === SOLDIER ? sd(v).squad : 0;
   for (const o of nearbyCombatants(v.dimension.id, v.location, 64)) {
     if (o.typeId !== SOLDIER) continue;
     const of = Number(P(o, "war:faction"));
     if (!isFriendly(of, f)) continue;
     const near = dist(o.location, v.location) <= 16;
-    if (near || (sq && of === f && sd(o).squad === sq)) o.setDynamicProperty("war:alert", now + 200); // squad shares contact
+    if (near || (sq && of === f && sd(o).squad === sq)) alertUntil.set(o.id, now + 200); // squad shares contact
   }
 });
 
@@ -988,15 +1022,15 @@ system.runInterval(() => {
         if (isFriendly(owner, f)) defended = true;
         else if (isHostile(owner, f) && n > capN) { cap = f; capN = n; }
       }
-      let prog = Number(flag.getDynamicProperty("war:cap") ?? 0);
+      let prog = Number(gdp(flag, "war:cap") ?? 0);
       prog = defended || !cap ? Math.max(0, prog - 1) : prog + 1;
-      flag.setDynamicProperty("war:cap", prog);
+      sdp(flag, "war:cap", prog);
       if (cap && !defended && prog > 0) {
         for (const p of flag.dimension.getPlayers({ location: flag.location, maxDistance: 20 }))
           p.onScreenDisplay.setActionBar(`${factionLabel(cap)} §fcapturing ${factionLabel(owner)}§f's flag ${"§a|".repeat(prog)}${"§7|".repeat(Math.max(0, 8 - prog))}`);
       }
       if (prog >= 8) {
-        flag.setDynamicProperty("war:cap", 0);
+        sdp(flag, "war:cap", 0);
         setP(flag, "war:faction", cap);
         say(`§l${factionLabel(cap)} §r§fcaptured ${factionLabel(owner)}§f's war flag!`);
         chronFlagCaptured(flag.dimension, flag.location, `${factionLabel(cap, true)} captured ${factionLabel(owner, true)}'s war flag.`);
@@ -1060,7 +1094,7 @@ function warFlagPlaced(f) {
   if (list.length) say(`${factionLabel(f)} §fraised its war flag again. §cThe war resumes.`);
   delete store[f];
   setJSON(world, "war:withdrawn", store);
-  for (const e of allOf(SOLDIER)) { try { if (Number(P(e, "war:faction")) === f && e.getDynamicProperty("war:surr")) resume(e); } catch {} }
+  for (const e of allOf(SOLDIER)) { try { if (Number(P(e, "war:faction")) === f && gdp(e, "war:surr")) resume(e); } catch {} }
   for (const e of [...allOf(SOLDIER), ...allOf(HOUND)]) { try { applyRelations(e); } catch {} }
 }
 
@@ -1071,7 +1105,7 @@ world.afterEvents.playerSpawn.subscribe((ev) => {
   if (ev.initialSpawn) return;
   system.runTimeout(() => {
     for (const g of allOf(SOLDIER)) {
-      try { if (g.getDynamicProperty("war:owner") === p.id && sd(g).div === "guard") tpNear(g, p.location, p.dimension); } catch {}
+      try { if (gdp(g, "war:owner") === p.id && sd(g).div === "guard") tpNear(g, p.location, p.dimension); } catch {}
     }
   }, 20);
 });
@@ -1641,7 +1675,7 @@ function spawnArmy(player, s, count) {
       if (s.div === "houndmaster") {
         for (let i = 0; i < 5; i++) {
           const h = player.dimension.spawnEntity(HOUND, { x: p.x + (Math.random() - 0.5) * 2, y: p.y, z: p.z + (Math.random() - 0.5) * 2 });
-          h.setDynamicProperty("war:master", fin.id);
+          sdp(h, "war:master", fin.id);
           setP(h, "war:faction", s.faction);
           applyRelations(h);
         }
@@ -1781,8 +1815,8 @@ async function giveOrderInner(player, cfg) {
   });
   // fresh soldiers first, then nearest
   pool.sort((a, b) => {
-    const fa = now - Number(a.getDynamicProperty("war:ordt") ?? -99999) < 2400 ? 1 : 0;
-    const fb = now - Number(b.getDynamicProperty("war:ordt") ?? -99999) < 2400 ? 1 : 0;
+    const fa = now - Number(gdp(a, "war:ordt") ?? -99999) < 2400 ? 1 : 0;
+    const fb = now - Number(gdp(b, "war:ordt") ?? -99999) < 2400 ? 1 : 0;
     return fa - fb || dist(a.location, player.location) - dist(b.location, player.location);
   });
   if (cfg.count) pool = pool.slice(0, cfg.count);
@@ -1796,7 +1830,7 @@ async function giveOrderInner(player, cfg) {
     const free = Math.max(0, rd.seatCount - rd.getRiders().length);
     let n = 0;
     for (const e of pool.filter((x) => sd(x).div !== "cavalier").slice(0, free)) {
-      try { e.teleport({ x: veh.location.x, y: veh.location.y + 0.5, z: veh.location.z }); if (rd.addRider(e)) { n++; e.setDynamicProperty("war:ordt", now); } } catch {}
+      try { e.teleport({ x: veh.location.x, y: veh.location.y + 0.5, z: veh.location.z }); if (rd.addRider(e)) { n++; sdp(e, "war:ordt", now); } } catch {}
     }
     player.onScreenDisplay.setActionBar(`§eBoarded: §f${n} §7(${free - n} seats left)`);
     return;
@@ -1834,20 +1868,20 @@ async function giveOrderInner(player, cfg) {
   for (const e of pool) {
     try {
       freshMind(e);                                            // the newest order overrides everything
-      e.setDynamicProperty("war:ordt", now);
-      e.setDynamicProperty("war:ao", cfg.ao ?? 100);
-      e.setDynamicProperty("war:free", cfg.free !== false);
-      e.setDynamicProperty("war:cmdr", player.id);
-      if (order !== "fallback") e.setDynamicProperty("war:stance", cfg.stance ?? "aggressive");
+      sdp(e, "war:ordt", now);
+      sdp(e, "war:ao", cfg.ao ?? 100);
+      sdp(e, "war:free", cfg.free !== false);
+      sdp(e, "war:cmdr", player.id);
+      if (order !== "fallback") sdp(e, "war:stance", cfg.stance ?? "aggressive");
       if (order === "fallback") {
-        e.setDynamicProperty("war:retreat", true);
-        e.setDynamicProperty("war:retreatUntil", now + 600);
+        sdp(e, "war:retreat", true);
+        sdp(e, "war:retreatUntil", now + 600);
         updateName(e); setJSON(e, "war:st", {}); think(e);
       } else if (spotCenter) {
         // each soldier gets its own spot around the target instead of one crowded point
         giveFunction(e, mapFunc(order, sd(e).div), player, formationSlot(e.dimension, spotCenter, e, order === "patrol" ? 4 : 2.5) || slot);
       } else if (march) {
-        e.setDynamicProperty("war:then", cfg.then ?? "hold");
+        sdp(e, "war:then", cfg.then ?? "hold");
         giveFunction(e, mapFunc(order, sd(e).div), player, march.lanes[n % march.lanes.length]); // each soldier gets a lane
       } else {
         giveFunction(e, mapFunc(order, sd(e).div), player, slot);
@@ -1887,7 +1921,7 @@ async function unitWand(player, e) {
   else if (pick === "copy") { setJSON(player, "war:template", snapshot(e)); player.onScreenDisplay.setActionBar("§aCopied."); }
   else if (pick === "paste1") pasteOnto(e, tpl, player);
   else if (pick === "dismiss1") {
-    for (const h of allOf(HOUND)) if (h.getDynamicProperty("war:master") === e.id) h.remove();
+    for (const h of allOf(HOUND)) if (gdp(h, "war:master") === e.id) h.remove();
     e.remove(); player.onScreenDisplay.setActionBar("§7Dismissed.");
   }
   else if (pick === "guards") await guardOrders(player, mine ? e : undefined);
@@ -1938,7 +1972,7 @@ async function editSoldier(player, e) {
     .dropdown("Skin", ["Faction uniform", ...skins.map((s) => s.name)], { defaultValueIndex: Math.max(0, skins.findIndex((s) => s.slot === d.skin) + 1) })
     .slider("Patrol / sentry radius", 4, 150, { valueStep: 2, defaultValue: Math.min(150, Math.max(4, d.radius)) })
     .textField("Name (blank = automatic)", "e.g. Sgt. Rossi", { defaultValue: d.custom })
-    .dropdown("Stance", ["Aggressive", "Defensive", "Hold fire"], { defaultValueIndex: Math.max(0, ["aggressive", "defensive", "holdfire"].indexOf(String(e.getDynamicProperty("war:stance") ?? "aggressive"))) });
+    .dropdown("Stance", ["Aggressive", "Defensive", "Hold fire"], { defaultValueIndex: Math.max(0, ["aggressive", "defensive", "holdfire"].indexOf(String(gdp(e, "war:stance") ?? "aggressive"))) });
   const r = await show(f, player);
   if (!r || r.canceled || !r.formValues || !e.isValid) return;
   const v = r.formValues;
@@ -1948,7 +1982,7 @@ async function editSoldier(player, e) {
     armor: ARMOR[Number(v[4])] ?? "none",
     skin: skinIdx ? skins[skinIdx - 1].slot : 0, radius: Number(v[6]), custom: String(v[7]).trim(), owner: d.owner, func: "__none" };
   const func = funcs[Number(v[2])][0];
-  e.setDynamicProperty("war:stance", ["aggressive", "defensive", "holdfire"][Number(v[8])] ?? "aggressive");
+  sdp(e, "war:stance", ["aggressive", "defensive", "holdfire"][Number(v[8])] ?? "aggressive");
   const ne = setupSoldier(e, s, player, { heal: false });
   giveFunction(ne, func, player, ANCHORED.includes(func) && func === d.func ? d.goal || undefined : undefined);
   player.onScreenDisplay.setActionBar("§aSoldier updated.");
@@ -2042,8 +2076,8 @@ async function warTable(player, pre) {
     const nr = await show(nf, player);
     if (!nr || nr.canceled || !nr.formValues) return;
     namesCache = nr.formValues.map((x) => String(x).trim().slice(0, 24));
-    world.setDynamicProperty("war:names", JSON.stringify(namesCache));
-    world.setDynamicProperty("war:relv", relVersion() + 1);
+    sdp(world, "war:names", JSON.stringify(namesCache));
+    sdp(world, "war:relv", relVersion() + 1);
     player.sendMessage("§aFaction names saved.");
   } else if (r.selection === 4) {
     const f = await pickFaction("Name squads: pick a faction");
@@ -2056,8 +2090,8 @@ async function warTable(player, pre) {
     const all = getSquads();
     all[f] = nr.formValues.map((x) => String(x).trim().slice(0, 20));
     squadsCache = all;
-    world.setDynamicProperty("war:squads", JSON.stringify(all));
-    world.setDynamicProperty("war:relv", relVersion() + 1);
+    sdp(world, "war:squads", JSON.stringify(all));
+    sdp(world, "war:relv", relVersion() + 1);
     player.sendMessage("§aSquad names saved.");
   } else if (r.selection === 6) {
     await coalitions(player);
@@ -2076,8 +2110,8 @@ async function warTable(player, pre) {
         .slider("Reaction speed (% of normal)", 50, 200, { valueStep: 25, defaultValue: cur("r_react") });
       const rr = await show(rf, player);
       if (!rr || rr.canceled || !rr.formValues) return;
-      world.setDynamicProperty("war:set_r_dmg", Math.round(Number(rr.formValues[0])));
-      world.setDynamicProperty("war:set_r_react", Math.round(Number(rr.formValues[1])));
+      sdp(world, "war:set_r_dmg", Math.round(Number(rr.formValues[0])));
+      sdp(world, "war:set_r_react", Math.round(Number(rr.formValues[1])));
       player.sendMessage(`§aRealism saved: damage ${rr.formValues[0]}%, reaction speed ${rr.formValues[1]}%.`);
       return warTable(player, 5);
     }
@@ -2093,15 +2127,15 @@ async function warTable(player, pre) {
       .toggle("Soldiers cut off and outnumbered may surrender", { defaultValue: !!setting("isosurr", true) });
     const sr = await show(sf, player);
     if (!sr || sr.canceled || !sr.formValues) return;
-    world.setDynamicProperty("war:set_capture", sr.formValues[0] === 0 ? "neutral" : "surrender");
-    world.setDynamicProperty("war:set_blockdmg", !!sr.formValues[1]);
-    world.setDynamicProperty("war:set_spacing", [1, 1.5, 2][Number(sr.formValues[2])] ?? 1.5);
-    world.setDynamicProperty("war:set_readout", !!sr.formValues[3]);
-    world.setDynamicProperty("war:set_civil", !!sr.formValues[4]);
-    world.setDynamicProperty("war:set_build", !!sr.formValues[5]);
-    world.setDynamicProperty("war:set_drills", !!sr.formValues[6]);
-    world.setDynamicProperty("war:set_poses", !!sr.formValues[7]);
-    world.setDynamicProperty("war:set_isosurr", !!sr.formValues[8]);
+    sdp(world, "war:set_capture", sr.formValues[0] === 0 ? "neutral" : "surrender");
+    sdp(world, "war:set_blockdmg", !!sr.formValues[1]);
+    sdp(world, "war:set_spacing", [1, 1.5, 2][Number(sr.formValues[2])] ?? 1.5);
+    sdp(world, "war:set_readout", !!sr.formValues[3]);
+    sdp(world, "war:set_civil", !!sr.formValues[4]);
+    sdp(world, "war:set_build", !!sr.formValues[5]);
+    sdp(world, "war:set_drills", !!sr.formValues[6]);
+    sdp(world, "war:set_poses", !!sr.formValues[7]);
+    sdp(world, "war:set_isosurr", !!sr.formValues[8]);
     player.sendMessage("§aSettings saved.");
     return warTable(player, 5);
     player.sendMessage("§aSettings saved.");
@@ -2201,21 +2235,21 @@ const strip = (t) => String(t).replace(/§./g, "");
 const day = () => { try { return world.getDay(); } catch { return 0; } };
 function saveChunks(prefix, str) {
   const n = Math.ceil(str.length / 30000) || 1;
-  for (let i = 0; i < n; i++) world.setDynamicProperty(`${prefix}${i}`, str.slice(i * 30000, (i + 1) * 30000));
-  world.setDynamicProperty(`${prefix}n`, n);
+  for (let i = 0; i < n; i++) sdp(world, `${prefix}${i}`, str.slice(i * 30000, (i + 1) * 30000));
+  sdp(world, `${prefix}n`, n);
 }
 function loadChunks(prefix) {
-  const n = Number(world.getDynamicProperty(`${prefix}n`) ?? 0);
+  const n = Number(gdp(world, `${prefix}n`) ?? 0);
   let out = "";
-  for (let i = 0; i < n; i++) out += String(world.getDynamicProperty(`${prefix}${i}`) ?? "");
+  for (let i = 0; i < n; i++) out += String(gdp(world, `${prefix}${i}`) ?? "");
   return out;
 }
 function chronLoad() {
-  try { chron = JSON.parse(String(world.getDynamicProperty("war:chron") ?? "null")); } catch { chron = null; }
+  try { chron = JSON.parse(String(gdp(world, "war:chron") ?? "null")); } catch { chron = null; }
   try { chronEvents = chron ? JSON.parse(loadChunks("war:chronE") || "[]") : []; } catch { chronEvents = []; }
 }
 function chronSave() {
-  world.setDynamicProperty("war:chron", JSON.stringify(chron));
+  sdp(world, "war:chron", JSON.stringify(chron));
   saveChunks("war:chronE", JSON.stringify(chronEvents));
   chronDirty = false;
 }
@@ -2390,7 +2424,7 @@ function finishWar(player) {
   try { player.getComponent("minecraft:inventory").container.addItem(makeBook(chron.name, pages)); } catch {}
   world.sendMessage(`§l§e${chron.name}§r §fis over. §7The chronicle has been written.`);
   chron = null; chronEvents = [];
-  world.setDynamicProperty("war:chron", "null");
+  sdp(world, "war:chron", "null");
   saveChunks("war:chronE", "[]");
 }
 async function warArchive(player) {
@@ -2458,15 +2492,18 @@ function nearbyCombatants(dimId, loc, r) {
 
 // ================================================================ Hearing
 // Gunfire and explosions alert soldiers within ~64 blocks who are hostile to whoever made the noise.
+const alertUntil = new Map(); // soldier id -> tick (v5.4: in memory; it was a property write per soldier per bullet)
+const noiseT = new Map();     // maker id -> tick his noise was last spread (an MG burst is one noise, not thirty)
 function noise(dim, loc, maker) {
+  const now = tick();
+  if (maker) { if (now - (noiseT.get(maker.id) ?? -99) < 10) { noiseFrom.set(maker.id, now); return; } noiseT.set(maker.id, now); }
   try { hearNoise(dim, loc, maker); } catch {}
   const mf = maker ? factionOf(maker) : 0;
-  const now = tick();
   for (const o of nearbyCombatants(dim.id, loc, 64)) {
     if (o.typeId !== SOLDIER) continue;
     try {
       const of = Number(P(o, "war:faction"));
-      if (!mf || isHostile(of, mf)) o.setDynamicProperty("war:alert", now + 200);
+      if (!mf || isHostile(of, mf)) alertUntil.set(o.id, now + 200);
     } catch {}
   }
 }
@@ -2609,14 +2646,22 @@ function muzzleOf(e, t) {
   const dx = c.x - h.x, dy = c.y - h.y, dz = c.z - h.z, l = Math.hypot(dx, dy, dz) || 1;
   return { x: h.x + (dx / l) * 0.9, y: h.y - 0.2 + (dy / l) * 0.9, z: h.z + (dz / l) * 0.9 };
 }
-function canHit(e, t) {
+// v5.4: the part of him that can be hit from here: his chest, or else his head (in a window, over a wall, at a
+// parapet). A defender a step back from a window shows only his head; before, the attackers never fired back at him.
+const headOf = (t) => { const c = chest(t); return { x: c.x, y: c.y + 0.4, z: c.z }; };
+function aimAt(e, t) {
   try {
     const m = muzzleOf(e, t), c = chest(t);
-    return clearShot(e.dimension, m, c) && clearShot(e.dimension, m, { x: c.x, y: c.y + 0.35, z: c.z });
-  } catch { return false; }
+    if (clearShot(e.dimension, m, c) && clearShot(e.dimension, m, { x: c.x, y: c.y + 0.35, z: c.z })) return c;
+    if (t.typeId !== SOLDIER && t.typeId !== "minecraft:player") return undefined;
+    const hd = headOf(t);
+    if (clearShot(e.dimension, m, hd) && clearShot(e.dimension, m, { x: hd.x, y: hd.y + 0.15, z: hd.z })) return hd;
+  } catch {}
+  return undefined;
 }
-function fireGun(e, spec, t) {
-  const h = e.getHeadLocation(), c0 = chest(t);
+const canHit = (e, t) => !!aimAt(e, t);
+function fireGun(e, spec, t, aim) {
+  const h = e.getHeadLocation(), c0 = aim ?? chest(t);
   let c = c0;
   try { const v = t.getVelocity(); const tt = Math.hypot(c0.x - h.x, c0.y - h.y, c0.z - h.z) / spec.speed; c = { x: c0.x + v.x * tt, y: c0.y, z: c0.z + v.z * tt }; } catch {}  // lead the target
   let dx = c.x - h.x, dy = c.y - h.y, dz = c.z - h.z;
@@ -2652,7 +2697,7 @@ function gunTick(e, now) {
       st.next = Math.max(st.next, now + (ang < 60 ? 6 : ang < 120 ? 12 : 20));
       st.wild = ang >= 120 ? 2 : 0;                             // first shots after a big turn are less accurate
     }
-    const stance = String(e.getDynamicProperty("war:stance") ?? "aggressive");
+    const stance = String(gdp(e, "war:stance") ?? "aggressive");
     if (st.target && stance === "holdfire" && !isProvoker(d.faction, st.target, now)) st.target = undefined;
     if (st.target) st.seen = now;
     // rushed: back off and sidestep instead of standing still (not when pinned to a post)
@@ -2666,12 +2711,21 @@ function gunTick(e, now) {
       }
     }
   }
-  const aiming = now - st.seen < 40;
+  const aiming = now - st.seen < 40 || (st.supp?.until ?? 0) > now;
   if (!!P(e, "war:aiming") !== aiming) setP(e, "war:aiming", aiming);
+  if (!st.target && st.supp && now < st.supp.until && now >= st.next && st.supp.ent?.isValid && !downed.has(st.supp.ent.id)) {   // v5.4: suppressing a window / doorway
+    const p = st.supp.p;
+    if (!friendlyInLine(e, d, e.getHeadLocation(), p, st.supp.ent) && turnTo(e, p, 20) <= 25) {
+      fireAtPoint(e, spec, { x: p.x, y: p.y - 1, z: p.z });
+      st.lastShot = now; st.ammo--;
+      if (st.ammo > 0) st.next = now + Math.max(2, spec.gap); else { st.ammo = spec.mag; st.next = now + spec.reload + Math.floor(Math.random() * 8); }
+    } else st.next = now + 4;
+    return;
+  }
   if (!st.target || now < st.next) return;
   const t = st.target;
   if (!t.isValid) { st.target = undefined; return; }
-  if (dist(t.location, e.location) > spec.fire) return;                // seen but out of range: keep closing in
+  if (!shotAt(e, d, t, now)) return;                                    // beyond the gun's useful range, or a head too far to hit: close in first (v5.4)
   if (closeEnemy(e, d, 2.5)) return;                                    // hand-to-hand right now
   const from = e.getHeadLocation();
   if (friendlyInLine(e, d, from, chest(t), t)) {                        // never shoot through a friendly
@@ -2680,10 +2734,11 @@ function gunTick(e, now) {
     return;
   }
   if (turnTo(e, t.location, 20) > 25) { st.next = now + 2; return; } // still turning toward him
-  if (!canHit(e, t)) { st.next = now + 6; st.target = undefined; return; } // the shot would hit the terrain: don't waste it
+  const aim = aimAt(e, t);
+  if (!aim) { st.next = now + 6; st.target = undefined; return; } // the shot would hit the terrain: don't waste it
   const shaky = ((suppB.get(e.id) ?? 0) > 8 ? 1.8 : 1) * woundK(e);  // pinned down / badly wounded: shaky aim
-  if (st.wild > 0) { st.wild--; fireGun(e, { ...spec, spread: spec.spread * 3 * shaky }, t); }
-  else fireGun(e, shaky === 1 ? spec : { ...spec, spread: spec.spread * shaky }, t);
+  if (st.wild > 0) { st.wild--; fireGun(e, { ...spec, spread: spec.spread * 3 * shaky }, t, aim); }
+  else fireGun(e, shaky === 1 ? spec : { ...spec, spread: spec.spread * shaky }, t, aim);
   firedOn(t, e, now);
   if (t.typeId === "minecraft:player") shotAtPlayer.set(t.id, now);
   if (d.weapon === "mg" && st.ammo === spec.mag) callout(e, "Suppressing!");
@@ -2700,7 +2755,7 @@ function gunTick(e, now) {
 system.runInterval(() => {
   const now = tick();
   for (const e of allOf(SOLDIER)) {
-    try { if (GUNS.includes(String(e.getDynamicProperty("war:weapon") ?? "")) || ridingNest(e)) gunTick(e, now); } catch {}
+    try { if (GUNS.includes(String(gdp(e, "war:weapon") ?? "")) || ridingNest(e)) gunTick(e, now); } catch {}
   }
   if (now % 200 === 0) for (const id of [...gunState.keys()]) if (!world.getEntity(id)) gunState.delete(id);
 }, 1);
@@ -2719,8 +2774,8 @@ world.afterEvents.entityHurt.subscribe((ev) => {
       if (a.typeId !== SOLDIER && a.typeId !== "minecraft:player") return;   // mobs don't send anyone to cover
       if (dist(a.location, e.location) < 8) return;
       const now = tick();
-      if (Number(e.getDynamicProperty("war:covert") ?? 0) > now) return;
-      e.setDynamicProperty("war:covert", now + 200);
+      if (Number(gdp(e, "war:covert") ?? 0) > now) return;
+      sdp(e, "war:covert", now + 200);
       const anchor = ["hold", "sentry", "stand"].includes(d.func) ? marker(d.goal) : undefined;
       const leash = stepLeash(d) + 1;
       const shooter = a.getHeadLocation ? a.getHeadLocation() : a.location;
@@ -2895,7 +2950,7 @@ function perceive(e, now) {
     const fa = firedAt.get(e.id);
     const attacking = attackedRecently(e, o, now) || (!!asg && asg.id === o.id && now - asg.t < 200) || (!!fa && fa.by === o.id && now - fa.t < 100);
     if (dd > reach && !attacking) continue;
-    if (!clearShot(e.dimension, eye, chest(o)) && !attacking) continue;
+    if (!attacking && !clearShot(e.dimension, eye, chest(o)) && !((o.typeId === SOLDIER || o.typeId === "minecraft:player") && clearShot(e.dimension, eye, headOf(o)))) continue;   // a head in a window counts
     visible.add(o.id);
     if (!s.seen.has(o.id)) s.seen.set(o.id, now);
     const shared = d.squad && squadTarget.get(`${d.faction}:${d.squad}`)?.id === o.id;
@@ -2996,7 +3051,7 @@ function slotForThreat(t) {
   return 0;
 }
 system.runInterval(() => {
-  const goals = new Set(allOf(SOLDIER).map((s) => Number(s.getDynamicProperty("war:goal") ?? 0)));
+  const goals = new Set(allOf(SOLDIER).map((s) => Number(gdp(s, "war:goal") ?? 0)));
   for (const [id, slot] of [...threatSlot]) {
     if (goals.has(slot)) continue;
     const t = world.getEntity(id);
@@ -3010,7 +3065,7 @@ const ANCHOR_LEASH = (d, melee) => d.func === "post" ? (melee ? 4 : 2) : d.func 
 function engagement(e, d, now, orderGoal, melee) {
   const s = perc.get(e.id);
   if (!s || d.retreat || d.surr || d.div === "medic" || d.func === "escort" || d.func === "squad") return undefined;
-  const stance = String(e.getDynamicProperty("war:stance") ?? "aggressive");
+  const stance = String(gdp(e, "war:stance") ?? "aggressive");
   const anchor = ["hold", "post", "sentry", "stand"].includes(d.func) ? marker(orderGoal) : undefined;
   let leash = ANCHOR_LEASH(d, melee);
   if (freeOf(e) && d.func === "hold") leash = aoOf(e);                        // the whole area of operations is theirs
@@ -3024,11 +3079,26 @@ function engagement(e, d, now, orderGoal, melee) {
     if (stance === "defensive") { note(e, "defending"); return { g: "g_none", t: melee ? "t_short" : "t_mid", urgent: false }; }
     if (isMob(t) && dd > 10) return undefined;                  // shoot an attacking mob if it's there, never chase it
     if (gun) {
-      const fire = GUN_SPEC[d.weapon]?.fire ?? 30;
-      const stopRange = Math.min(fire * 0.9, ["charge", "follow"].includes(d.func) ? 45 : 90);
-      if (dd <= stopRange && canHit(e, t)) { note(e, "firing"); return { g: "g_none", t: "t_mid", urgent: false }; } // stop and shoot
-      if (dd <= stopRange) { note(e, "moving for a clear shot"); const sl = slotForThreat(t); return sl ? { g: "g_wp", slot: sl, t: "t_mid", urgent: true } : undefined; }
-      if (dd > 60) { note(e, `firing at ${Math.round(dd)} blocks`); return undefined; } // far: keep to the order, shoot on the move
+      // v5.4: stop to shoot only within the gun's useful range and with a clear shot; no clear shot -> go and get one
+      // (a spot nearby that sees him, his floor if he's above or below, or along a real route toward him)
+      const range = engageRange(e, d, t, now);
+      const stopRange = Math.min(range, ["charge", "follow"].includes(d.func) ? 45 : 90);
+      if (dd <= stopRange && shotAt(e, d, t, now)) { note(e, "firing"); return { g: "g_none", t: "t_mid", urgent: false }; } // stop and shoot
+      if (dd <= stopRange) {
+        const tc = chest(t);
+        const spot = spotNear(e, (w) => clearShot(e.dimension, { x: w.x, y: w.y + 1.6, z: w.z }, tc), anchor, leash, 8);
+        if (spot) { note(e, "moving for a clear shot"); const sl = myMarker(e, spot); return sl ? { g: "g_wp", slot: sl, t: "t_mid", urgent: true } : undefined; }
+        if (anchor && freeOf(e) === false) return undefined;                                   // exactly as ordered: stay
+        if (Math.abs(t.location.y - e.location.y) > 2.5) {
+          if (!personal.has(e.id)) planPersonalTo(e, "advance", { x: t.location.x, y: t.location.y, z: t.location.z }, now);
+          return followPersonal(e, now);
+        }
+        note(e, "moving for a clear shot");
+        return travel(e, t.location, "engage", now, true);
+      }
+      const moving = ["charge", "follow", "patrol"].includes(d.func);
+      if (dd > 60 || moving) { note(e, dd > range ? `closing in (${Math.round(dd)} blocks)` : `firing at ${Math.round(dd)} blocks`); return undefined; } // keep to the order: it's taking him there (the brain fights close in)
+      if (!anchor) { note(e, "closing in"); return travel(e, t.location, "engage", now, true); }        // a real route, not vanilla's beeline
     } else if (dd > 40 && !attackedRecently(e, t, now)) return undefined;     // melee doesn't run 100 blocks after someone
     note(e, isMob(t) ? "fighting a mob" : "engaging");
     const slot = slotForThreat(t);
@@ -3158,12 +3228,28 @@ function chooseShape(dim, pos, heading, members, now) {
   return enemyKnown ? "wedge" : "line";                                            // wedge toward a known enemy
 }
 function placeLanes(m, dim, center, heading, shape) {
-  if (isIndoorsAt(dim, center)) { for (const slot of m.lanes) { try { marker(slot)?.teleport(center); } catch {} } m.shape = "single file"; return; }  // indoors: single file on the route
+  if (isIndoorsAt(dim, center)) {
+    // indoors: on the march, single file along the route behind the guide (never all on one spot); on arrival,
+    // separate spots in the same room, on the same floor
+    m.lanes.forEach((slot, i) => {
+      let at = center;
+      if (!m.final && m.path) at = m.path[Math.max(0, (m.idx ?? 0) - i * 2)];
+      else if (i) {
+        for (let r = 1.5; r <= 4.5 && at === center; r += 1.5) for (let k = 0; k < 8; k++) {
+          const a = ((k + i * 3) / 8) * Math.PI * 2, w = walkableNear(dim, center.x + Math.cos(a) * r, center.z + Math.sin(a) * r, center.y);
+          if (w && Math.abs(w.y - center.y) <= 0.5 && localReach(dim, center, w)) { at = w; break; }
+        }
+      }
+      try { marker(slot)?.teleport(at); } catch {}
+    });
+    m.shape = "single file"; return;
+  }
   const S = spacingSetting() * 2, fx = Math.cos(heading), fz = Math.sin(heading), rx = -fz, rz = fx;
   m.lanes.forEach((slot, i) => {
     const [ox, oy] = SHAPES[shape][i % 6];
     const x = center.x + rx * ox * S + fx * oy * S, z = center.z + rz * ox * S + fz * oy * S;
     let w = walkableNear(dim, x, z, center.y);
+    if (w && m.final && !localReach(dim, center, w)) w = undefined;
     if (!w || Math.abs(w.y - center.y) > 1) {                   // unusable spot: nearest usable one around it
       w = undefined;
       for (let r = 1; r <= 3 && !w; r++) for (let k = 0; k < 8 && !w; k++) {
@@ -3193,7 +3279,7 @@ function startMarch(player, pool, dest, then) {
   // don't stand around while the route is worked out: start walking toward the destination
   const L0 = Math.hypot(dest.x - cx, dest.z - cz) || 1, st0 = Math.min(12, L0);
   const first = walkableNear(dim, cx + ((dest.x - cx) / L0) * st0, cz + ((dest.z - cz) / L0) * st0, cy);
-  void first;                                                 // (no early wandering: they wait the second or two for the route)
+  try { if (first && !isIndoorsAt(dim, from) && Math.abs(first.y - cy) <= 1 && localReach(dim, from, first)) { placeLanes(m, dim, first, m.heading, "line"); m.early = true; } } catch {}   // v5.4: no standing around (outdoors)
   requestPlan(id, m, from);
   saveMarches();
   return { id, lanes: m.lanes };
@@ -3217,7 +3303,7 @@ function requestPlan(id, m, from, wide = false) {
       legs.push({ x: mm.dest.x, y: mm.dest.y, z: mm.dest.z });
       mm.legs = legs;
       planLeg(id, mm, from, wide);
-    }, { step: 4, maxRadius: 420, max: wide ? 16000 : 9000, weight: wide ? 1.0 : 1.2, dead: m.dead });
+    }, { step: 4, maxRadius: 420, max: wide ? 16000 : 9000, weight: wide ? 1.0 : 1.2, dead: m.dead, prio: true });
     return;
   }
   planLeg(id, m, from, wide);
@@ -3244,7 +3330,7 @@ function planLeg(id, m, from, wide) {
     }
     mm.progT = tick();
     saveMarches();
-  }, { step: 1, maxRadius: 300, max: 120000, weight: wide ? 1.0 : 1.15, dead: m.dead });
+  }, { step: 1, maxRadius: 300, max: 120000, weight: wide ? 1.0 : 1.15, dead: m.dead, prio: true });
 }
 function markDeadEnd(m, at, small = false) {
   const near = (m.dead ?? []).filter((z) => Math.hypot(z.x - at.x, z.z - at.z) < 30).length;
@@ -3293,19 +3379,33 @@ function routeProgress(m, loc, id) {
 }
 // next route point that's a few blocks ahead of the lead (route distance, not straight-line), stopping at gates
 function advance(m, c) { void m; void c; }   // (v5.3: the guide position is set from the lead's progress above)
+// ---- the march loop (v5.4). The guide (formation lanes) runs ~6 blocks of route ahead of the front of the group and
+// never waits at a stair, ladder or door. Where plain walking can't be trusted (indoors, stairs, ladders, doors, a level
+// change just ahead) and for stragglers, each soldier follows the route himself on his own marker, in single file
+// (the route driver below), so nobody piles onto one spot. Downed, captured or mounted members don't set the pace
+// and nobody waits for them; they rejoin if they get back up.
+const marchActive = (e) => !downed.has(e.id) && !pows.has(e.id) && !isRiding(e) && !sd(e).surr;
+// does the route need careful single-file following from point i on (for a soldier at loc)?
+function tightAt(dim, pts, i, loc) {
+  if (isIndoorsAt(dim, loc)) return true;
+  for (let k = Math.max(0, i - 1); k < Math.min(pts.length - 1, i + 4); k++) if (isGate(pts[k], pts[k + 1])) return true;   // a ladder, a door, a drop (a step up a hill isn't)
+  return false;
+}
 system.runInterval(() => {
   const ms = getMarches();
   const ids = Object.keys(ms);
   if (!ids.length) return;
   const now = tick();
-  const soldiers = allOf(SOLDIER);
+  const byId = new Map(allOf(SOLDIER).map((e) => [e.id, e]));
   let changed = false;
   for (const id of ids) {
     const m = ms[id];
     m.members = m.members ?? [];
     if (!m.members.length) { for (const s of m.lanes) laneOf.delete(s); delete ms[id]; changed = true; continue; } // everyone arrived, died or got new orders
-    const members = soldiers.filter((e) => m.members.includes(e.id));
-    if (!members.length) continue;                              // out of range: keep the order, resume when they load again
+    const all = m.members.map((x) => byId.get(x)).filter((e) => e);
+    if (!all.length) continue;                                  // out of range: keep the order, resume when they load again
+    const members = all.filter(marchActive);
+    if (!members.length) continue;                              // everyone down or captured: nothing to lead
     if (!m.path && !m.planning && !m.final) {                    // (after a reload) plan again from the group
       let x = 0, y = 0, z = 0; for (const e of members) { x += e.location.x; y += e.location.y; z += e.location.z; }
       requestPlan(id, m, { x: x / members.length, y: y / members.length, z: z / members.length }); changed = true; continue;
@@ -3315,27 +3415,24 @@ system.runInterval(() => {
     let cx = 0, cy = 0, cz = 0;
     for (const e of members) { cx += e.location.x; cy += e.location.y; cz += e.location.z; }
     const c = { x: cx / members.length, y: cy / members.length, z: cz / members.length };
-    const fighting = members.some((e) => e.getDynamicProperty("war:ordergoal") !== undefined);
-    const before = m.idx;
-    // the lead sets the pace: progress = how far along the route the front half has got
+    const fighting = members.some((e) => gdp(e, "war:ordergoal") !== undefined);
+    // the front of the group sets the pace (60th percentile of the members who are up and moving)
     const progOf = new Map(members.map((e) => [e.id, routeProgress(m, e.location, e.id)]));
     const prog = [...progOf.values()].sort((a, b) => b - a);
-    const lead = prog[Math.floor((prog.length - 1) / 2)];
-    // the guide: ~6 blocks of route ahead of the lead in the open, ~3 indoors, and never past a ladder / level change / door
-    // until the lead has reached it
-    const leadPt = m.path[Math.min(lead, m.path.length - 1)];
-    const tight = isIndoorsAt(dim, leadPt) || m.path.slice(lead, lead + 6).some((p, k, arr) => k && isGate(arr[k - 1], p));
-    m.idx = Math.min(m.path.length - 1, Math.max(lookahead(m.path, lead, tight ? 3.5 : 6), Math.min(m.idx, lookahead(m.path, lead, 12))));
-    advance(m, c);
+    const lead = prog[Math.floor((prog.length - 1) * 0.4)];
+    let j = lead, len = 0;                                       // ~6 blocks of route ahead of the lead, gates or not
+    while (j < m.path.length - 1 && len < 6) { const a = m.path[j], b = m.path[j + 1]; len += Math.hypot(b.x - a.x, b.z - a.z) + Math.abs(b.y - a.y); j++; }
+    m.idx = Math.min(m.path.length - 1, Math.max(m.idx ?? 0, j));
     if (lead > (m.bestIdx ?? 0) || fighting) { m.bestIdx = Math.max(m.bestIdx ?? 0, lead); m.progT = now; }
-    // stragglers well behind get their own catch-up point along the route (nobody waits for them)
-    for (const e of members) {
+    // who follows the route himself: anyone in a tight stretch, and anyone well behind the guide
+    for (const e of all) {
+      if (!marchActive(e)) { if (gdp(e, "war:catchup") !== undefined) sdp(e, "war:catchup", undefined); continue; }
       const pi = progOf.get(e.id) ?? 0;
-      if (m.idx - pi >= 4) {
-        const tgt = m.path[lookahead(m.path, pi, 7)];                 // along the route (past the 3-block stop distance), not past a ladder / level change
-        const slot = myMarker(e, tgt);                                // his own marker (never another lane's formation marker)
-        if (slot) e.setDynamicProperty("war:catchup", slot);     // the brain walks him there (no waiting for him)
-      } else if (e.getDynamicProperty("war:catchup") !== undefined) e.setDynamicProperty("war:catchup", undefined);
+      const drive = m.idx - pi >= 6 || tightAt(dim, m.path, pi, e.location);
+      if (drive) {
+        const slot = myMarker(e, m.path[Math.min(m.path.length - 1, lookahead(m.path, pi, 4))]);   // the route driver moves it from here
+        if (slot && gdp(e, "war:catchup") !== slot) sdp(e, "war:catchup", slot);
+      } else if (gdp(e, "war:catchup") !== undefined) sdp(e, "war:catchup", undefined);
     }
     const last = m.path[m.path.length - 1];
     const atEnd = m.idx >= m.path.length - 1 && flat(last, c) < 8;
@@ -3344,9 +3441,9 @@ system.runInterval(() => {
       const atDest = Math.hypot(m.dest.x - last.x, m.dest.z - last.z) <= 6 && (!Number.isFinite(m.dest.y) || Math.abs(m.dest.y - last.y) <= 2) && !last.climb;
       if (atDest) {
         // arrived: lanes become formation spots at the destination
-        m.final = true; m.dest.y = last.y; m.pos = { x: last.x, y: last.y, z: last.z };
+        m.final = true; m.finalT = now; m.dest.y = last.y; m.pos = { x: last.x, y: last.y, z: last.z };
         placeLanes(m, dim, m.pos, m.heading, "line");
-        for (const e of members) e.setDynamicProperty("war:catchup", undefined);   // stragglers now just join the formation
+        for (const e of all) sdp(e, "war:catchup", undefined);   // stragglers now just join the formation
       } else if (!lt.final && Math.hypot(lt.x - last.x, lt.z - last.z) <= 8) {
         m.legs?.shift();                                         // leg done: plan the next one
         requestPlan(id, m, c);
@@ -3376,7 +3473,7 @@ system.runInterval(() => {
 }, 10);
 // is this soldier's current route stretch a planned water crossing?
 function plannedSwim(e) {
-  const g = Number(e.getDynamicProperty("war:ordergoal") ?? e.getDynamicProperty("war:goal") ?? 0);
+  const g = Number(gdp(e, "war:ordergoal") ?? gdp(e, "war:goal") ?? 0);
   const id = laneOf.get(g); const m = id ? getMarches()[id] : undefined;
   if (!m || !m.path) return false;
   return m.path.some((p) => p.w && flat(p, e.location) < 14);    // the route crosses water right here
@@ -3387,8 +3484,9 @@ function arriveCharge(e, d) {
   const lane = marker(d.goal);
   if (!lane) return false;
   if (m && !m.final) return false;                   // still marching
-  if (dist(e.location, lane.location) > 4) return false;
-  const then = m?.then ?? e.getDynamicProperty("war:then") ?? "hold";
+  // v5.4: arrived = at his spot, or close to it for a while (a spot he can't quite reach must not hold him in the charge forever)
+  if (dist(e.location, lane.location) > 4 && !(m?.finalT !== undefined && tick() - m.finalT > 200 && flat(e.location, lane.location) < 12 && Math.abs(e.location.y - lane.location.y) < 3)) return false;
+  const then = m?.then ?? gdp(e, "war:then") ?? "hold";
   radio(e, `in position (${Math.round(e.location.x)}, ${Math.round(e.location.z)}), ${then === "patrol" ? "patrolling" : "holding"}`);
   giveFunction(e, then === "patrol" ? "patrol" : (d.div === "garrison" ? "post" : "hold"), undefined, d.goal);
   return true;
@@ -3408,7 +3506,7 @@ system.runInterval(() => {
   for (const e of allOf(SOLDIER)) {
     try {
       const d = sd(e);
-      if (isRiding(e) || e.getDynamicProperty("war:ordergoal") !== undefined || d.func === "post") continue;
+      if (isRiding(e) || gdp(e, "war:ordergoal") !== undefined || d.func === "post") continue;
       const moving = ["charge", "patrol", "follow"].includes(d.func);
       for (const o of nearbyCombatants(e.dimension.id, e.location, moving ? sp : 0.8)) {   // standing: only un-stack
         if (o.id === e.id || o.typeId !== SOLDIER) continue;
@@ -3431,7 +3529,7 @@ system.runInterval(() => {
     try {
       const n = notes.get(e.id);
       const want = on && n && now - n.t < 60 ? n.text : "";
-      if ((e.getDynamicProperty("war:readout") ?? "") !== want) { e.setDynamicProperty("war:readout", want); updateName(e); }
+      if ((gdp(e, "war:readout") ?? "") !== want) { sdp(e, "war:readout", want); updateName(e); }
     } catch {}
   }
   if (now % 400 < 20) for (const id of [...notes.keys()]) if (!world.getEntity(id)) notes.delete(id);
@@ -3445,7 +3543,7 @@ function inWater(e) {
 }
 function goalPoint(e) {
   const d = sd(e);
-  const g = marker(Number(e.getDynamicProperty("war:ordergoal") ?? e.getDynamicProperty("war:goal") ?? 0));
+  const g = marker(Number(gdp(e, "war:ordergoal") ?? gdp(e, "war:goal") ?? 0));
   if (g) return g.location;
   if (d.leader) { const p = findPlayer(d.leader); if (p && p.dimension.id === e.dimension.id) return p.location; }
   return undefined;
@@ -3782,7 +3880,7 @@ function planRoute(dim, start, goal, onDone, opts = {}) {
   const gy = Number.isFinite(goal.y) ? Math.floor(goal.y) : undefined;
   const job = { dim, goal: { x: Math.floor(goal.x), z: Math.floor(goal.z), y: step > 1 ? undefined : gy }, cells: new Map(), open: new Heap(), g: new Map(), came: new Map(),
     closed: new Set(), best: undefined, bestH: Infinity, exp: 0, max: opts.max ?? 9000, onDone, origin: { x: sx, z: sz }, maxRadius,
-    step, weight: opts.weight ?? 1.25, dead: opts.dead ?? [], goalFn: opts.goalFn };
+    step, weight: opts.weight ?? 1.25, dead: opts.dead ?? [], goalFn: opts.goalFn, accept: opts.accept, prio: !!opts.prio };
   const s0 = cellAt(job, sx, sz, start.y) ?? { x: sx, z: sz, y: Math.floor(start.y), w: false };
   const nkey = (x, z, y) => step > 1 ? `${x},${z}` : `${x},${z},${y}`;
   job.nkey = nkey;
@@ -3818,8 +3916,9 @@ system.runInterval(() => {
   while (budget > 0 && planJobs.length && freshReads < readBudget && rounds < planJobs.length * 4 && Date.now() - tStart < 3) {
     rounds++;
     jobTurn = (jobTurn + 1) % planJobs.length;
-    const job = planJobs[jobTurn];
-    let share = Math.max(40, Math.floor(PLAN_BUDGET / planJobs.length));
+    const prioJob = planJobs.find((j) => j.prio);
+    const job = prioJob && rounds % 2 ? prioJob : planJobs[jobTurn];
+    let share = Math.max(40, Math.floor(PLAN_BUDGET / planJobs.length)) * (job.prio ? 3 : 1);
     let finished = false;
     while (share-- > 0 && budget-- > 0 && freshReads < readBudget && ((budget & 31) || Date.now() - tStart < 3)) {
       if (!job.open.size || job.exp >= job.max) {
@@ -3839,8 +3938,8 @@ system.runInterval(() => {
       // right spot AND right height: on his feet (not on a ladder) and on the goal's level; a near level is only
       // accepted after a long search (the clicked height can be a little off, e.g. on a tree or a roof edge)
       const reached = job.goalFn ? job.goalFn(job.dim, n) : (Math.hypot(job.goal.x - n.x, job.goal.z - n.z) <= Math.max(2, job.step * 1.5) &&
-        (job.step > 1 || (!n.climb && (hz <= 1.5 || (hz <= 3 && job.exp > 4000)))));
-      if (reached) { finishJob(job, nk); finished = true; break; }
+        (job.step > 1 || (!n.climb && (hz <= 0.5 || (hz <= 1.5 && job.exp > 1500) || (hz <= 3 && job.exp > 4000)))));   // v5.4: the right floor (a stair below it isn't "there")
+      if (reached || (job.accept && job.exp > 1 && job.accept(n))) { finishJob(job, nk); finished = true; break; }
       const cur = { y: n.y, w: n.w, climb: n.climb };
       const S = job.step;
       for (const [ddx, ddz] of [[1, 0], [-1, 0], [0, 1], [0, -1], [1, 1], [1, -1], [-1, 1], [-1, -1]]) {
@@ -3899,7 +3998,7 @@ system.runInterval(() => {
         }
       }
     }
-    if (finished) { planJobs.splice(planJobs.indexOf(job), 1); jobTurn = Math.max(0, jobTurn - 1); }
+    if (finished) { planJobs.splice(planJobs.indexOf(job), 1); jobTurn = Math.max(0, Math.min(jobTurn, planJobs.length - 1)); }
   }
 }, 1);
 
@@ -3918,8 +4017,8 @@ world.afterEvents.entityDie.subscribe((ev) => {
 // Mission orders with areas of operation, wide patrol sweeps, direct blast damage on this add-on's
 // units, rare personal "shaken" breaks, rules of engagement, and realism sliders.
 const realism = () => ({ dmg: Number(setting("r_dmg", 100)) / 100, react: Number(setting("r_react", 100)) / 100 });
-const aoOf = (e) => Number(e.getDynamicProperty("war:ao") ?? 100);
-const freeOf = (e) => e.getDynamicProperty("war:free") !== false;   // "use judgment" (default) vs "exactly as ordered"
+const aoOf = (e) => Number(gdp(e, "war:ao") ?? 100);
+const freeOf = (e) => gdp(e, "war:free") !== false;   // "use judgment" (default) vs "exactly as ordered"
 
 // ---- blast damage applied directly (tank shells, plane bombs, crashes): soldiers, hounds, tanks, planes, boats
 function blastDamage(dim, loc, power, src) {
@@ -3939,11 +4038,16 @@ function blastDamage(dim, loc, power, src) {
 
 // ---- areas of operation: who's defending where (for helping friends in trouble inside your area)
 function anchorOf(e) {
-  const parked = e.getDynamicProperty("war:ordergoal");
-  const g = Number(parked ?? e.getDynamicProperty("war:goal") ?? 0);
-  return marker(g) ?? marker(Number(e.getDynamicProperty("war:home") ?? 0));
+  const parked = gdp(e, "war:ordergoal");
+  const g = Number(parked ?? gdp(e, "war:goal") ?? 0);
+  return marker(g) ?? marker(Number(gdp(e, "war:home") ?? 0));
 }
+const helpT = new Map(); // "faction:attacker" -> tick the call for help last went out (v5.4: once per 2 s, not once per bullet)
 function helpInArea(victim, attacker, fv, now) {
+  const hk = `${fv}:${attacker.id}`;
+  if (now - (helpT.get(hk) ?? -99) < 40) return;
+  helpT.set(hk, now);
+  if (helpT.size > 2000) helpT.clear();
   for (const o of nearbyCombatants(victim.dimension.id, victim.location, 200)) {
     if (o.typeId !== SOLDIER || o.id === victim.id) continue;
     try {
@@ -4092,7 +4196,7 @@ system.runInterval(() => {
   for (const e of allOf(SOLDIER)) {
     try {
       const d = sd(e);
-      if (d.surr || d.div === "medic" || d.div === "guard" || !d.faction || isRiding(e)) continue;
+      if (d.surr || d.div === "medic" || d.div === "guard" || !d.faction || isRiding(e) || downed.has(e.id) || pows.has(e.id)) continue;
       const k = squadKey(e, d);
       if (!groups.has(k)) groups.set(k, []);
       groups.get(k).push(e);
@@ -4111,12 +4215,12 @@ system.runInterval(() => {
         const ids = new Set([...s.seen.keys()]); if (s.threat?.isValid) ids.add(s.threat.id);
         for (const id of ids) { const o = world.getEntity(id); if (o?.isValid && !isMob(o)) S.known.set(id, { ent: o, x: o.location.x, y: o.location.y, z: o.location.z, t: now }); }
       }
-      for (const [id, kk] of [...S.known]) if (!kk.ent.isValid || now - kk.t > 400) S.known.delete(id);
+      for (const [id, kk] of [...S.known]) if (!kk.ent.isValid || now - kk.t > 300 || downed.has(id) || pows.has(id)) S.known.delete(id);
       const known = [...S.known.values()];
       const oc = { x: 0, y: 0, z: 0 }; for (const e of ours) { oc.x += e.location.x; oc.y += e.location.y; oc.z += e.location.z; }
       oc.x /= ours.length; oc.y /= ours.length; oc.z /= ours.length; S.ourC = oc;
       if (!known.length) {
-        if (S.contactT >= 0) { regroup.set(k, now + 200); radio(ours[0], "area clear, regrouping, then continuing", true); }
+        if (S.contactT >= 0) radio(ours[0], "area clear, carrying on", true);   // v5.4: no regroup halt (it waited on the downed)
         if (S.plan !== "advance") { S.plan = "advance"; S.flankers.clear(); S.suppressors.clear(); S.flankPt = undefined; S.contactT = -1; }
         helpCall.delete(k); continue;
       }
@@ -4127,7 +4231,7 @@ system.runInterval(() => {
       }
       S.enemyC = { x: known.reduce((t, q) => t + q.x, 0) / known.length, y: known.reduce((t, q) => t + q.y, 0) / known.length, z: known.reduce((t, q) => t + q.z, 0) / known.length };
       S.ratio = ours.reduce((t, e) => t + bPower(e), 0) / Math.max(0.5, known.reduce((t, q) => t + bPower(q.ent), 0));
-      const attacking = ours.some((e) => ["charge", "follow", "patrol"].includes(sd(e).func)) && String(ours[0].getDynamicProperty("war:stance") ?? "aggressive") === "aggressive";
+      const attacking = ours.some((e) => ["charge", "follow", "patrol"].includes(sd(e).func)) && String(gdp(ours[0], "war:stance") ?? "aggressive") === "aggressive";
       squadHelpTargets(k, S, ours, now);
       const mem = adaptSquad(k, S, now);
       S.siege = mem.siegeUntil > now;
@@ -4163,7 +4267,7 @@ system.runInterval(() => {
                 callout(ours[0], "Flanking!"); radio(ours[0], `pinning them down, ${nF} flanking`, true);
                 guns.slice(guns.length - nF).forEach((e) => S.flankers.add(e.id));
                 guns.slice(0, guns.length - nF).forEach((e) => S.suppressors.add(e.id));
-                const cmdr = findPlayer(ours[0].getDynamicProperty("war:cmdr"));
+                const cmdr = findPlayer(gdp(ours[0], "war:cmdr"));
                 try { cmdr?.onScreenDisplay.setActionBar(`§e${d0.squad ? squadName(d0.faction, d0.squad) : factionLabel(d0.faction, true)}: §fpinning them, ${nF} flanking`); } catch {}
               }
             } else if (!dug) S.plan = "assault";
@@ -4210,17 +4314,23 @@ function fireAtPoint(e, spec, p) {
   for (const o of nearbyCombatants(e.dimension.id, p, 4)) if (o.typeId === SOLDIER) suppB.set(o.id, Math.min(30, (suppB.get(o.id) ?? 0) + 1));
 }
 function nearestKnownB(S, e) { let b, bd = 1e9; for (const q of S.known.values()) { const dd = Math.hypot(q.x - e.location.x, q.z - e.location.z); if (dd < bd) { bd = dd; b = q; } } return b ? { q: b, dd: bd } : undefined; }
-function spotNear(e, test, anchor, leash) {
-  let best, bd = 1e9;
-  for (let r = 1; r <= 4; r++) for (let i = 0; i < 12; i++) {
+function spotNear(e, test, anchor, leash, maxR = 4) {
+  let best, bd = 1e9, tests = 0;
+  const now = tick();
+  for (let r = 1; r <= maxR; r++) for (let i = 0; i < 12; i++) {
+    if (r >= bd || tests > 16) break;
     const a = (i / 12) * Math.PI * 2;
     const w = walkableNear(e.dimension, e.location.x + Math.cos(a) * r, e.location.z + Math.sin(a) * r, e.location.y);
     if (!w || Math.abs(w.y - e.location.y) > 1) continue;
     if (anchor && flat(w, anchor.location) > leash) continue;
     if (nearbyCombatants(e.dimension.id, w, 1.4).some((o) => o.typeId === SOLDIER && o.id !== e.id)) continue;
+    if (claimedByOther(w, e.id, now)) continue;
+    tests++;
     if (!test(w)) continue;
-    if (r < bd) { bd = r; best = w; }
+    if (r > 2 && !localReach(e.dimension, e.location, w)) continue;
+    bd = r; best = w;
   }
+  if (best) claimSpot(e, best, now);
   return best;
 }
 // ---- each gunner's decision (about twice a second, then he commits)
@@ -4246,17 +4356,21 @@ function localReach(dim, from, to) {
   return false;
 }
 function planPersonalTo(e, kind, dest, now) {
-  const pr = { pts: undefined, idx: 0, kind, t: now, planning: true };
+  const pr = { pts: undefined, idx: 0, kind, t: now, planning: true, dest: { x: dest.x, y: dest.y, z: dest.z } };
   personal.set(e.id, pr);
   const hit = cachedRoute(e.dimension, e.location, dest);                       // a squad mate just worked this out: use his route
   if (hit) { pr.planning = false; pr.pts = hit; return; }
   if (planJobs.length > 28) { pr.planning = false; pr.pts = undefined; pr.t = now - 10000; return; }   // planner busy: try again shortly
   const dim = e.dimension;
-  planRoute(dim, e.location, dest, (pts, partial) => { pr.planning = false; pr.pts = pts; pr.idx = 0; if (pts && !partial) rememberRoute(dim, dest, pts); }, { max: 20000, maxRadius: 90 });
+  // v5.4: going for the enemy's floor, the route ends as soon as it's on that floor near him (the first room, not his feet)
+  const gy = Math.floor(dest.y);
+  const accept = kind === "advance" && Number.isFinite(dest.y) ? (n) => !n.climb && Math.abs(n.y - gy) <= 1 && Math.hypot(n.x + 0.5 - dest.x, n.z + 0.5 - dest.z) <= 12 : undefined;
+  const far = flat(e.location, dest);                                           // v5.4: the search is sized to the trip (a short hop never ties up the planner)
+  planRoute(dim, e.location, dest, (pts, partial) => { pr.planning = false; pr.pts = pts; pr.idx = 0; if (pts && !partial) rememberRoute(dim, dest, pts); }, { max: Math.max(3000, Math.min(20000, Math.round(far * 300))), maxRadius: Math.min(90, far + 30), accept });
 }
 function brainMove(e, d, now, melee, anchor, leash) {
   if (d.retreat || d.surr || d.div === "medic" || d.div === "guard" || isRiding(e)) return undefined;
-  const stance = String(e.getDynamicProperty("war:stance") ?? "aggressive");
+  const stance = String(gdp(e, "war:stance") ?? "aggressive");
   if (stance === "holdfire") return undefined;
   const S = squads.get(squadKey(e, d));
   if (!S || !S.known.size) { brain.delete(e.id); return undefined; }
@@ -4265,7 +4379,7 @@ function brainMove(e, d, now, melee, anchor, leash) {
     const hit = now - (hurtBy.get(e.id)?.t ?? -999) < 100 || now - (firedAt.get(e.id)?.t ?? -999) < 60;
     if (!n0 || (n0.dd > 50 && !hit)) return undefined;                 // far away: keep to the order, shoot on the move
     // the enemy is on another level (down the stairs, up on the wall): go along a real route, not a straight line
-    if (!melee && Math.abs(n0.q.y - e.location.y) > 3 && !personal.has(e.id) && now - (brain.get(e.id)?.routeT ?? -999) > 200) {
+    if (!melee && n0.dd <= 40 && Math.abs(n0.q.y - e.location.y) > 3 && !personal.has(e.id) && now - (brain.get(e.id)?.routeT ?? -999) > 200) {
       const Bx = brain.get(e.id) ?? { act: "", decT: -999 }; Bx.routeT = now; brain.set(e.id, Bx);
       planPersonalTo(e, "advance", { x: n0.q.x, y: n0.q.y, z: n0.q.z }, now);
       return followPersonal(e, now);
@@ -4288,7 +4402,7 @@ function brainMove(e, d, now, melee, anchor, leash) {
     B.decT = now;
     const bold = boldOf(e), winning = S.ratio > 1.5;
     const dd = t ? dist(t.location, e.location) : 1e9;
-    const shot = t && canHit(e, t);
+    const shot = !!shotAt(e, d, t, now);
     const exposure = exposureAt(e.dimension, e.location, known.slice(0, 3));
     const covered = t ? !clearShot(e.dimension, chest(t), { x: e.location.x, y: e.location.y + 0.5, z: e.location.z }) : false;
     const underFire = now - (firedAt.get(e.id)?.t ?? -999) < 40 || attackedRecently(e, t ?? e, now, 40);
@@ -4302,7 +4416,9 @@ function brainMove(e, d, now, melee, anchor, leash) {
     const needGround = moving ? (t ? (dd > (GOOD_RANGE_B[d.weapon] ?? 40) * BW.close ? 1 : 0.35) : 1) : 0;
     opts.push(["advance", bold * (BW.adv * needGround + (enemyWeak ? BW.timing : 0) + (S.plan === "assault" ? BW.assault : 0) + (winning ? 0.3 : 0)) - (S.plan === "fix" && S.suppressors.has(e.id) ? 0.8 : 0) - 0.15 * exposure * (1 - BW.close) - (S.siege ? 0.5 : 0) - (d.weapon === "sniper" ? 0.6 : 0)]);
     if (underFire && !covered && exposure > 0) opts.push(["cover", (2 - bold) * BW.cover * exposure + ((suppB.get(e.id) ?? 0) > 8 ? 0.4 : 0)]);
-    if (!shot && (S.suppressors.has(e.id) || d.weapon === "mg")) opts.push(["suppress", BW.supp + (S.plan === "fix" ? 0.4 : 0)]);
+    const shotBy = firedAt.get(e.id), returning = !!shotBy && now - shotBy.t < 60;
+    B.supp = !shot && (S.suppressors.has(e.id) || d.weapon === "mg" || returning) ? suppressPoint(e, d, S, now) : undefined;   // v5.4: only a fresh sighting, in range, with a line to it
+    if (B.supp) opts.push(["suppress", BW.supp + (S.plan === "fix" ? 0.4 : 0)]);
     if (!shot) opts.push(["peek", BW.peek]);
     const hp = e.getComponent("minecraft:health");
     if (hp && hp.currentValue < 5 && exposure >= 2) opts.push(["fallback", BW.fall]);
@@ -4326,7 +4442,7 @@ function brainMove(e, d, now, melee, anchor, leash) {
       const n = nearestKnownB(S, e);
       // rare, believable mistake: a stale sighting (2+ s old, not shooting at us) is remembered a little off
       let tp = n?.q; if (tp && now - tp.t > 40 && !underFire && Math.random() < 0.05) tp = { ...tp, x: tp.x + (Math.random() - 0.5) * 10, z: tp.z + (Math.random() - 0.5) * 10 };
-      B.target = tp ? spotNear(e, (w) => clearShot(e.dimension, { x: w.x, y: w.y + 1.6, z: w.z }, { x: tp.x, y: tp.y + 1.2, z: tp.z }), anchor, leash) : undefined;
+      B.target = tp ? spotNear(e, (w) => clearShot(e.dimension, { x: w.x, y: w.y + 1.6, z: w.z }, { x: tp.x, y: tp.y + 1.2, z: tp.z }), anchor, leash, 8) : undefined;
     } else if (B.act === "fallback") {
       const n = nearestKnownB(S, e);
       if (n) { const dx = e.location.x - n.q.x, dz = e.location.z - n.q.z, L = Math.hypot(dx, dz) || 1; B.target = walkableNear(e.dimension, e.location.x + dx / L * 8, e.location.z + dz / L * 8, e.location.y); }
@@ -4355,12 +4471,11 @@ function brainMove(e, d, now, melee, anchor, leash) {
     case "cover": note(e, "taking cover"); return B.target ? go(B.target) : { g: "g_none", t: "t_mid", urgent: false };
     case "peek": note(e, "peeking for a shot"); return B.target ? go(B.target) : undefined;
     case "suppress": {
+      const q = B.supp, spec = GUN_SPEC[d.weapon], gs = gunState.get(e.id);
+      if (!q || now - q.t > 60 || !q.ent?.isValid || downed.has(q.ent.id)) { B.act = ""; B.decT = -999; return undefined; }   // nothing fresh to pin down: decide again
       note(e, "suppressing");
-      const n = nearestKnownB(S, e), spec = GUN_SPEC[d.weapon], gs = gunState.get(e.id);
-      if (n && spec && gs && now >= gs.next && dist(n.q, e.location) <= spec.fire) {
-        fireAtPoint(e, spec, n.q);
-        gs.ammo--; if (gs.ammo > 0) gs.next = now + Math.max(2, spec.gap); else { gs.ammo = spec.mag; gs.next = now + spec.reload; }
-      }
+      if (gs) gs.supp = { p: q.aim ?? { x: q.x, y: q.y + 1.2, z: q.z }, until: now + 30, ent: q.ent };   // the gun loop keeps up the fire (bursts at the gun's own rate)
+      turnTo(e, q, 20);
       // on the move (not pinning for a flank): keep walking while suppressing
       if (["charge", "follow", "patrol"].includes(d.func) && S.plan !== "fix") return undefined;
       return { g: "g_none", t: "t_mid", urgent: false };
@@ -4514,8 +4629,8 @@ async function blowHorn(player) {
   let n = 0;
   for (const e of soldiers) {
     freshMind(e);
-    e.setDynamicProperty("war:cmdr", player.id); e.setDynamicProperty("war:stance", "aggressive");
-    e.setDynamicProperty("war:ao", 100); e.setDynamicProperty("war:free", true); e.setDynamicProperty("war:then", "hold");
+    sdp(e, "war:cmdr", player.id); sdp(e, "war:stance", "aggressive");
+    sdp(e, "war:ao", 100); sdp(e, "war:free", true); sdp(e, "war:then", "hold");
     hornCone.set(e.id, { x: player.location.x, z: player.location.z, dx: dir.x / hl, dz: dir.z / hl, until: now + 1200 });
     giveFunction(e, mapFunc("charge", sd(e).div), player, march.lanes[n % march.lanes.length]); n++;
   }
@@ -4545,7 +4660,7 @@ let voicesChecked = false;
 function voiceOf(f) {
   if (!voicesChecked) {
     voicesChecked = true;
-    try { if (!world.getDynamicProperty("war:voices_v2")) { world.setDynamicProperty("war:voices", undefined); world.setDynamicProperty("war:voices_v2", true); } } catch {}
+    try { if (!gdp(world, "war:voices_v2")) { sdp(world, "war:voices", undefined); sdp(world, "war:voices_v2", true); } } catch {}
   }
   return getJSON(world, "war:voices", {})[f] ?? LOADOUT_VOICE[loadoutOf(f)] ?? "us";
 }
@@ -4601,7 +4716,7 @@ async function testBattle(player) {
   const go = (pool, target) => {
     const m = startMarch(player, pool, { x: target.x, y: player.location.y, z: target.z }, "hold");
     if (!m) return;
-    pool.forEach((e, i) => { e.setDynamicProperty("war:stance", "aggressive"); e.setDynamicProperty("war:ao", 100); e.setDynamicProperty("war:free", true); giveFunction(e, "charge", player, m.lanes[i % m.lanes.length]); });
+    pool.forEach((e, i) => { sdp(e, "war:stance", "aggressive"); sdp(e, "war:ao", 100); sdp(e, "war:free", true); giveFunction(e, "charge", player, m.lanes[i % m.lanes.length]); });
   };
   go(sa, posB); go(sb, posA);
   player.sendMessage(`§aTest battle: ${factionLabel(A)} vs ${factionLabel(B)}, ${sa.length} v ${sb.length}. They're now Hostile.`);
@@ -4617,7 +4732,7 @@ function goDown(e) {
   const now = tick();
   downed.set(e.id, now + 600);
   downPos.set(e.id, { ...e.location });
-  e.setDynamicProperty("war:downed", now + 600);
+  sdp(e, "war:downed", now + 600);
   try { e.addEffect("slowness", 640, { amplifier: 6, showParticles: false }); e.addEffect("weakness", 640, { amplifier: 4, showParticles: false }); } catch {}
   setGroups(e, { w: "w_none", t: "t_off", g: "g_none", s: "s_1", d: "d_off", r: "r_off" });
   setP(e, "war:down", true);
@@ -4628,7 +4743,7 @@ function goDown(e) {
 function revive(e, hpTo = 6) {
   downed.delete(e.id); downPos.delete(e.id);
   setP(e, "war:down", false);
-  e.setDynamicProperty("war:downed", undefined);
+  sdp(e, "war:downed", undefined);
   try { e.removeEffect("slowness"); e.removeEffect("weakness"); } catch {}
   const h = e.getComponent("minecraft:health");
   if (h) h.setCurrentValue(Math.min(h.effectiveMax, hpTo));
@@ -4642,7 +4757,7 @@ system.runInterval(() => {
     if (!e?.isValid) { downed.delete(id); continue; }
     if (now >= until) {
       downed.delete(id); downPos.delete(id);
-      try { e.setDynamicProperty("war:downed", undefined); } catch {}
+      try { sdp(e, "war:downed", undefined); } catch {}
       killReal(e);
       system.runTimeout(() => { try { if (e.isValid) e.remove(); } catch {} }, 6);       // if the kill didn't take, he's removed
       continue;
@@ -4730,7 +4845,7 @@ function medicMove(e, d, now) {
 const lastRadio = new Map();
 function radio(e, text, force = false) {
   try {
-    const d = sd(e), cmdr = findPlayer(e.getDynamicProperty("war:cmdr"));
+    const d = sd(e), cmdr = findPlayer(gdp(e, "war:cmdr"));
     if (!cmdr) return;
     const k = squadKey(e, d), now = tick();
     if (!force && now - (lastRadio.get(k) ?? -9999) < 200) return;
@@ -4849,24 +4964,10 @@ async function factionSkinMenu(player) {
 // the skin actually drawn: his own Unit Wand skin, else his faction's skin, else the faction uniform
 function syncSkin(e) {
   try {
-    const own = Number(e.getDynamicProperty("p_war:skin") ?? 0);
+    const own = Number(gdp(e, "p_war:skin") ?? 0);
     const eff = own || factionSkin(Number(P(e, "war:faction") ?? 0));
     if (e.getProperty("war:skin") !== eff) e.setProperty("war:skin", eff);
   } catch {}
-}
-
-// ---- after the battle: re-form, treat the wounded, gather stragglers, then carry on with the mission
-const regroup = new Map(); // squad key -> until tick
-function regroupMove(e, d, now) {
-  const k = squadKey(e, d), until = regroup.get(k);
-  if (!until || now > until || d.div === "medic") return undefined;
-  const S = squads.get(k);
-  if (!S?.ourC) return undefined;
-  if (Math.hypot(S.ourC.x - e.location.x, S.ourC.z - e.location.z) < 6) { note(e, "regrouping"); return { g: "g_none", t: "t_mid", urgent: false }; }
-  const w = walkableNear(e.dimension, S.ourC.x, S.ourC.z, S.ourC.y ?? e.location.y);
-  if (!w) return undefined;
-  note(e, "regrouping");
-  return travel(e, w, "regroup", now, false);
 }
 
 // ================================================================ v4.9: fixes + sandbags + MG nests
@@ -4882,16 +4983,16 @@ function killReal(e) {
 // ---- POWs: captured enemies are unarmed, never shot, follow their captor at a distance or sit in "jail"
 const pows = new Map(); // id -> { captor, mode: "follow"|"jail", at, slot }
 function makePow(e, captor) {
-  downed.delete(e.id); downPos.delete(e.id); e.setDynamicProperty("war:downed", undefined); setP(e, "war:down", false);
+  downed.delete(e.id); downPos.delete(e.id); sdp(e, "war:downed", undefined); setP(e, "war:down", false);
   try { e.removeEffect("slowness"); e.removeEffect("weakness"); } catch {}
   const h = e.getComponent("minecraft:health"); if (h) h.setCurrentValue(Math.max(h.currentValue, 6));
   pows.set(e.id, { captor: captor.id, mode: "follow" });
-  e.setDynamicProperty("war:pow", JSON.stringify({ captor: captor.id, mode: "follow" }));
+  sdp(e, "war:pow", JSON.stringify({ captor: captor.id, mode: "follow" }));
   equip(e, "air"); setP(e, "war:gun", 0);
   updateName(e);
 }
 function freePow(e, rearm) {
-  pows.delete(e.id); e.setDynamicProperty("war:pow", undefined);
+  pows.delete(e.id); sdp(e, "war:pow", undefined);
   if (rearm) equip(e, weaponItem(e));
   updateName(e);
 }
@@ -4965,7 +5066,7 @@ function sandbagSpot(e, enemyC, anchor, leash, now) {
 const NEST = "war:mg_nest";
 const NEST_SPEC = { bullet: "ww:nlmg_projectile", sight: 200, fire: 200, mag: 40, gap: 2, reload: 50, speed: 5.0, spread: 0.006 };
 const nestRider = (n) => (n.getComponent("minecraft:rideable")?.getRiders() ?? [])[0];
-function ridingNest(e) { try { return e.getComponent("minecraft:riding")?.entityRidingOn?.typeId === NEST; } catch { return false; } }
+function ridingNest(e) { try { return rideInfo(e).on === NEST; } catch { return false; } }
 const nestState = new Map(); // nest id -> { ammo, next }
 system.runInterval(() => {
   const now = tick();
@@ -4996,7 +5097,7 @@ system.runInterval(() => {
           else try { r.onScreenDisplay.setActionBar(`§7MG ${st.ammo}/${NEST_SPEC.mag}`); } catch {}
         }
       } else if (r.typeId === SOLDIER) {
-        if (Number(P(r, "war:gun") ?? 0) !== 0) { r.setDynamicProperty("war:gunSaved", true); setP(r, "war:gun", 0); }   // his own gun is put away
+        if (Number(P(r, "war:gun") ?? 0) !== 0) { sdp(r, "war:gunSaved", true); setP(r, "war:gun", 0); }   // his own gun is put away
         if (!P(r, "war:nest")) setP(r, "war:nest", true);                                                     // standing, hands on the gun
         const t = perc.get(r.id)?.threat;
         if (t?.isValid) {
@@ -5043,7 +5144,7 @@ async function captiveMenu(p, e) {
     if (r.selection === 0) {
       if (pw.mode === "jail") { pw.mode = "follow"; pw.captor = p.id; pw.slot = undefined; }
       else { pw.mode = "jail"; pw.at = { ...e.location }; pw.slot = makeWaypoint(e.dimension, e.location); }
-      e.setDynamicProperty("war:pow", JSON.stringify({ captor: pw.captor, mode: pw.mode, at: pw.at }));
+      sdp(e, "war:pow", JSON.stringify({ captor: pw.captor, mode: pw.mode, at: pw.at }));
       p.onScreenDisplay.setActionBar(pw.mode === "jail" ? "§7Imprisoned here." : "§7He follows you.");
     } else if (r.selection === 1) { freePow(e, false); p.onScreenDisplay.setActionBar("§7Released."); }
     else { pows.delete(e.id); killReal(e); }
@@ -5093,16 +5194,26 @@ function roofNear(e, now) {
 function followPersonal(e, now) {
   const pr = personal.get(e.id);
   if (!pr) return undefined;
-  if (pr.planning) return now - pr.t < 60 ? { g: "g_none", t: "t_mid", urgent: false } : undefined;   // a short wait for the route; never frozen
-  if (!pr.pts || now - pr.t > 600 + pr.pts.length * 40) { personal.delete(e.id); travelTo.delete(e.id); return undefined; }
+  const drop = () => { personal.delete(e.id); travelTo.delete(e.id); return undefined; };
+  if (pr.planning) { if (now - pr.t > 160) return drop(); return now - pr.t < 40 ? { g: "g_none", t: "t_mid", urgent: false } : undefined; }   // a short wait for the route; never frozen
+  if (!pr.pts) return drop();
   const i = trackIdx(e.id, pr.pts, e.location);
   pr.idx = i;
+  // v5.4: a route is never a prison. No progress for 6 s (blocked, pushed off it) or far past its time: dropped,
+  // and the brain decides again from where he is
+  if (pr.bestI === undefined || i > pr.bestI) { pr.bestI = i; pr.progT = now; }
+  if (now - (pr.progT ?? now) > 120 && (pr.hold ?? 0) <= now) return drop();
+  if (now - pr.t > 400 + pr.pts.length * 16) return drop();
   const end = pr.pts[pr.pts.length - 1];
-  if (i >= pr.pts.length - 2 && dist(end, e.location) < 2) { personal.delete(e.id); travelTo.delete(e.id); return undefined; }   // there
-  const pt = pr.pts[lookahead(pr.pts, i, 4.5)];
+  if (i >= pr.pts.length - 2 && dist(end, e.location) < 2) { drop(); if (pr.kind === "advance") spreadOut(e, now, end); return undefined; }   // there
+  // a fight on the way: errands are dropped (the brain fights); moving up to the enemy, he stops to take a clear shot
+  const t = perc.get(e.id)?.threat;
+  if (t?.isValid && ["patrol", "reinforce", "regroup"].includes(pr.kind)) return drop();
+  if (t?.isValid && (pr.kind === "advance" || pr.kind === "engage")) {
+    if (shotAt(e, sd(e), t, now)) { pr.hold = now + 30; pr.progT = now; note(e, "firing on the way"); return { g: "g_none", t: "t_mid", urgent: false }; }
+  }
   note(e, { exit: "getting out of the building", advance: "moving to the enemy's level", refuge: "taking refuge inside", patrol: "patrolling", reinforce: "reinforcing", regroup: "regrouping", medic: "going to the wounded", rally: "falling back to the rally point" }[pr.kind] ?? "on the move");
-  const slot = myMarker(e, pt);
-  if (dist(pt, e.location) < 3.2) stepAlong(e, pr.pts, i);                    // last steps (followers stop short of the marker)
+  const slot = myMarker(e, pr.pts[lookahead(pr.pts, i, 5)]);           // (the route driver keeps it moving between thoughts)
   return slot ? { g: "g_wp", slot, t: "t_mid", urgent: true } : undefined;
 }
 const outsideGoal = (dim, n) => { try { return !n.climb && tSky(dim, n.x + 0.5, n.y + 1, n.z + 0.5) >= 13; } catch { return false; } };
@@ -5222,7 +5333,7 @@ const climbing = new Map(); // id -> { x, z, toY, exit, t }
 function routeOf(e) {
   const pr = personal.get(e.id);
   if (pr?.pts) return { pts: pr.pts, idx: trackIdx(e.id, pr.pts, e.location) };
-  const g = Number(e.getDynamicProperty("war:ordergoal") ?? e.getDynamicProperty("war:goal") ?? 0);
+  const g = Number(gdp(e, "war:ordergoal") ?? gdp(e, "war:goal") ?? 0);
   const id = laneOf.get(g); const m = id ? getMarches()[id] : undefined;
   if (m?.path) return { pts: m.path, idx: routeProgress(m, e.location, e.id) };
   return undefined;
@@ -5287,13 +5398,13 @@ function travel(e, dest, kind, now, urgent = false) {
 // ---- one marker per soldier for his own moves (personal routes, short hops, brain spots). It is moved, never
 // re-spawned, so a soldier crossing a castle no longer leaves a trail of markers behind him (lag).
 function myMarker(e, loc) {
-  let s = Number(e.getDynamicProperty("war:mymk") ?? 0);
+  let s = Number(gdp(e, "war:mymk") ?? 0);
   const m = s ? marker(s) : undefined;
   if (!m) {
     s = makeWaypoint(e.dimension, loc, false);
     if (!s) return 0;
     try { marker(s)?.addTag("war_mine"); } catch {}
-    e.setDynamicProperty("war:mymk", s);
+    sdp(e, "war:mymk", s);
     try { noteRefs(e); } catch {}
     return s;
   }
@@ -5354,7 +5465,7 @@ system.runInterval(() => {
 
 // ---- the stepper: where plain walking toward the guide can't be trusted (stairs, ladders, doors, trapdoors, gates,
 // tight rooms), the soldier is walked point by point along his own route. The climber takes over on a ladder.
-function stepAlong(e, pts, i) {
+function stepAlong(e, pts, i, firm = false) {
   if (climbing.has(e.id) || isRiding(e) || downed.has(e.id)) return;
   let k = i;
   while (k < pts.length - 1 && r3(pts[k], e.location) < 0.9) k++;
@@ -5377,7 +5488,10 @@ function stepAlong(e, pts, i) {
   const s = Math.min(1, cap / Math.max(0.01, L * 0.25));
   const up = p.y > e.location.y + 0.5 && !p.climb;
   let face = false;                                                         // a full block in front at his feet: hop first, then forward
-  if (up) { try { const b = tBlock(e.dimension, e.location.x + (dx / L) * 0.8, Math.floor(e.location.y), e.location.z + (dz / L) * 0.8); face = !!b && !pathable(b) && !b.typeId.includes("stairs") && !b.typeId.includes("slab"); } catch {} }
+  if (up) {
+    const full = (b) => !!b && !pathable(b) && !b.typeId.includes("stairs") && !b.typeId.includes("slab");
+    try { face = full(tBlock(e.dimension, e.location.x + (dx / L) * 0.8, Math.floor(e.location.y), e.location.z + (dz / L) * 0.8)) || (L < 1.6 && full(tBlock(e.dimension, p.x, Math.floor(e.location.y), p.z))); } catch {}   // v5.4: also the step's own cell
+  }
   if (face) {
     if (tick() - (hopT.get(e.id) ?? -99) < 12) return;
     hopT.set(e.id, tick());
@@ -5387,26 +5501,91 @@ function stepAlong(e, pts, i) {
     system.runTimeout(() => { try { if (ent.isValid) push(ent, { x: vx, y: 0, z: vz }, 3); } catch {} }, 5);   // over the edge once he's up
     return;
   }
-  push(e, { x: dx * 0.25 * s, y: 0.05, z: dz * 0.25 * s }, 2);             // stairs / slabs: walked up (mobs step half blocks), never jumped
+  push(e, { x: dx * 0.25 * s, y: 0.05, z: dz * 0.25 * s }, firm ? 3 : 2);   // (firm: every 4 ticks, so a file of men keeps moving on the stairs)             // stairs / slabs: walked up (mobs step half blocks), never jumped
 }
-// march members: step only near gates / level changes / indoors; in the open the guide marker does the work
+// ---- the route driver (v5.4): four times a second, every soldier on a route of his own (a personal route, or a march
+// stretch he follows himself) gets his marker moved along it, a few blocks ahead of him and never past a stair, ladder
+// or door until he reaches it; at those he is stepped through point by point. Single file: a soldier right behind a
+// squad mate who is further along waits a moment instead of walking into him (no piles at the top of the stairs).
+// how far along the route his marker goes: ~maxLen blocks, up and down ordinary stairs (Minecraft walks those well),
+// but never past a ladder, something to open, or a drop of 2+ (he's stepped through those himself)
+function driveAhead(pts, i, maxLen) {
+  let len = 0, j = i;
+  while (j < pts.length - 1) {
+    const a = pts[j], b = pts[j + 1];
+    if (j > i && (a.climb || b.climb || b.open || Math.abs(b.y - a.y) >= 2)) break;
+    len += Math.hypot(b.x - a.x, b.z - a.z) + Math.abs(b.y - a.y);
+    j++;
+    if (len >= maxLen || b.climb) break;
+  }
+  return Math.min(pts.length - 1, j);
+}
+function queuedBehind(e, pts, i) {
+  const nx = pts[Math.min(pts.length - 1, i + 1)], end = pts[pts.length - 1];
+  const hx = nx.x - e.location.x, hz = nx.z - e.location.z, hl = Math.hypot(hx, hz);
+  const myEnd = r3(end, e.location), f = Number(P(e, "war:faction") ?? 0);
+  for (const o of nearbyCombatants(e.dimension.id, e.location, 3)) {
+    if (o.id === e.id || o.typeId !== SOLDIER || downed.has(o.id)) continue;
+    const ol = o.location;
+    if (Math.abs(ol.y - e.location.y) > 1.2 || Math.hypot(ol.x - e.location.x, ol.z - e.location.z) > 1.2) continue;
+    if (Number(P(o, "war:faction") ?? 0) !== f) continue;
+    const ox = ol.x - e.location.x, oz = ol.z - e.location.z;
+    if (Math.hypot(ox, oz) < 0.4) { if (o.id < e.id) return true; continue; }  // on the same spot: one of them waits
+    if (hl > 0.2 && (ox * hx + oz * hz) / hl < 0.15) continue;               // not in front of him
+    const oEnd = r3(end, o.location);
+    if (oEnd < myEnd - 0.4 || (Math.abs(oEnd - myEnd) <= 0.4 && o.id < e.id)) return true;   // he's further along: let him go first
+  }
+  return false;
+}
+// ---- settling on his spot: Minecraft's walking calls anything within 3 blocks "there", so a soldier can end up holding
+// on the stairs below his spot, in a doorway, or a floor under it. He's stepped the last bit: up the rest of the march's
+// route if his spot is on another floor, else straight onto it.
+const settleT = new Map();
+function settle(e, slot, m) {
+  const sp = marker(slot), now = tick();
+  if (!sp || gdp(e, "war:ordergoal") !== undefined || personal.has(e.id) || now - (settleT.get(e.id) ?? -999) < 100) return;
+  const p = e.location, at = sp.location, dd = dist(p, at);
+  if (dd < 0.9 || dd > 12) return;
+  const off = Math.abs(at.y - p.y) > 0.8;
+  if (!off && (dd > 3.3 || !onWayThrough(e.dimension, p))) return;               // on his level and not in anyone's way: fine
+  if (!m?.final && !["hold", "post", "sentry", "stand", "patrol"].includes(sd(e).func)) return;
+  settleT.set(e.id, now);
+  planPersonalTo(e, "settle", { x: at.x, y: at.y, z: at.z }, now);                // a short real route onto it (never a straight line off a stair)
+  note(e, "taking his spot");
+}
 system.runInterval(() => {
+  const now = tick();
   for (const e of allOf(SOLDIER)) {
     try {
-      if (personal.has(e.id) || climbing.has(e.id) || isRiding(e) || downed.has(e.id) || pows.has(e.id)) continue;
-      const og = e.getDynamicProperty("war:ordergoal"), goal = Number(e.getDynamicProperty("war:goal") ?? 0);
-      const cu = Number(e.getDynamicProperty("war:catchup") ?? 0);
-      if (og !== undefined && goal !== cu) continue;                         // fighting: the brain moves him
-      const id = laneOf.get(Number(og ?? goal)); const m = id ? getMarches()[id] : undefined;
-      if (!m?.path || m.final) continue;
-      const pts = m.path, i = routeProgress(m, e.location, e.id);
-      let hard = isIndoors(e);
-      for (let k = i; !hard && k < Math.min(pts.length - 1, i + 4); k++) if (isGate(pts[k], pts[k + 1]) || Math.abs(pts[k + 1].y - e.location.y) >= 1) hard = true;
-      const mk = marker(goal);
-      const close = !mk || dist(mk.location, e.location) <= 3.3;                // the guide is inside vanilla's stop distance: he won't walk on his own
-      if (!hard && !close) continue;
-      if (!close && !pts.slice(i, i + 3).some((q) => q.climb || q.open)) continue;   // guide still far: he's walking (stairs are fine)
-      stepAlong(e, pts, i);
+      if (climbing.has(e.id) || isRiding(e) || downed.has(e.id) || pows.has(e.id)) continue;
+      let pts, i, own = false;
+      const pr = personal.get(e.id);
+      if (pr) {
+        if (!pr.pts || pr.planning || (pr.hold ?? 0) > now) continue;
+        pts = pr.pts; i = trackIdx(e.id, pts, e.location); own = true;
+      } else {
+        const og = gdp(e, "war:ordergoal"), goal = Number(gdp(e, "war:goal") ?? 0);
+        const cu = Number(gdp(e, "war:catchup") ?? 0);
+        if (og !== undefined && goal !== cu) continue;                         // fighting: the brain moves him
+        const mid = laneOf.get(Number(og ?? goal)) ?? laneOf.get(Number(gdp(e, "war:chargegoal") ?? 0));
+        const m = mid ? getMarches()[mid] : undefined;
+        if (!m?.path || m.final) { settle(e, og === undefined ? goal : Number(og), m); continue; }
+        pts = m.path; i = routeProgress(m, e.location, e.id);
+        own = !!cu && goal === cu;
+        if (!own) {                                                           // on the formation lanes: only help at a gate / when the lane is too close to walk to
+          const mk = marker(goal);
+          const close = !mk || dist(mk.location, e.location) <= 3.3;
+          if (close || pts.slice(i, i + 3).some((q) => q.climb || q.open)) stepAlong(e, pts, i);
+          continue;
+        }
+      }
+      // tight stretch (indoors, stairs, a ladder or door near): the marker stays close and he is stepped point by point,
+      // in single file; open ground: the marker runs ahead and Minecraft walks him at full pace
+      const tight = tightAt(e.dimension, pts, i, e.location);
+      if (tight && queuedBehind(e, pts, i)) { myMarker(e, e.location); note(e, "waiting his turn"); continue; }
+      const tgt = pts[tight ? lookahead(pts, i, 2) : driveAhead(pts, i, 7)];
+      myMarker(e, tgt);
+      if (tight || dist(tgt, e.location) <= 3.3) stepAlong(e, pts, i, tight);
     } catch {}
   }
 }, 4);
@@ -5446,7 +5625,11 @@ function drillMove(e, d, now, melee, anchor, leash) {
   // ---- cover and move
   if (B.act === "advance" && (S.plan === "contact" || S.plan === "assault") && (S.n ?? 0) >= 3 && ["charge", "follow", "patrol"].includes(d.func)) {
     const moving = (Math.floor(now / 70) & 1) === teamOf(e);
-    if (!moving && t?.isValid && canHit(e, t)) { note(e, "covering the advance"); return { g: "g_none", t: "t_mid", urgent: false }; }
+    if (!moving && t?.isValid && shotAt(e, d, t, now)) { note(e, "covering the advance"); return { g: "g_none", t: "t_mid", urgent: false }; }
+    if (!moving) {                                                       // v5.4: no aimed shot: covering fire on the window / doorway they were just seen in
+      const q = suppressPoint(e, d, S, now), gs = gunState.get(e.id);
+      if (q && gs) { gs.supp = { p: q.aim, until: now + 30, ent: q.ent }; turnTo(e, q, 20); note(e, "covering fire"); return { g: "g_none", t: "t_mid", urgent: false }; }
+    }
     if (moving && mv && underFire && S.enemyC && !isIndoors(e)) {
       const dx = S.enemyC.x - e.location.x, dz = S.enemyC.z - e.location.z, L = Math.hypot(dx, dz) || 1;
       const side = ((Math.floor(now / 14) + teamOf(e)) & 1) ? 1 : -1;
@@ -5517,19 +5700,19 @@ function isoSurrender(e, captor) {
   for (const k of [...provoked.keys()]) if (k.endsWith(`:${e.id}`)) provoked.delete(k);   // no longer a target for anyone
   personal.delete(e.id); travelTo.delete(e.id); drill.delete(e.id);
   surrender(e, captor);
-  e.setDynamicProperty("war:surrIso", Date.now());
+  sdp(e, "war:surrIso", Date.now());
   radio(e, "one of ours was cut off and surrendered", true);
   updateName(e);
 }
 function isoRelease(e, d) {
-  const since = Number(e.getDynamicProperty("war:surrIso") ?? 0);
+  const since = Number(gdp(e, "war:surrIso") ?? 0);
   if (!since || Date.now() - since < 20000) return;                       // (flag-capture surrenders keep the old rules)
   for (const o of nearbyCombatants(e.dimension.id, e.location, 16)) {
     if (o.id === e.id || isMob(o) || VEHICLES.includes(o.typeId)) continue;
     if (o.typeId === SOLDIER && (downed.has(o.id) || pows.has(o.id))) continue;
     if (isHostile(d.faction, factionOf(o))) return;
   }
-  e.setDynamicProperty("war:surrIso", undefined);
+  sdp(e, "war:surrIso", undefined);
   resume(e);
 }
 system.runInterval(() => {
@@ -5539,7 +5722,7 @@ system.runInterval(() => {
       const d = sd(e);
       if (d.surr) { isoRelease(e, d); continue; }
       if (!on || !d.faction || downed.has(e.id) || pows.has(e.id) || isRiding(e) || d.div === "guard" || d.func === "escort") continue;
-      if (!perc.get(e.id)?.threat && now - Number(e.getDynamicProperty("war:hurt") ?? -9999) > 200) continue;
+      if (!perc.get(e.id)?.threat && now - Number(gdp(e, "war:hurt") ?? -9999) > 200) continue;
       let friends = 0, foes = 0, nearest, nd = 1e9;
       for (const o of nearbyCombatants(e.dimension.id, e.location, 12)) {
         if (o.id === e.id || isMob(o) || VEHICLES.includes(o.typeId)) continue;
@@ -5558,14 +5741,14 @@ system.runInterval(() => {
 }, 60);
 world.afterEvents.playerInteractWithEntity.subscribe((ev) => {
   const e = ev.target, p = ev.player;
-  if (e?.typeId !== SOLDIER || !e.getDynamicProperty("war:surrIso") || pows.has(e.id)) return;
+  if (e?.typeId !== SOLDIER || !gdp(e, "war:surrIso") || pows.has(e.id)) return;
   if ((ev.beforeItemStack ?? ev.itemStack)?.typeId === "war:unit_wand") return;
   system.run(() => {
     try {
       if (!e.isValid) return;
       const f = Number(P(e, "war:faction")), pf = playerFaction(p);
-      if (isFriendly(pf, f)) { e.setDynamicProperty("war:surrIso", undefined); resume(e); p.onScreenDisplay.setActionBar("§aHe's back with us."); return; }
-      e.setDynamicProperty("war:surr", 0); e.setDynamicProperty("war:surrIso", undefined);
+      if (isFriendly(pf, f)) { sdp(e, "war:surrIso", undefined); resume(e); p.onScreenDisplay.setActionBar("§aHe's back with us."); return; }
+      sdp(e, "war:surr", 0); sdp(e, "war:surrIso", undefined);
       makePow(e, p); applyRelations(e);
       p.onScreenDisplay.setActionBar("§aTaken prisoner. He follows you at a distance.");
     } catch {}
@@ -5600,3 +5783,133 @@ system.runInterval(() => {
     } catch {}
   }
 }, 1);
+
+// ================================================================ v5.4: fighting where it counts, spreading out, no piles
+// ---- how far each gun is worth firing. Attackers close in to this before they shoot (no plinking at a building from
+// 150 blocks); defenders on a position open up a bit earlier, and anyone shot at shoots back from further.
+let HEAD_K = 0.75;   // a head-only target is taken out to this share of the gun's range (self-play tuned below)
+const EFFECTIVE = { rifle: 70, semi: 60, smg: 35, mg: 75, shotgun: 16, at: 60, pistol: 25, sniper: 220 };
+function engageRange(e, d, t, now) {
+  const spec = GUN_SPEC[d.weapon];
+  if (!spec) return 0;
+  let r = EFFECTIVE[d.weapon] ?? 40;
+  if (["hold", "post", "sentry", "stand"].includes(d.func)) r *= 1.4;
+  const fa = firedAt.get(e.id);
+  if (t && (attackedRecently(e, t, now, 80) || (fa && fa.by === t.id && now - fa.t < 80))) r *= 1.15;
+  return Math.min(spec.fire, r);
+}
+// the shot this gunner would really take at t right now: in range, and only a head (in a window, over a wall) from close
+// enough to have a fair chance of hitting it. undefined = no shot: he closes in or moves for a better one.
+function shotAt(e, d, t, now) {
+  if (!t?.isValid) return undefined;
+  const aim = aimAt(e, t);
+  if (!aim) return undefined;
+  const dd = dist(t.location, e.location), r = ridingNest(e) ? 140 : engageRange(e, d, t, now);
+  if (dd > r) return undefined;
+  if (aim.y > chest(t).y + 0.1 && dd > r * HEAD_K && d.weapon !== "sniper") return undefined;
+  return aim;
+}
+// ---- suppression only where it makes sense: an enemy seen in the last 3 s, within range, and a clear line to the
+// spot he was at (the window or doorway he ducked behind). Never at a remembered position behind a wall.
+function suppressPoint(e, d, S, now) {
+  if (!GUN_SPEC[d.weapon] || !S) return undefined;
+  const h = e.getHeadLocation();
+  let best, bd = 1e9;
+  for (const q of S.known.values()) {
+    if (now - q.t > 60) continue;
+    const dd = Math.hypot(q.x - h.x, q.z - h.z);
+    if (dd >= bd || dd > engageRange(e, d, q.ent, now)) continue;
+    let p = { x: q.x, y: q.y + 1.2, z: q.z };
+    if (!clearShot(e.dimension, h, p)) { p = { x: q.x, y: q.y + 1.6, z: q.z }; if (!clearShot(e.dimension, h, p)) continue; }   // the window he's in
+    bd = dd; best = { ...q, aim: p };
+  }
+  return best;
+}
+// ---- spots squad mates have picked (so two never pick the same one)
+const spotClaims = new Map(); // soldier id -> { x, y, z, t }
+function claimedByOther(p, id, now) {
+  for (const [cid, c] of spotClaims) {
+    if (now - c.t > 200) { spotClaims.delete(cid); continue; }
+    if (cid !== id && Math.hypot(c.x - p.x, c.z - p.z) < 1.6 && Math.abs(c.y - p.y) < 1.5) return true;
+  }
+  return false;
+}
+const claimSpot = (e, p, now) => spotClaims.set(e.id, { x: p.x, y: p.y, z: p.z, t: now });
+// right on a stair, ladder or doorway: a bad place to stop (everyone behind needs it)
+function onWayThrough(dim, p) {
+  try {
+    for (let dx = -1; dx <= 1; dx++) for (let dz = -1; dz <= 1; dz++) for (const dy of [-1, 0]) {
+      const b = tBlock(dim, p.x + dx, p.y + dy, p.z + dz);
+      if (b && (b.typeId.includes("stairs") || isClimb(b) || (b.typeId.includes("door") && !b.typeId.includes("trapdoor")))) return true;
+    }
+  } catch {}
+  return false;
+}
+// a free spot near `center` on its level, reachable on foot from where he is, not taken, not in a doorway or on the
+// stairs; `good(w)` adds a preference (e.g. a line of sight to the enemy). Bounded work: a few rays at most.
+function freeSpot(e, center, rMin, rMax, good, now, anchor, leash) {
+  let best, bs = -1e9, rays = 0;
+  for (let r = rMin; r <= rMax + 0.01; r += 1.5) for (let k = 0; k < 10; k++) {
+    const a = (k / 10) * Math.PI * 2 + r * 0.7;
+    const w = walkableNear(e.dimension, center.x + Math.cos(a) * r, center.z + Math.sin(a) * r, center.y);
+    if (!w || Math.abs(w.y - center.y) > 0.6) continue;
+    if (anchor && flat(w, anchor.location) > leash) continue;
+    if (claimedByOther(w, e.id, now) || onWayThrough(e.dimension, w)) continue;
+    if (nearbyCombatants(e.dimension.id, w, 1.3).some((o) => o.typeId === SOLDIER && o.id !== e.id)) continue;
+    let sc = -r * 0.3;
+    if (good && rays < 8) { rays++; if (good(w)) sc += 3; }
+    if (sc <= bs || !localReach(e.dimension, e.location, w)) continue;
+    bs = sc; best = w;
+  }
+  return best;
+}
+// ---- at the end of the way up (or down) to the enemy: step off the stairs into the room, each to his own spot
+function spreadOut(e, now, at) {
+  const B = brain.get(e.id) ?? { act: "", decT: -999 }; brain.set(e.id, B);
+  const S = squads.get(squadKey(e, sd(e))), n = S ? nearestKnownB(S, e) : undefined;
+  const good = n ? (w) => clearShot(e.dimension, { x: w.x, y: w.y + 1.6, z: w.z }, { x: n.q.x, y: n.q.y + 1.2, z: n.q.z }) : undefined;
+  const spot = freeSpot(e, at, 2, 7, good, now);
+  if (!spot) return;
+  claimSpot(e, spot, now);
+  B.spread = { spot, until: now + 120 };
+  note(e, "spreading out");
+}
+// ---- nobody stands on top of a squad mate: the one who isn't first steps to a free spot close by
+const crowdT = new Map();
+function unCrowd(e, d, now, anchor, leash) {
+  if ((crowdT.get(e.id) ?? 0) > now || isRiding(e) || personal.has(e.id)) return undefined;
+  const f = d.faction;
+  const mates = nearbyCombatants(e.dimension.id, e.location, 1.2).filter((o) => o.typeId === SOLDIER && o.id !== e.id && !downed.has(o.id) && Math.abs(o.location.y - e.location.y) < 1 && Number(P(o, "war:faction") ?? 0) === f);
+  if (!mates.length || !mates.some((o) => o.id < e.id)) return undefined;
+  crowdT.set(e.id, now + 40);
+  const t = perc.get(e.id)?.threat;
+  const good = t?.isValid ? (w) => clearShot(e.dimension, { x: w.x, y: w.y + 1.6, z: w.z }, chest(t)) : undefined;
+  const spot = freeSpot(e, e.location, 1.5, 4.5, good, now, anchor, leash);
+  if (!spot) return undefined;
+  claimSpot(e, spot, now);
+  const B = brain.get(e.id) ?? { act: "", decT: -999 }; brain.set(e.id, B);
+  B.spread = { spot, until: now + 60 };
+  note(e, "making room");
+  const slot = myMarker(e, spot);
+  return slot ? { g: "g_wp", slot, t: "t_mid", urgent: false } : undefined;
+}
+// the brain's spot to spread to, while it lasts
+function spreadMove(e, now) {
+  const B = brain.get(e.id), sp = B?.spread;
+  if (!sp) return undefined;
+  if (now > sp.until || flat(sp.spot, e.location) < 0.8) { B.spread = undefined; return undefined; }
+  claimSpot(e, sp.spot, now);
+  const slot = myMarker(e, sp.spot);
+  if (flat(sp.spot, e.location) < 3.2) push(e, { x: (sp.spot.x - e.location.x) * 0.15, y: 0.02, z: (sp.spot.z - e.location.z) * 0.15 }, 2);   // the last steps (followers stop short of the marker)
+  return slot ? { g: "g_wp", slot, t: "t_mid", urgent: false } : undefined;
+}
+system.runInterval(() => { const now = tick(); for (const [id, c] of [...spotClaims]) if (now - c.t > 200) spotClaims.delete(id); for (const [id, t] of [...crowdT]) if (t < now) crowdT.delete(id); }, 200);
+// the brain's move, then (if he's standing still in a pile) making room
+function combatMove(e, d, now, melee, anchor, leash) {
+  const mv = drillMove(e, d, now, melee, anchor, leash);
+  if (mv && mv.g !== "g_none") return mv;
+  const anchored = ["hold", "post", "sentry", "stand"].includes(d.func);
+  if (!mv && !anchored) return mv;                                // marching on: spacing is the formation's job
+  if (!anchored && !squads.get(squadKey(e, d))?.known?.size) return mv;
+  return unCrowd(e, d, now, anchor, leash) ?? mv;
+}
