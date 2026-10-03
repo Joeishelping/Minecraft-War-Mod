@@ -1,4 +1,4 @@
-// War Engine v5.6: faction NPC war framework
+// War Engine v5.6.1: faction NPC war framework
 import { world, system, Player, ItemStack, EquipmentSlot, GameMode } from "@minecraft/server";
 import { ActionFormData, ModalFormData, FormCancelationReason } from "@minecraft/server-ui";
 import { SKINS } from "./skins.js";
@@ -2583,14 +2583,13 @@ function clearShot(dim, from, to) {
   return v;
 }
 function vehicleFaction(v) { for (let i = 1; i <= NF; i++) if (v.hasTag(`war_f${i}`)) return i; return 0; }
-// v5.6: a player who joins a faction is fair game for that faction's enemies in any game mode but spectator (creative
-// players were ignored before, so testing in creative looked like the enemy didn't care). Creative still takes no damage.
+// players in creative or spectator are never targets; survival/adventure players on a hostile faction (or who attacked) are
 const modeMemo = new Map(); // player id -> { t, fair }
 function playerFair(p) {
   const c = modeMemo.get(p.id);
   if (c && tick() - c.t < 20) return c.fair;
   let fair = false;
-  try { fair = p.getGameMode() !== GameMode.Spectator; } catch {}
+  try { const m = p.getGameMode(); fair = m !== GameMode.Spectator && m !== GameMode.Creative; } catch {}
   modeMemo.set(p.id, { t: tick(), fair });
   return fair;
 }

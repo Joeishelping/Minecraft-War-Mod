@@ -1,5 +1,9 @@
 # War Engine changelog
 
+## v5.6.1
+
+- Creative players are no longer targeted (as before v5.6). Survival/adventure players on a hostile faction still are.
+
 ## v5.6 (lag, instant orders, players as targets, tactical positions, extension API)
 
 - **Lag.** A 100 v 100 now costs ~520 game calls per tick (v5.3: ~15,000; v5.5: ~1,300). Light levels remembered per
@@ -8,7 +12,7 @@
   only watches men stepping a route, stuck checks read the shared terrain memory.
 - **Orders take effect at once.** For ~5 s after an order nothing stops a soldier to fight (he shoots on the move),
   so a charge, fall back or move starts immediately even under fire. The War Horn counts as an order too.
-- **Players on a hostile team are targets in creative too** (testing in creative looked like the enemy ignored you;
+- ~~**Players on a hostile team are targets in creative too**~~ (reverted in v5.6.1) (testing in creative looked like the enemy ignored you;
   creative still takes no damage). Spectators are never targeted. Players who attack a faction are targeted by it even
   without a faction of their own.
 - **Tactical positions.** A new evaluator scores spots around a soldier for cover from every enemy the squad knows

@@ -189,7 +189,7 @@ const S = {
   // a player (creative, as when testing) who joined faction 2 stands 30 blocks from faction 1's soldiers: they must target him
   async playerTarget() {
     spawnPlayer({ x: 0, y: 0, z: 30 });
-    player.tags.delete("war_f1"); player.tags.add("war_f2");
+    player.tags.delete("war_f1"); player.tags.add("war_f2"); SIM.gameMode = opt.mode ?? "survival";
     for (let i = 0; i < 4; i++) soldier(1, { x: i * 2 + 0.5, y: 0, z: 0.5 }, "rifle", 1, "hold");
     W.setRelPair(1, 2, "1", false);
     step(400);
