@@ -1,4 +1,4 @@
-// War Engine v5.4: faction NPC war framework
+// War Engine v5.5: faction NPC war framework
 import { world, system, Player, ItemStack, EquipmentSlot, GameMode } from "@minecraft/server";
 import { ActionFormData, ModalFormData, FormCancelationReason } from "@minecraft/server-ui";
 import { SKINS } from "./skins.js";
@@ -3386,9 +3386,11 @@ function advance(m, c) { void m; void c; }   // (v5.3: the guide position is set
 // and nobody waits for them; they rejoin if they get back up.
 const marchActive = (e) => !downed.has(e.id) && !pows.has(e.id) && !isRiding(e) && !sd(e).surr;
 // does the route need careful single-file following from point i on (for a soldier at loc)?
+// standing on stairs or a slab (castle wall stairs, a staircase in a house): Minecraft's walking gets confused there
+function onStairs(dim, p) { try { const b = tBlock(dim, p.x, Math.floor(p.y + 0.01) - 1, p.z), c = tBlock(dim, p.x, Math.floor(p.y + 0.01), p.z); return [b, c].some((x) => !!x && (x.typeId.includes("stairs") || x.typeId.includes("slab"))); } catch { return false; } }
 function tightAt(dim, pts, i, loc) {
-  if (isIndoorsAt(dim, loc)) return true;
-  for (let k = Math.max(0, i - 1); k < Math.min(pts.length - 1, i + 4); k++) if (isGate(pts[k], pts[k + 1])) return true;   // a ladder, a door, a drop (a step up a hill isn't)
+  if (isIndoorsAt(dim, loc) || onStairs(dim, loc)) return true;
+  for (let k = Math.max(0, i - 1); k < Math.min(pts.length - 1, i + 4); k++) if (isGate(pts[k], pts[k + 1]) || onStairs(dim, pts[k + 1])) return true;   // a ladder, a door, a drop, stairs (a step up a hill isn't)
   return false;
 }
 system.runInterval(() => {
@@ -4401,6 +4403,7 @@ function brainMove(e, d, now, melee, anchor, leash) {
   if (!B) { B = { act: "", decT: -999 }; brain.set(e.id, B); }
   const go = (spot, urgent = true) => { if (!spot) return undefined;
     if (!localReach(e.dimension, e.location, spot)) { B.act = ""; return undefined; }   /* not reachable on foot from here: skip it */
+    if (isIndoors(e) || onStairs(e.dimension, e.location)) return travel(e, spot, "spot", now, urgent);   // v5.5: indoors, a real route (no getting lost at doorways)
     if (!B.slot || !B.spot || flat(B.spot, spot) > 1.5 || !marker(B.slot)) { B.slot = myMarker(e, spot); B.spot = spot; } return B.slot ? { g: "g_wp", slot: B.slot, t: "t_mid", urgent } : undefined; };
   const known = [...S.known.values()];
   if (melee) {
@@ -5222,7 +5225,7 @@ function followPersonal(e, now) {
   const t = perc.get(e.id)?.threat;
   if (t?.isValid && ["patrol", "reinforce", "regroup"].includes(pr.kind)) return drop();
   if (t?.isValid && (pr.kind === "advance" || pr.kind === "engage")) {
-    if (shotAt(e, sd(e), t, now)) { pr.hold = now + 30; pr.progT = now; note(e, "firing on the way"); return { g: "g_none", t: "t_mid", urgent: false }; }
+    if (shotAt(e, sd(e), t, now) && !tightAt(e.dimension, pr.pts, i, e.location)) { pr.hold = now + 30; pr.progT = now; note(e, "firing on the way"); return { g: "g_none", t: "t_mid", urgent: false }; }   // (never stops on the stairs: the men behind need them)
   }
   note(e, { exit: "getting out of the building", advance: "moving to the enemy's level", refuge: "taking refuge inside", patrol: "patrolling", reinforce: "reinforcing", regroup: "regrouping", medic: "going to the wounded", rally: "falling back to the rally point" }[pr.kind] ?? "on the move");
   const slot = myMarker(e, pr.pts[lookahead(pr.pts, i, 5)]);           // (the route driver keeps it moving between thoughts)
@@ -5394,12 +5397,14 @@ system.runInterval(() => { for (const e of allOf(SOLDIER)) { try { startClimbIfN
 const travelTo = new Map(); // id -> destination of his current personal route
 function travel(e, dest, kind, now, urgent = false) {
   if (!dest) return undefined;
-  if (flat(dest, e.location) <= 12 && Math.abs(dest.y - e.location.y) <= 1 && localReach(e.dimension, e.location, dest)) {
+  const inside = isIndoors(e) || onStairs(e.dimension, e.location);  // v5.5: indoors / on stairs every move is a real route (the glider walks it)
+  if (!inside && flat(dest, e.location) <= 12 && Math.abs(dest.y - e.location.y) <= 1 && localReach(e.dimension, e.location, dest)) {
     const slot = myMarker(e, dest);
     return slot ? { g: "g_wp", slot, t: "t_mid", urgent } : undefined;
   }
+  if (inside && flat(dest, e.location) < 1) return undefined;
   const cur = travelTo.get(e.id), pr = personal.get(e.id);
-  if (!pr || !cur || flat(cur, dest) > 6) {                           // a new destination: plan a route to it
+  if (!pr || !cur || flat(cur, dest) > (inside ? 1.5 : 6)) {          // a new destination: plan a route to it
     travelTo.set(e.id, { ...dest });
     planPersonalTo(e, kind, dest, now);
   }
@@ -5478,7 +5483,7 @@ system.runInterval(() => {
 // ---- the stepper: where plain walking toward the guide can't be trusted (stairs, ladders, doors, trapdoors, gates,
 // tight rooms), the soldier is walked point by point along his own route. The climber takes over on a ladder.
 function stepAlong(e, pts, i, firm = false) {
-  if (climbing.has(e.id) || isRiding(e) || downed.has(e.id)) return;
+  if (climbing.has(e.id) || gliders.has(e.id) || isRiding(e) || downed.has(e.id)) return;
   let k = i;
   while (k < pts.length - 1 && r3(pts[k], e.location) < 0.9) k++;
   const p = pts[k];
@@ -5591,13 +5596,24 @@ system.runInterval(() => {
           continue;
         }
       }
-      // tight stretch (indoors, stairs, a ladder or door near): the marker stays close and he is stepped point by point,
-      // in single file; open ground: the marker runs ahead and Minecraft walks him at full pace
+      // v5.5: a tight stretch (indoors, stairs, a ladder, door or drop near): he is CARRIED along his route by the glider,
+      // in single file, at walking pace (Minecraft's own walking stays idle: it was what got lost on stairs and in
+      // doorways). Open ground: the marker runs ahead and Minecraft walks him at full pace.
       const tight = tightAt(e.dimension, pts, i, e.location);
-      if (tight && queuedBehind(e, pts, i)) { myMarker(e, e.location); note(e, "waiting his turn"); continue; }
-      const tgt = pts[tight ? lookahead(pts, i, 2) : driveAhead(pts, i, 7)];
+      if (tight) {
+        const g = gliders.get(e.id);
+        const queued = queuedBehind(e, pts, i);
+        const wait = queued ? (g?.wait ?? 0) + 4 : 0;
+        const k = g && g.pts === pts ? g.k : glideStart(pts, i, e.location);
+        gliders.set(e.id, { pts, k, t: now, paused: queued && wait < 50, wait });   // never waits more than 2.5 s for anyone (no deadlocks)
+        myMarker(e, e.location);
+        note(e, queued && wait < 50 ? "waiting his turn" : "on the way through");
+        continue;
+      }
+      gliders.delete(e.id);
+      const tgt = pts[driveAhead(pts, i, 7)];
       myMarker(e, tgt);
-      if (tight || dist(tgt, e.location) <= 3.3) stepAlong(e, pts, i, tight);
+      if (dist(tgt, e.location) <= 3.3) stepAlong(e, pts, i);
     } catch {}
   }
 }, 4);
@@ -5772,7 +5788,7 @@ world.afterEvents.playerInteractWithEntity.subscribe((ev) => {
 system.runInterval(() => {
   for (const e of allOf(SOLDIER)) {
     try {
-      if (climbing.has(e.id) || downed.has(e.id) || isRiding(e)) continue;
+      if (climbing.has(e.id) || gliders.has(e.id) || downed.has(e.id) || isRiding(e)) continue;
       const v = e.getVelocity(), sp = Math.hypot(v.x, v.z);
       if (sp < 0.03) continue;
       const r = routeOf(e);
@@ -5911,6 +5927,7 @@ function spreadMove(e, now) {
   if (!sp) return undefined;
   if (now > sp.until || flat(sp.spot, e.location) < 0.8) { B.spread = undefined; return undefined; }
   claimSpot(e, sp.spot, now);
+  if (isIndoors(e) || onStairs(e.dimension, e.location)) return travel(e, sp.spot, "spot", now, false);   // v5.5: walked there by the glider
   const slot = myMarker(e, sp.spot);
   if (flat(sp.spot, e.location) < 3.2) push(e, { x: (sp.spot.x - e.location.x) * 0.15, y: 0.02, z: (sp.spot.z - e.location.z) * 0.15 }, 2);   // the last steps (followers stop short of the marker)
   return slot ? { g: "g_wp", slot, t: "t_mid", urgent: false } : undefined;
@@ -5925,3 +5942,42 @@ function combatMove(e, d, now, melee, anchor, leash) {
   if (!squads.get(squadKey(e, d))?.known?.size) return mv;        // no fight: each has his own spot already
   return unCrowd(e, d, now, anchor, leash) ?? mv;
 }
+
+// ================================================================ v5.5: the glider
+// Through stairs, doorways, ladders' surroundings, drops and indoor rooms a soldier is moved by the script itself along
+// his planned route, a little every tick (like the ladder climber), facing where he walks. Up a step he rises a third of
+// the way across, down a step he drops past the middle, doors and trapdoors are opened as he reaches them. Nothing here
+// depends on Minecraft's pathing or on pushes, so he can't get lost, stuck on a stair edge, or pile into the man ahead.
+const gliders = new Map(); // id -> { pts, k (index of the point he's heading to), t (last refresh), paused, wait }
+const GLIDE_SPEED = 0.17;  // blocks per tick (~3.4 blocks/s, a brisk walk)
+function glideStart(pts, i, loc) {
+  let k = Math.min(pts.length - 1, i + 1);
+  if (i < pts.length && Math.hypot(pts[i].x - loc.x, pts[i].z - loc.z) > 0.3 && r3(pts[i], loc) < r3(pts[k], loc)) k = i;   // not at his point yet: that one first
+  return k;
+}
+system.runInterval(() => {
+  const now = tick();
+  for (const [id, g] of [...gliders]) {
+    if (now - g.t > 8) { gliders.delete(id); continue; }          // the driver stopped refreshing him: back to normal walking
+    if (g.paused) continue;
+    const e = world.getEntity(id);
+    if (!e?.isValid || climbing.has(id) || downed.has(id) || isRiding(e)) { gliders.delete(id); continue; }
+    try {
+      const pts = g.pts;
+      if (g.k >= pts.length) { gliders.delete(id); continue; }
+      const b = pts[g.k], a = pts[Math.max(0, g.k - 1)];
+      if (b.climb) { startClimbIfNeeded(e); gliders.delete(id); continue; }   // a ladder: the climber takes him
+      const p = e.location;
+      const dx = b.x - p.x, dz = b.z - p.z, L = Math.hypot(dx, dz);
+      if (L < 2.5) { openAt(e.dimension, b); openAt(e.dimension, { x: b.x, y: b.y + 1, z: b.z }); }
+      const stp = Math.min(GLIDE_SPEED, L);
+      const nx = L > 0.001 ? p.x + (dx / L) * stp : b.x, nz = L > 0.001 ? p.z + (dz / L) * stp : b.z;
+      const seg = Math.hypot(b.x - a.x, b.z - a.z) || 1;
+      const f = 1 - Math.hypot(b.x - nx, b.z - nz) / seg;
+      const y = b.y > a.y ? (f >= 0.3 ? b.y : a.y) : b.y < a.y ? (f >= 0.6 ? b.y : a.y) : b.y;
+      const nb = pts[Math.min(pts.length - 1, g.k + 1)];
+      e.teleport({ x: nx, y, z: nz }, { facingLocation: { x: nb.x, y: y + 1.5, z: nb.z } });
+      if (Math.hypot(b.x - nx, b.z - nz) < 0.05) g.k++;
+    } catch { gliders.delete(id); }
+  }
+}, 1);

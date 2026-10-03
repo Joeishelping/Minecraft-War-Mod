@@ -151,6 +151,41 @@ const S = {
     report({ arrivedTicks: arrived, top: alive(1).filter((e) => e._loc.y > 10.5).length, bunchAvg: +(M.bunchPairs / M.bunchSamples).toFixed(2), maxCluster: M.maxCluster, final: alive(1).map((e) => `${Math.round(e._loc.x)},${Math.round(e._loc.y)},${Math.round(e._loc.z)}`), notes: M.notes, ...callsPerTick(SIM.tick) });
   },
 
+  // the castle in the screenshot: squad on a wall-top walkway, down a 2-wide brick staircase between two walls, lava beside it
+  async castleStairs() {
+    fill(-12, 0, -2, 12, 7, 2, "stone_bricks");                                  // the wall (walk on y=8)
+    fill(-12, 8, -2, 12, 8, -2, "blackstone_wall"); fill(-12, 8, 2, -1, 8, 2, "blackstone_wall"); fill(2, 8, 2, 12, 8, 2, "blackstone_wall");   // parapets, gap for the stairs
+    for (let i = 0; i < 8; i++) { fill(0, 7 - i, 3 + i, 1, 7 - i, 3 + i, "brick_stairs"); if (7 - i > 0) fill(0, 0, 3 + i, 1, 6 - i, 3 + i, "stone_bricks"); }
+    fill(-1, 0, 3, -1, 8, 10, "blackstone"); fill(2, 0, 3, 2, 8, 10, "blackstone");   // walls on both sides of the stairs
+    fill(3, -1, 3, 12, -1, 14, "lava");
+    spawnPlayer({ x: 0, y: 0, z: 30 });
+    for (let i = 0; i < 8; i++) soldier(1, { x: -8 + i * 2 + 0.5, y: 8, z: 0.5 }, ["rifle", "smg", "semi", "mg"][i % 4]);
+    step(20);
+    const dest = { x: 0, y: 0, z: 22 };
+    await order(1, dest);
+    const t0 = SIM.tick; let arrived = -1, burned = 0;
+    for (let t = 0; t < 2400 && arrived < 0; t += 10) {
+      step(10); sample(1);
+      if (opt.trace && SIM.tick % 50 === 0) console.error(SIM.tick, alive(1).map((e) => `${e._loc.x.toFixed(1)},${e._loc.y.toFixed(1)},${e._loc.z.toFixed(1)}:${W.notes.get(e.id)?.text ?? ""}`).join(" | "));
+      if (alive(1).filter((e) => Math.hypot(e._loc.x - dest.x, e._loc.z - dest.z) < 10 && e._loc.y < 1.5).length >= 7) arrived = SIM.tick - t0;
+    }
+    report({ arrivedTicks: arrived, down: alive(1).filter((e) => e._loc.y < 1.5).length, alive: alive(1).length, bunchAvg: +(M.bunchPairs / M.bunchSamples).toFixed(2), maxCluster: M.maxCluster, final: alive(1).map((e) => `${Math.round(e._loc.x)},${Math.round(e._loc.y)},${Math.round(e._loc.z)}`), notes: M.notes, ...callsPerTick(SIM.tick) });
+  },
+
+  // a fight inside the building: attackers on the ground floor, two defenders on the top floor; charge to the top
+  async indoorFight() {
+    building(0, 0, { windows: false });
+    spawnPlayer({ x: 6, y: 0, z: -40 });
+    for (const [x, z] of [[8.5, 8.5], [3.5, 7.5]]) soldier(2, { x, y: 11, z }, "rifle", 1, "hold");
+    for (let i = 0; i < 6; i++) soldier(1, { x: 2 + (i % 3) * 2.5 + 0.5, y: 0, z: 4.5 + Math.floor(i / 3) * 3 }, ["rifle", "smg", "semi"][i % 3]);
+    W.setRelPair(1, 2, "1", false);
+    step(20);
+    await order(1, { x: 6, y: 11, z: 6 });
+    const t0 = SIM.tick;
+    for (let t = 0; t < 3000; t += 10) { step(10); sample(1); if (opt.trace && SIM.tick % 100 === 0) console.error(SIM.tick, alive(1).map((e) => `${e._loc.x.toFixed(1)},${e._loc.y.toFixed(1)},${e._loc.z.toFixed(1)}:${W.notes.get(e.id)?.text ?? ""}`).join(" | ")); if (!alive(2).filter((e) => !W.isDowned(e)).length) break; }
+    report({ ticks: SIM.tick - t0, defendersLeft: alive(2).filter((e) => !W.isDowned(e)).length, attackersLeft: alive(1).filter((e) => !W.isDowned(e)).length, bunchAvg: +(M.bunchPairs / M.bunchSamples).toFixed(2), maxCluster: M.maxCluster, notes: M.notes });
+  },
+
   // half the squad goes down mid-march: the rest must carry on, not wait ~30 s for them
   async downedMarch() {
     spawnPlayer({ x: 0, y: 0, z: -10 });

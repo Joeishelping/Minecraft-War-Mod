@@ -1,5 +1,21 @@
 # War Engine changelog
 
+## v5.5 (stairs, doorways and indoors: the glider)
+
+In-game test of v5.4: still bunching and struggling on a house staircase and on castle wall stairs. Cause: on stairs
+and in doorways soldiers were moved by small script pushes on top of Minecraft's own walking; in the real game the two
+fight and the pushes are weak, and the single-file queue then waited on a leader who wasn't moving.
+
+- **The glider.** Through any tight stretch (stairs, including outdoor castle stairs, doorways, drops, around ladders,
+  indoors) the soldier is now carried by the script along his planned route at walking pace (~3.4 blocks/s), step by
+  step, facing where he walks, opening doors and trapdoors as he reaches them. Ladders stay with the ladder climber.
+  Nothing there depends on Minecraft's pathing or on pushes.
+- Single file with no deadlocks: a man behind a squad mate waits at most 2.5 s, then goes anyway.
+- Nobody stops on a staircase to shoot (the men behind need it).
+- Indoors, the brain's short moves (cover, peek, spread out, clear shot) are real routes the glider walks.
+- New tests copied from the screenshots: castle wall stairs between two walls beside lava, and a fight inside the
+  building. Indoor fight: cleared in 244 ticks vs 388 (v5.3), bunching 0.56 vs 2.82 pairs.
+
 ## v5.4 (squad behaviour, fighting, lag)
 
 What was wrong in v5.3, and what changed:
