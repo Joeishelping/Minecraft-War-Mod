@@ -735,6 +735,9 @@ function think(e) {
     if (GUNS.includes(d.weapon) && d.weapon !== "at" && !calm && closeEnemy(e, d, 2.5)) { want.w = "w_melee"; want.t = "t_short"; want.r = "r_on"; }
   }
   for (const f of WarAPI.hooks.think) { try { f(e, d, want, now); } catch {} }   // extensions may adjust the decision
+  // v6.2: standing on a bridge / ledge / wall-top edge and not being carried along a route: Minecraft's own walking is
+  // never in charge there (it cuts corners off the side). He stands; the route driver carries him when he moves.
+  if (!riding && want.g === "g_wp" && !gliders.has(e.id) && !climbing.has(e.id) && onPassage(e)) want.g = "g_none";
   setGroups(e, want);
   if (!riding) unstick(e, d, fighting);
 }
@@ -3316,7 +3319,7 @@ function engagement(e, d, now, orderGoal, melee) {
       if (dd <= stopRange) {
         const tc = chest(t);
         const spot = spotNear(e, (w) => clearShot(e.dimension, { x: w.x, y: w.y + 1.6, z: w.z }, tc), anchor, leash, 8);
-        if (spot) { note(e, "moving for a clear shot"); const sl = myMarker(e, spot); return sl ? { g: "g_wp", slot: sl, t: "t_mid", urgent: true } : undefined; }
+        if (spot) { const mv = moveTo(e, spot, now, true, "spot"); if (mv) { note(e, "moving for a clear shot"); return mv; } }
         if (anchor && freeOf(e) === false) return undefined;                                   // exactly as ordered: stay
         if (Math.abs(t.location.y - e.location.y) > 2.5) {
           if (!personal.has(e.id)) planPersonalTo(e, "advance", { x: t.location.x, y: t.location.y, z: t.location.z }, now);
@@ -3496,7 +3499,7 @@ function placeLanes(m, dim, center, heading, shape) {
       else if (i) {
         for (let r = 1.5; r <= 4.5 && at === center; r += 1.5) for (let k = 0; k < 8; k++) {
           const a = ((k + i * 3) / 8) * Math.PI * 2, w = walkableNear(dim, center.x + Math.cos(a) * r, center.z + Math.sin(a) * r, center.y);
-          if (w && Math.abs(w.y - center.y) <= 0.5 && localReach(dim, center, w)) { at = w; break; }
+          if (w && Math.abs(w.y - center.y) <= 0.5 && !dangerNear(dim, w) && localReach(dim, center, w)) { at = w; break; }
         }
       }
       try { marker(slot)?.teleport(at); } catch {}
@@ -3508,12 +3511,13 @@ function placeLanes(m, dim, center, heading, shape) {
     const [ox, oy] = SHAPES[shape][i % 6];
     const x = center.x + rx * ox * S + fx * oy * S, z = center.z + rz * ox * S + fz * oy * S;
     let w = walkableNear(dim, x, z, center.y);
-    if (w && m.final && !localReach(dim, center, w)) w = undefined;
+    if (w && (dangerNear(dim, w) || (m.final && !localReach(dim, center, w)))) w = undefined;   // (v6.2: never a lane by a drop / lava)
     if (!w || Math.abs(w.y - center.y) > 1) {                   // unusable spot: nearest usable one around it
       w = undefined;
       for (let r = 1; r <= 3 && !w; r++) for (let k = 0; k < 8 && !w; k++) {
         const a = (k / 8) * Math.PI * 2;
         const c2 = walkableNear(dim, x + Math.cos(a) * r, z + Math.sin(a) * r, center.y);
+        if (c2 && dangerNear(dim, c2)) continue;
         if (c2 && Math.abs(c2.y - center.y) <= 1) w = c2;
       }
       w = w ?? center;
@@ -3554,7 +3558,7 @@ function placeFormation(m, dim, p0, list, shape) {
       const [ox, oy] = pat[i % pat.length], row = Math.floor(i / pat.length);
       const x = p.x + rx * ox * S + fx * (oy - row * 1.5) * S, z = p.z + rz * ox * S + fz * (oy - row * 1.5) * S;
       const w = walkableNear(dim, x, z, p.y);
-      if (w && Math.abs(w.y - p.y) <= 1 && straightReach(dim, p, w)) at = w;
+      if (w && Math.abs(w.y - p.y) <= 1 && !dangerNear(dim, w) && straightReach(dim, p, w)) at = w;   // (v6.2: never beside a drop / lava)
       else at = back(2 + row * 2 + (i % 2));
     }
     const slot = myMarker(e, at, "war:fmk");                      // (his own formation marker: never the one his fight moves use)
@@ -3901,7 +3905,7 @@ function formationSlot(dim, center, e, spread = 3) {
   const S = spread * spacingSetting() / 1.5, now = tick();
   for (const off of FORM_OFFS) {
     const spot = walkableNear(dim, center.x + off[0] * S, center.z + off[1] * S, center.y);
-    if (!spot || Math.abs(spot.y - center.y) > 1 || claimedByOther(spot, e.id, now) || !localReach(dim, center, spot)) continue;   // never into a pit or another room
+    if (!spot || Math.abs(spot.y - center.y) > 1 || dangerNear(dim, spot) || claimedByOther(spot, e.id, now) || !localReach(dim, center, spot)) continue;   // never into a pit or another room (v6.2: or beside a drop / lava)
     claimSpot(e, spot, now);
     return makeWaypoint(dim, spot, false) || makeWaypoint(dim, center);
   }
@@ -4820,6 +4824,7 @@ function straightReach(dim, from, to) {
   let y = Math.floor(from.y + 0.01);
   for (let k = 1; k <= n; k++) {
     const x = Math.floor(from.x + ((to.x - from.x) * k) / n), z = Math.floor(from.z + ((to.z - from.z) * k) / n);
+    if (dangerNear(dim, { x: x + 0.5, y, z: z + 0.5 })) return false;          // v6.2: past an edge / lava: not a walk for Minecraft
     if (standAt(dim, x, y, z, now)) continue;
     if (standAt(dim, x, y + 1, z, now)) {                                       // a step up: room over his head to jump it
       const px = from.x + ((to.x - from.x) * (k - 1)) / n, pz = from.z + ((to.z - from.z) * (k - 1)) / n;
@@ -4830,6 +4835,30 @@ function straightReach(dim, from, to) {
     return false;
   }
   return Math.abs(y - Math.floor(to.y + 0.01)) <= 1;
+}
+// v6.2: an instant short route (up to ~14 blocks) from the same search: every block on the way, for the glider / route
+// driver to carry him along. Short moves (cover, a clear shot, making room) never wait for the planner.
+function shortPath(dim, from, to, maxNodes = 700) {
+  const sx = Math.floor(from.x), sz = Math.floor(from.z), tx = Math.floor(to.x), tz = Math.floor(to.z), now = tick();
+  const sy = Math.floor(from.y + 0.01), rk = (x, y, z) => ((x - sx + 32) * 64 + (z - sz + 32)) * 1024 + (y - sy + 512);
+  const par = new Map([[rk(sx, sy, sz), -1]]), q = [[sx, sy, sz]];
+  for (let i = 0; i < q.length && i < maxNodes; i++) {
+    const [x, y, z] = q[i];
+    if (Math.abs(x - tx) <= 0 && Math.abs(z - tz) <= 0 && Math.abs(y - to.y) <= 1.5) {
+      const out = []; let k = rk(x, y, z), c = [x, y, z];
+      const byKey = new Map(q.map((p) => [rk(p[0], p[1], p[2]), p]));
+      while (c) { out.push({ x: c[0] + 0.5, y: c[1], z: c[2] + 0.5, w: false, climb: false, open: false }); const pk = par.get(k); if (pk === undefined || pk === -1) break; k = pk; c = byKey.get(pk); }
+      return out.reverse();
+    }
+    for (const [dx, dz] of [[1, 0], [-1, 0], [0, 1], [0, -1]]) for (const dy of [0, 1, -1, -2]) {
+      const nx = x + dx, nz = z + dz, ny = y + dy, k = rk(nx, ny, nz);
+      if (par.has(k) || Math.abs(nx - sx) > 15 || Math.abs(nz - sz) > 15) continue;
+      if (!standAt(dim, nx, ny, nz, now)) continue;
+      if (dy === 1) { try { if (!passable(tBlock(dim, x + 0.5, y + 2, z + 0.5))) continue; } catch { continue; } }
+      par.set(k, rk(x, y, z)); q.push([nx, ny, nz]); break;
+    }
+  }
+  return undefined;
 }
 function localReachBFS(dim, from, to, maxNodes) {
   const sx = Math.floor(from.x), sz = Math.floor(from.z), tx = Math.floor(to.x), tz = Math.floor(to.z);
@@ -4855,6 +4884,10 @@ function planPersonalTo(e, kind, dest, now) {
   personal.set(e.id, pr);
   const hit = cachedRoute(e.dimension, e.location, dest);                       // a squad mate just worked this out: use his route
   if (hit) { pr.planning = false; pr.pts = hit; return; }
+  if (flat(e.location, dest) <= 14 && Math.abs(dest.y - e.location.y) <= 3) {   // v6.2: a short hop: instant route, no waiting
+    const sp = shortPath(e.dimension, e.location, dest);
+    if (sp && sp.length > 1) { pr.planning = false; pr.pts = sp; return; }
+  }
   if (planJobs.length > 28) { pr.planning = false; pr.pts = undefined; pr.t = now - 10000; return; }   // planner busy: try again shortly
   const dim = e.dimension;
   // v5.4: going for the enemy's floor, the route ends as soon as it's on that floor near him (the first room, not his feet)
@@ -4891,8 +4924,7 @@ function brainMove(e, d, now, melee, anchor, leash) {
       if (!localReach(e.dimension, e.location, spot)) { B.act = ""; return undefined; }   /* not reachable on foot from here: skip it */
       B.reachSpot = { x: spot.x, y: spot.y, z: spot.z };
     }
-    if (isIndoors(e) || onStairs(e.dimension, e.location)) return travel(e, spot, "spot", now, urgent);   // v5.5: indoors, a real route (no getting lost at doorways)
-    if (!B.slot || !B.spot || flat(B.spot, spot) > 1.5 || !marker(B.slot)) { B.slot = myMarker(e, spot); B.spot = spot; } return B.slot ? { g: "g_wp", slot: B.slot, t: "t_mid", urgent } : undefined; };
+    return moveTo(e, spot, now, urgent, "spot"); };   // v6.2: through the movement gate (safe spots; routes where a straight walk isn't safe)
   const known = [...S.known.values()];
   if (melee) {
     const n = nearestKnownB(S, e);
@@ -6040,10 +6072,38 @@ system.runInterval(() => {
 // ---- one way to travel anywhere: a direct step only when it's close and plainly reachable on foot;
 // otherwise a proper dense route (the same planner and follower as every march)
 const travelTo = new Map(); // id -> destination of his current personal route
+// ================================================================ v6.2: the movement gate
+// Every move a fight decides on (cover, a clear shot, making room, shoot-and-scoot, the brain's positions) comes here.
+// A spot beside lava / a drop is moved to the nearest safe cell (or the move is dropped); Minecraft's own walking is only
+// used for a plain, safe straight walk off any bridge or ledge; everything else is a route the script carries him along
+// (short ones are instant). Fixing a movement bug here fixes it for every system at once.
+function safeSpot(e, spot, now) {
+  const dim = e.dimension;
+  if (!spot) return undefined;
+  if (!dangerNear(dim, spot) && !claimedByOther(spot, e.id, now)) return spot;
+  const bx = Math.floor(spot.x), by = Math.floor(spot.y + 0.01), bz = Math.floor(spot.z);
+  let best, bd = 1e9;
+  for (let dx = -3; dx <= 3; dx++) for (let dz = -3; dz <= 3; dz++) for (const dy of [0, 1, -1]) {
+    const q = { x: bx + dx + 0.5, y: by + dy, z: bz + dz + 0.5 };
+    if (!standAt(dim, bx + dx, by + dy, bz + dz, now) || dangerNear(dim, q) || claimedByOther(q, e.id, now)) continue;
+    const dd = Math.hypot(dx, dz) + Math.abs(dy);
+    if (dd < bd) { bd = dd; best = q; }
+  }
+  return best;
+}
+const onPassage = (e) => dangerNear(e.dimension, e.location);
+function moveTo(e, spot, now, urgent = true, kind = "spot") {
+  const s0 = safeSpot(e, spot, now);
+  if (!s0) return undefined;
+  claimSpot(e, s0, now);
+  if (isIndoors(e) || onStairs(e.dimension, e.location) || onPassage(e) || !straightReach(e.dimension, e.location, s0)) return travel(e, s0, kind, now, urgent);
+  const slot = myMarker(e, s0);
+  return slot ? { g: "g_wp", slot, t: "t_mid", urgent } : undefined;
+}
 function travel(e, dest, kind, now, urgent = false) {
   if (!dest) return undefined;
   const inside = isIndoors(e) || onStairs(e.dimension, e.location);  // v5.5: indoors / on stairs every move is a real route (the glider walks it)
-  if (!inside && flat(dest, e.location) <= 12 && Math.abs(dest.y - e.location.y) <= 1 && localReach(e.dimension, e.location, dest)) {
+  if (!inside && !onPassage(e) && flat(dest, e.location) <= 12 && Math.abs(dest.y - e.location.y) <= 1 && straightReach(e.dimension, e.location, dest)) {   // (v6.2: only a safe straight walk)
     const slot = myMarker(e, dest);
     return slot ? { g: "g_wp", slot, t: "t_mid", urgent } : undefined;
   }
@@ -6329,8 +6389,9 @@ function drillMove(e, d, now, melee, anchor, leash) {
   if (B.act === "fire" && d.func !== "post" && underFire && t?.isValid && now - D.since > 120 + (e.id.charCodeAt(e.id.length - 1) % 5) * 12 && spendDecision()) {
     D.since = now;
     const tc = chest(t);
-    const spot = spotNear(e, (w) => flat(w, e.location) >= 2.5 && clearShot(e.dimension, { x: w.x, y: w.y + 1.6, z: w.z }, tc), anchor, leash);
-    if (spot && localReach(e.dimension, e.location, spot)) {
+    const spot0 = spotNear(e, (w) => flat(w, e.location) >= 2.5 && clearShot(e.dimension, { x: w.x, y: w.y + 1.6, z: w.z }, tc), anchor, leash);
+    const spot = spot0 && !onPassage(e) ? safeSpot(e, spot0, now) : undefined;   // (v6.2: never on a bridge / ledge, never to a spot by an edge)
+    if (spot && straightReach(e.dimension, e.location, spot)) {
       D.scoot = spot; D.scootUntil = now + 60;
       for (const st of gunState.values()) if (st.target?.id === e.id) st.next = Math.max(st.next, now + 8);   // those aiming at him lose their sight picture
       note(e, "shifting position");
@@ -6510,8 +6571,16 @@ function safeAhead(e, dx, dz) {
 system.runInterval(() => {
   for (const e of allOf(SOLDIER)) {
     try {
-      if (stepping.has(e.id) || climbing.has(e.id) || gliders.has(e.id) || downed.has(e.id) || isRiding(e)) continue;
+      if (stepping.has(e.id) || climbing.has(e.id) || (gliders.has(e.id) && !gliders.get(e.id).paused) || downed.has(e.id) || isRiding(e)) continue;
       if (!dangerNear(e.dimension, e.location)) continue;
+      // v6.2: on a bridge / ledge / wall-top edge, walking by himself: stop him now and put him on his route (carried)
+      if (!gliders.has(e.id) && getJSON(e, "war:st", {}).g === "g_wp") {
+        setGroups(e, { g: "g_none" });
+        try { e.clearVelocity(); } catch {}
+        const r = routeOf(e);
+        if (r?.pts && !r.pts.guess && r.idx < r.pts.length - 1) gliders.set(e.id, { pts: r.pts, k: glideStart(r.pts, r.idx, e.location), t: tick(), paused: false, wait: 0 });
+        continue;
+      }
       const v = e.getVelocity();
       if (Math.hypot(v.x, v.z) < 0.02) continue;
       const l = e.location, fy = Math.floor(l.y + 0.01);
@@ -6653,8 +6722,9 @@ function unCrowd(e, d, now, anchor, leash) {
   crowdT.set(e.id, now + 40);
   const t = perc.get(e.id)?.threat;
   const good = t?.isValid ? (w) => clearShot(e.dimension, { x: w.x, y: w.y + 1.6, z: w.z }, chest(t)) : undefined;
-  const spot = freeSpot(e, e.location, 1.5, 4.5, good, now, anchor, leash);
-  if (!spot) return undefined;
+  const spot0 = freeSpot(e, e.location, 1.5, 4.5, good, now, anchor, leash);
+  const spot = spot0 ? safeSpot(e, spot0, now) : undefined;
+  if (!spot || onPassage(e) || !straightReach(e.dimension, e.location, spot)) return undefined;   // (v6.2: making room never means stepping toward an edge)
   claimSpot(e, spot, now);
   const B = brain.get(e.id) ?? { act: "", decT: -999 }; brain.set(e.id, B);
   B.spread = { spot, until: now + 60 };
@@ -6668,7 +6738,7 @@ function spreadMove(e, now) {
   if (!sp) return undefined;
   if (now > sp.until || flat(sp.spot, e.location) < 0.8) { B.spread = undefined; return undefined; }
   claimSpot(e, sp.spot, now);
-  if (isIndoors(e) || onStairs(e.dimension, e.location)) return travel(e, sp.spot, "spot", now, false);   // v5.5: walked there by the glider
+  if (isIndoors(e) || onStairs(e.dimension, e.location) || onPassage(e) || !straightReach(e.dimension, e.location, sp.spot)) return travel(e, sp.spot, "spot", now, false);   // v5.5: walked there by the glider (v6.2: or anywhere not a plain safe walk)
   const slot = myMarker(e, sp.spot);
   if (flat(sp.spot, e.location) < 3.2) push(e, { x: (sp.spot.x - e.location.x) * 0.15, y: 0.02, z: (sp.spot.z - e.location.z) * 0.15 }, 2);   // the last steps (followers stop short of the marker)
   return slot ? { g: "g_wp", slot, t: "t_mid", urgent: false } : undefined;
@@ -6721,7 +6791,7 @@ system.runInterval(() => {
   const now = tick();
   for (const [id, g] of [...gliders]) {
     if (now - g.t > 8) { gliders.delete(id); continue; }          // the driver stopped refreshing him: back to normal walking
-    if (g.paused) continue;
+    if (g.paused) { try { const pe = world.getEntity(id); if (pe?.isValid && dangerNear(pe.dimension, pe.location)) pe.clearVelocity(); } catch {} continue; }   // (v6.2: waiting his turn on a bridge: no knockback off it)
     const e = world.getEntity(id);
     if (!e?.isValid || climbing.has(id) || downed.has(id) || isRiding(e)) { gliders.delete(id); continue; }
     try {
@@ -6922,7 +6992,7 @@ system.runInterval(() => { const now = tick(); for (const [id, h] of [...reflexH
 // spot: break the line of fire sideways. Runs outside the normal decision budget.
 function reflexMove(e, d, now, anchor, leash) {
   if (bwOf(d.faction).reflex === false) return undefined;
-  if (!GUNS.includes(d.weapon) || d.func === "post" || isRiding(e) || climbing.has(e.id) || gliders.has(e.id)) return undefined;
+  if (!GUNS.includes(d.weapon) || d.func === "post" || isRiding(e) || climbing.has(e.id) || gliders.has(e.id) || onPassage(e)) return undefined;   // (v6.2: on a bridge / ledge: no dodging, sideways is the drop)
   const B = brain.get(e.id) ?? { act: "", decT: -999 }; brain.set(e.id, B);
   const R = B.reflex;
   if (R) {
@@ -6957,7 +7027,8 @@ function reflexMove(e, d, now, anchor, leash) {
       if (w && Math.abs(w.y - e.location.y) <= 1 && (!anchor || flat(w, anchor.location) <= leash) && localReach(e.dimension, e.location, w, 120)) { spot = w; kind = "breaking the line of fire"; break; }
     }
   }
-  if (!spot) return undefined;
+  if (spot) spot = safeSpot(e, spot, now);
+  if (!spot || !straightReach(e.dimension, e.location, spot)) return undefined;
   claimSpot(e, spot, now);
   B.reflex = { spot, until: now + 50, kind };
   const st = gunState.get(e.id); if (st) st.check = now;

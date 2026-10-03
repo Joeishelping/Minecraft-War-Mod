@@ -450,6 +450,7 @@ const S = {
   // with no railings. Counts falls into the courtyard / the moat, who crossed, how long it took.
   async castleMoat() {
     SIM.bounds = { x0: -45, x1: 45, z0: -40, z1: 45, y0: -10, y1: 40 };
+    if (opt.layout === "2") return S.castleChannel();
     fill(-30, 0, -10, 30, 7, -8, "stone_bricks");                                          // the wall (walk on y=8, z=-9)
     for (let x = -30; x <= 30; x += 2) { setBlock(x, 8, -10, "stone_bricks"); setBlock(x, 8, -8, "stone_bricks"); }   // battlements
     fill(-30, 0, -30, 30, 7, -30, "stone_bricks"); fill(-30, 0, -30, -30, 7, -10, "stone_bricks"); fill(30, 0, -30, 30, 7, -10, "stone_bricks");   // courtyard walls
@@ -483,6 +484,37 @@ const S = {
       if (opt.mutual && (!alive(1).filter((e) => !W.isDowned(e)).length || !alive(2).filter((e) => !W.isDowned(e)).length)) break;
     }
     report({ ticks: SIM.tick - t0, fellCourtyard: fellCourt.size, fellMoat: fellMoat.size, crossed: crossed.size, firstCross, attackersUp: alive(1).filter((e) => !W.isDowned(e)).length, defendersUp: alive(2).filter((e) => !W.isDowned(e)).length, bunchAvg: +(M.bunchPairs / M.bunchSamples).toFixed(2), final: alive(1).map((e) => `${Math.round(e._loc.x)},${Math.round(e._loc.y)},${Math.round(e._loc.z)}`), notes: M.notes });
+  },
+
+  // v6.2: the first screenshot: a narrow wall-top (2 wide) running right along a lava channel, no battlements on the
+  // lava side; the enemy building is across the channel; the only crossing is a bridge over the lava further along.
+  async castleChannel() {
+    fill(-40, -3, 0, 40, -3, 6, "stone"); fill(-40, -2, 0, 40, -1, 6, "lava");               // the channel (lava 2 deep)
+    fill(-40, 0, -2, 40, 7, -1, "stone_bricks");                                             // castle wall along it (walk y=8, z=-2..-1)
+    for (let x = -40; x <= 40; x += 2) setBlock(x, 8, -3, "stone_bricks");                    // battlements on the castle side only
+    fill(-40, 0, -3, 40, 7, -3, "stone_bricks");
+    fill(-40, 0, 7, 40, 7, 8, "stone_bricks");                                               // far bank wall (walk y=8, z=7..8)
+    fill(12, 7, 0, 13, 7, 6, "stone_bricks");                                                // the bridge over the lava (y=8), no railings
+    for (let i = 0; i < 7; i++) fill(-40, 0, 9 + i, 40, 6 - i, 9 + i, "stone_bricks");       // the far bank steps down to the ground
+    for (let y = 0; y <= 7; y++) setBlock(0, y, -4, "ladder");                               // ladder from the courtyard below
+    building(0, 24);
+    spawnPlayer({ x: 0, y: 8, z: -30 });
+    const W8 = ["rifle", "smg", "semi", "mg", "rifle", "semi", "smg", "rifle"];
+    for (let i = 0; i < 8; i++) soldier(1, { x: -20 + i * 2 + 0.5, y: 8, z: -1.5 }, W8[i]);
+    for (let i = 0; i < Number(opt.def ?? 4); i++) soldier(2, { x: 2 + i * 2.5 + 0.5, y: 6, z: 25.5 }, "rifle", 1, "hold");
+    W.setRelPair(1, 2, "1", false);
+    step(20);
+    await order(1, { x: 6, y: 0, z: 22 });
+    if (opt.mutual) await order(2, { x: -10, y: 8, z: -1.5 });
+    const t0 = SIM.tick; const fellMoat = new Set(), crossed = new Set(); let firstCross = -1;
+    for (let t = 0; t < Number(opt.ticks ?? 3600); t += 10) {
+      if (opt.fall) { for (let q = 0; q < 10; q++) { step(1); for (const e of [...alive(1), ...alive(2)]) { const h = (e.__h ??= []); h.push(`${SIM.tick} ${e._loc.x.toFixed(2)},${e._loc.y.toFixed(1)},${e._loc.z.toFixed(2)} v${e.vel.x.toFixed(2)},${e.vel.z.toFixed(2)} w${(e.walk?.x ?? 0).toFixed(2)},${(e.walk?.z ?? 0).toFixed(2)} ${W.notes.get(e.id)?.text ?? ""} g${W.gliders.has(e.id) ? 1 : 0} nav:${e.navGoal ? `${e.navGoal.x.toFixed(1)},${e.navGoal.y},${e.navGoal.z.toFixed(1)}` : "-"}`); if (h.length > 25) h.shift(); if (SIM.lavaIds?.has(e.id) && !e.__told) { e.__told = 1; console.error("LAVA f" + e.props.get("war:faction") + "\n  " + h.filter((x, k) => k % 2 === 0).join("\n  ")); } } } sample(1); } else { step(10); sample(1); }
+      for (const e of [...alive(1), ...alive(2)]) { const l = e._loc; if (l.z > -0.5 && l.z < 6.5 && l.y < 1 && !(l.x >= 11.5 && l.x <= 14.5)) fellMoat.add(e.id); }
+      for (const e of alive(1)) if (e._loc.z > 9) { crossed.add(e.id); if (firstCross < 0) firstCross = SIM.tick - t0; }
+      const up1 = alive(1).filter((e) => !W.isDowned(e)).length, up2 = alive(2).filter((e) => !W.isDowned(e)).length;
+      if (!up1 || !up2 || (crossed.size >= up1 && !up2)) break;
+    }
+    report({ ticks: SIM.tick - t0, fellMoat: fellMoat.size, crossed: crossed.size, firstCross, attackersUp: alive(1).filter((e) => !W.isDowned(e)).length, defendersUp: alive(2).filter((e) => !W.isDowned(e)).length, bunchAvg: +(M.bunchPairs / M.bunchSamples).toFixed(2), final: alive(1).map((e) => `${Math.round(e._loc.x)},${Math.round(e._loc.y)},${Math.round(e._loc.z)}`), notes: M.notes });
   },
 
   // v6.1: the planner's worst case: a 200-block order straight through a long wall whose only gap is far to one side
