@@ -745,6 +745,32 @@ const S = {
     step(Number(opt.ticks ?? 1200));
     report({ thick: th, mat, bangs: W.bangCount(), aShots: shotStats(1), bShots: shotStats(2) });
   },
+  // v6.9.1: two squads on Hold in the open, 8 v 5, 50 apart, a few low walls. The bigger squad should push: contact,
+  //   flank / charge / bounding, and the calls that go with them. Then they go back to their spots.
+  async holdFight() {
+    SIM.bounds = { x0: -50, x1: 50, z0: -30, z1: 80, y0: -8, y1: 30 };
+    fill(-50, -4, -30, 50, -1, 80, "grass_block");
+    for (const [x, z] of [[-8, 18], [6, 22], [-2, 30], [12, 34], [-12, 38]]) fill(x, 0, z, x + 3, 0, z, "stone_bricks");
+    spawnPlayer({ x: 0, y: 0, z: -10 });
+    W.setRelPair(1, 2, "1", false);
+    const A = [], B = [];
+    SIM.voices = [];
+    for (let i = 0; i < Number(opt.na ?? 8); i++) A.push(soldier(1, { x: -7 + i * 2 + 0.5, y: 0, z: 0.5 }, ["rifle", "smg", "semi", "mg"][i % 4], 1, "hold"));
+    for (let i = 0; i < Number(opt.nb ?? 5); i++) B.push(soldier(2, { x: -4 + i * 2 + 0.5, y: 0, z: Number(opt.gap ?? 50) + 0.5 }, "rifle", 1, "hold"));
+    step(40);
+    const t0 = SIM.tick; const start = A.map((e) => ({ ...e._loc }));
+    for (let t = 0; t < Number(opt.ticks ?? 2400); t += 10) {
+      step(10); sample(1);
+      if (opt.follow && SIM.tick % 20 === 0) { const u = A.filter((e) => e.isValid); if (u.length) player._loc = { x: u.reduce((q, e) => q + e._loc.x, 0) / u.length, y: 0, z: u.reduce((q, e) => q + e._loc.z, 0) / u.length - 12 }; }
+      if (!B.some((e) => e.isValid && !W.isDowned(e))) break;
+    }
+    const plan = W.squads.get("1:1")?.plan, counter = W.squads.get("1:1")?.counter;
+    const callsFight = SIM.voices.length;
+    step(600);
+    const back = A.filter((e, i) => e.isValid && !W.isDowned(e) && Math.hypot(e._loc.x - start[i].x, e._loc.z - start[i].z) < 6).length;
+    const keys = {}; for (const v of SIM.voices) { const k = v.split(" ")[1].split(".").pop(); keys[k] = (keys[k] ?? 0) + 1; }
+    report({ ticks: SIM.tick - t0, upA: A.filter((e) => e.isValid && !W.isDowned(e)).length, upB: B.filter((e) => e.isValid && !W.isDowned(e)).length, plan, counter, back, callsFight, lines: keys, notes: M.notes });
+  },
   // v6.6: weapons. mode=molotov: 6 molotov soldiers vs 6 swordsmen; mode=spear: 6 spears vs 6 swords (melee duel)
   async weapons() {
     SIM.bounds = { x0: -40, x1: 40, z0: -40, z1: 60, y0: -8, y1: 30 };

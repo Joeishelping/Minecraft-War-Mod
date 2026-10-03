@@ -1,5 +1,39 @@
 # War Engine changelog
 
+## v6.9.1 (Squads on Hold use tactics, more callouts, Demolition rework)
+
+- **Squads on Hold now fight like squads on the move.** Before, flanking, charging, "go go go" and cover-and-move
+  bounding only ran for squads on Charge / Follow / Patrol. Most squads end up on Hold (every march ends there), so
+  those tactics, and their lines, almost never happened. Now a Hold squad counter-attacks when all of these are true:
+  - its order is "use judgment";
+  - it's out in the open, not holding a building or the high ground (and isn't on Post);
+  - it has the upper hand (1.2x the strength);
+  - the firefight has gone on ~6 s;
+  - the enemy is within 90 blocks.
+
+  It uses the same contact, flank and assault plan, with bounding ("Cover me!", "Moving up!"). It stops when the fight
+  ends or turns against it (under 0.8x), and the men go back to their spots.
+- **More callouts in a fight:**
+  - every new decision gets its line: flanking, suppressing, falling back, taking cover ("Taking fire!"), moving
+    up / "Cover me!" when bounding or shifting position, and "Cover me!" when moving to a firing spot;
+  - "Taking fire!" when diving for cover under fire;
+  - "Enemy spotted!" when eyes first go on a target.
+  - Per-man pause between lines: 6 s → 3 s (Normal), 4 s → 1.5 s (A lot), 10 s → 6 s (Less).
+  - The same line can be repeated nearby after 5 s (was 8). "Target down!", "I'm hit!" and "Man down!" after 3 s.
+- **"Medic!" right away:** a man who goes down calls ~1.5 s later (if no medic is already on his way), then about
+  every 10 s. Before, the first call could take up to 18 s, and only half the wounded ever called. Two men down side
+  by side still don't both yell it.
+- **Demolition:**
+  - **No gun.** The Grenades and Molotovs kits carry only what they throw. When an enemy closes inside ~8 blocks,
+    the thrower backs off to throwing distance (and punches if cornered). He moves up to about 20 blocks from the
+    enemy and throws from there.
+  - **Grenades:** 6 carried, a throw every 5 s, one back every 15 s, one per squad every 2 s, up to 24 blocks. A
+    bigger blast (power 3.0, was 1.8; still never breaks blocks); never within 6 of a friend.
+  - **Molotovs:** 5 carried, a throw every 6 s, one back every 20 s, up to 24 blocks. A bigger fire: a 4-block patch
+    (was 2.5) burning 9 s (was 6), setting people alight for 5 s.
+  - **Bazooka:** it now fires at soldiers too, not only at vehicles (it never fired with no vehicles around). Never
+    at a man within 6 blocks: the blast would take the shooter too.
+
 ## v6.9 (Rooftops, medics, shots through walls)
 
 - **Rooftops and wall-tops are used, not feared.** A man who wants a shot down at the enemy now steps up to the edge

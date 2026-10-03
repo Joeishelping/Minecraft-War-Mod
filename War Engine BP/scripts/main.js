@@ -1,4 +1,4 @@
-// War Engine v6.9: faction NPC war framework
+// War Engine v6.9.1: faction NPC war framework
 import { world, system, Player, ItemStack, EquipmentSlot, GameMode } from "@minecraft/server";
 import { ActionFormData, ModalFormData, FormCancelationReason } from "@minecraft/server-ui";
 import { SKINS } from "./skins.js";
@@ -77,7 +77,7 @@ const REL_TXT = { "1": "§cHOSTILE", "0": "§7NEUTRAL", "2": "§aALLY" };
 const WEAPONS = [["sword", "Sword"], ["crossbow", "Crossbow"], ["rifle", "Rifle"], ["semi", "Semi-auto"], ["smg", "SMG"],
   ["mg", "Machine gun"], ["shotgun", "Shotgun"], ["pistol", "Pistol"], ["sniper", "Sniper"], ["spear", "Spear"]];   // (v6.6: spear)
 // v6.7: the Demolition unit's own kits (nobody else gets these): grenades or molotovs with a pistol, or a bazooka
-const DEMO = [["grenade", "Grenades (+ pistol)"], ["molotov", "Molotovs (+ pistol)"], ["at", "Bazooka"]];
+const DEMO = [["grenade", "Grenades"], ["molotov", "Molotovs"], ["at", "Bazooka"]];   // (v6.9.1: no sidearm: the throw is the weapon)
 const ALL_WEAPONS = [...WEAPONS, ["at", "Anti-tank"], ["molotov", "Molotovs"]];   // (older soldiers may still carry these)
 const MELEE_W = ["sword", "spear", "molotov"];                  // hand-to-hand weapons (everything else shoots)
 const isRangedW = (w) => !MELEE_W.includes(w);
@@ -379,6 +379,7 @@ function equipArmor(e, tier) {
 function weaponItem(e) {
   const d = sd(e);
   if (d.surr || d.div === "medic") return "air";
+  if (d.div === "grenadier" && gdp(e, "war:throw")) return "air";  // (v6.9.1: grenades / molotovs only, no gun)
   if (GUNS.includes(d.weapon)) return `ww:${gunModel(d.faction, d.weapon)}`;
   if (d.weapon === "spear") return "iron_spear";                  // (no spear in this game version: a trident)
   if (d.ranged) return "crossbow";
@@ -839,11 +840,28 @@ function medic(e, d, now) {
 // between throws, one back every 90 s. Where it lands, a 2.5-block patch burns for 6 s: anyone standing in it catches
 // fire (friend or foe, so he never throws where a friend stands nearby). No blocks are touched (nothing is set alight,
 // nothing breaks). Soldiers caught in a burning patch get out of it.
-const MOLO = { max: 3, cd: 300, rMin: 7, rMax: 18, refill: 1800, radius: 2.5, life: 120, burn: 4, squadGap: 80 };
+const MOLO = { max: 5, cd: 120, rMin: 7, rMax: 24, refill: 400, radius: 4, life: 180, burn: 5, squadGap: 50 };   // (v6.9.1: a 4-block patch for 9 s, thrown far more often)
 const squadMolo = new Map(); // squad -> next tick one of them may throw (v6.6: one bottle at a time, not a volley)
 const fires = []; // { dim, at, until, f }
+// v6.9.1: a thrower has no gun: an enemy closing in (inside ~8 blocks) and he backs off to throwing distance first
+const kiteT = new Map();
+function throwerKite(e, d, now) {
+  if (now - (kiteT.get(e.id) ?? -99) < 30 || held.has(e.id) || climbing.has(e.id) || isRiding(e)) return false;
+  let foe;
+  for (const c of nearSnap(e.dimension.id, e.location, 8)) if (!c.down && c.f && c.id !== e.id && isHostile(d.faction, c.f) && (!foe || c.dd < foe.dd)) foe = c;
+  if (!foe) return false;
+  kiteT.set(e.id, now);
+  const l = e.location, dx = l.x - foe.x, dz = l.z - foe.z, L = Math.hypot(dx, dz) || 1;
+  for (const side of [0, 0.6, -0.6]) {
+    const ax = dx / L + (-dz / L) * side, az = dz / L + (dx / L) * side, aL = Math.hypot(ax, az);
+    const out = walkableNear(e.dimension, l.x + (ax / aL) * 9, l.z + (az / aL) * 9, l.y);
+    if (out && Math.abs(out.y - l.y) <= 2 && !dangerNear(e.dimension, out)) { planPersonalTo(e, "settle", out, now); note(e, "backing off to throw"); return true; }
+  }
+  return false;
+}
 function molotov(e, d, now) {
   if (downed.has(e.id) || d.surr) return;
+  if (throwerKite(e, d, now)) return;
   let n = Number(gdp(e, "war:molo") ?? MOLO.max);
   if (n < MOLO.max && now - Number(gdp(e, "war:molor") ?? now) > MOLO.refill) { n++; sdp(e, "war:molo", n); sdp(e, "war:molor", n < MOLO.max ? now : undefined); }
   if (n <= 0 || Number(gdp(e, "war:molot") ?? 0) > now) return;
@@ -887,7 +905,7 @@ system.runInterval(() => {
     const F = fires[i];
     if (now >= F.until) { fires.splice(i, 1); continue; }
     try {
-      for (let k = 0; k < 7; k++) {                               // flames over the patch
+      for (let k = 0; k < 14; k++) {                              // flames over the patch
         const a = Math.random() * Math.PI * 2, r = Math.sqrt(Math.random()) * MOLO.radius;
         F.dim.spawnParticle(k % 3 ? "minecraft:basic_flame_particle" : "minecraft:large_smoke_particle", { x: F.at.x + Math.cos(a) * r, y: F.at.y + 0.15, z: F.at.z + Math.sin(a) * r });
       }
@@ -911,11 +929,13 @@ const fleeFire = new Map();
 // Lobbed at a group of enemies 8-22 blocks away (3 carried, 12 s between throws, one back every 90 s, one per squad every
 // 4 s, never where a friend stands within 5 of the target). It lands, fizzes ~1.5 s (anyone close by scrambles away),
 // then goes off: a real explosion that hurts and knocks people about (off a wall, too) but never breaks blocks.
-const NADE = { max: 3, cd: 240, rMin: 8, rMax: 22, refill: 1800, fuse: 30, power: 1.8, safe: 5, squadGap: 80 };
+const NADE = { max: 6, cd: 100, rMin: 7, rMax: 24, refill: 300, fuse: 30, power: 3.0, safe: 6, squadGap: 40 };   // (v6.9.1: a thrower's only weapon: more of them, more often, a bigger blast)
+const THROW_RANGE = 20;
 const squadNade = new Map();
 const liveNades = []; // { dim, at, boom, by }
 function grenade(e, d, now) {
   if (downed.has(e.id) || d.surr) return;
+  if (throwerKite(e, d, now)) return;
   let n = Number(gdp(e, "war:nade") ?? NADE.max);
   if (n < NADE.max && now - Number(gdp(e, "war:nader") ?? now) > NADE.refill) { n++; sdp(e, "war:nade", n); sdp(e, "war:nader", n < NADE.max ? now : undefined); }
   if (n <= 0 || Number(gdp(e, "war:nadet") ?? 0) > now) return;
@@ -2964,7 +2984,7 @@ function playerFair(p) {
 function isTargetFor(e, d, o) {
   if (o.id === e.id) return false;
   if (o.typeId === SOLDIER && (downed.has(o.id) || pows.has(o.id))) return false;   // nobody shoots the downed or prisoners
-  if (d.weapon === "at") return VEHICLES.includes(o.typeId) && isHostile(d.faction, vehicleFaction(o));
+  if (d.weapon === "at" && (VEHICLES.includes(o.typeId) || d.div !== "grenadier")) return VEHICLES.includes(o.typeId) && isHostile(d.faction, vehicleFaction(o));   // (v6.9.1: the Demolition bazooka fires at men too)
   if (VEHICLES.includes(o.typeId)) return false;
   if (o.typeId === SOLDIER || o.typeId === HOUND) return isHostile(d.faction, factionOf(o)) || isProvoker(d.faction, o, tick());
   if (o.typeId === "minecraft:player") { try { return playerFair(o) && (isHostile(d.faction, factionOf(o)) || isProvoker(d.faction, o, tick())); } catch { return false; } }
@@ -3150,6 +3170,7 @@ function gunTick(e, now) {
     const t = ps?.threat;
     st.target = t && t.isValid && canHit(e, t) ? t : undefined;         // only targets the bullet can actually reach
     if (st.target && (!prev || prev.id !== st.target.id)) {
+      if (!prev && Math.random() < 0.25) callout(e, "Enemy spotted!");   // (v6.9.1: eyes on a new one)
       const ang = facingAngle(e, st.target.location);          // new target: the aim needs to settle
       st.next = Math.max(st.next, now + (ang < 60 ? 6 : ang < 120 ? 12 : 20));
       st.wild = ang >= 120 ? 2 : 0;                             // first shots after a big turn are less accurate
@@ -3187,6 +3208,7 @@ function gunTick(e, now) {
   if (!t.isValid) { st.target = undefined; return; }
   if (!shotAt(e, d, t, now)) return;                                    // beyond the gun's useful range, or a head too far to hit: close in first (v5.4)
   if (closeEnemy(e, d, 2.5)) return;                                    // hand-to-hand right now
+  if (d.weapon === "at" && !VEHICLES.includes(t.typeId) && dist(t.location, e.location) < 6) { st.next = now + 6; return; }   // (v6.9.1: no rocket at a man this close: the blast would take him too)
   const from = headLoc(e);
   if (friendlyInLine(e, d, from, chest(t), t)) {                        // never shoot through a friendly
     if (now >= st.step && !isRiding(e)) { st.step = now + 25; sidestep(e, d, t); }
@@ -5088,6 +5110,7 @@ system.runInterval(() => {
       if (!known.length) {
         if (S.contactT >= 0) { radio(ours[0], "area clear, carrying on", true); learnEnd(S, ours.length, now); callout(ours[Math.floor(Math.random() * ours.length)], "Clear!"); }   // v5.4: no regroup halt (it waited on the downed)
         if (S.plan !== "advance") { S.plan = "advance"; S.flankers.clear(); S.suppressors.clear(); S.flankPt = undefined; S.contactT = -1; }
+        S.counter = false;
         helpCall.delete(k); continue;
       }
       if (S.contactT < 0) {
@@ -5099,7 +5122,16 @@ system.runInterval(() => {
       if (S.eng) for (const q of known) S.eng.enemies.add(q.ent.id);
       S.enemyC = { x: known.reduce((t, q) => t + q.x, 0) / known.length, y: known.reduce((t, q) => t + q.y, 0) / known.length, z: known.reduce((t, q) => t + q.z, 0) / known.length };
       S.ratio = ours.reduce((t, e) => t + bPower(e), 0) / Math.max(0.5, known.reduce((t, q) => t + bPower(q.ent), 0));
-      const attacking = ours.some((e) => ["charge", "follow", "patrol"].includes(sd(e).func)) && String(gdp(ours[0], "war:stance") ?? "aggressive") === "aggressive";
+      const aggressive = String(gdp(ours[0], "war:stance") ?? "aggressive") === "aggressive";
+      // v6.9.1: a squad told to hold, free to use judgment, out in the open (not holding a building or the high ground),
+      // that has the upper hand in a firefight that's gone on a while counter-attacks: the same contact / flank /
+      // assault plan as a squad on the move. It ends when the fight does (or turns), and they go back to their spots.
+      // Before, a squad on Hold only ever stood and traded fire: no flanking, no charge, no bounding.
+      const nearK = known.reduce((m, q) => Math.min(m, Math.hypot(q.x - oc.x, q.z - oc.z)), 1e9);
+      const counterOk = aggressive && ours.every((e) => sd(e).func === "hold") && freeOf(ours[0]) && oc.y - S.enemyC.y < 2.5 && !isIndoors(ours[0]) && nearK <= Math.min(aoOf(ours[0]), 90);
+      if (!counterOk || S.ratio < 0.8) S.counter = false;
+      else if (!S.counter && S.ratio >= 1.2 && now - S.contactT > BW.stallT * 0.5) { S.counter = true; callout(ours[Math.floor(Math.random() * ours.length)], "Moving up!"); radio(ours[0], "pushing forward", true); }
+      const attacking = (ours.some((e) => ["charge", "follow", "patrol"].includes(sd(e).func)) && aggressive) || !!S.counter;
       squadHelpTargets(k, S, ours, now);
       const mem = adaptSquad(k, S, now);
       S.siege = mem.siegeUntil > now;
@@ -5358,7 +5390,7 @@ function brainMove(e, d, now, melee, anchor, leash) {
     const p = t ? Math.min(1, (GOOD_RANGE_B[d.weapon] ?? 40) / Math.max(1, dd)) * (shot ? 1 : 0) : 0;
     const gs = t?.typeId === SOLDIER ? gunState.get(t.id) : undefined;
     const enemyWeak = !!t && ((gs && gs.ammo === (GUN_SPEC[sd(t).weapon]?.mag ?? 1) && gs.next - now > 20) || (suppB.get(t.id) ?? 0) > 8 || now - (hurtBy.get(t.id)?.t ?? -999) < 30);
-    const moving = ["charge", "follow", "patrol"].includes(d.func);
+    const moving = ["charge", "follow", "patrol"].includes(d.func) || !!S.counter;   // (v6.9.1: or counter-attacking from Hold)
     const opts = [];
     if (S.flankers.has(e.id) && S.plan === "fix" && S.flankPt && flat(S.flankPt, e.location) > 6) opts.push(["flank", 3]);
     if (t && shot) opts.push(["fire", BW.fire * p * (S.suppressors.has(e.id) ? 1.5 : 1) - BW.expo * exposure * (covered ? 0.3 : 1)]);
@@ -5386,7 +5418,9 @@ function brainMove(e, d, now, melee, anchor, leash) {
       }
     }
     opts.sort((a, b) => b[1] - a[1]);
+    const prevAct = B.act;
     B.act = opts[0][0];
+    if (B.act !== prevAct) decisionLine(e, B.act, underFire);           // (v6.9.1: what he's doing, out loud)
     B.spot = undefined;
     const ts = (o) => { const r = tac ? tacSpot(e, d, S, { anchor, leash, ...o }, now) : undefined; if (r?.spot) B.reachSpot = r.spot; return r; };   // (its spot is known reachable)
     if (B.act === "cover") {
@@ -5435,14 +5469,14 @@ function brainMove(e, d, now, melee, anchor, leash) {
     case "suppress": {
       const q = B.supp, spec = GUN_SPEC[d.weapon], gs = gunState.get(e.id);
       if (!q || now - q.t > 60 || !q.ent?.isValid || downed.has(q.ent.id)) { B.act = ""; B.decT = -999; return undefined; }   // nothing fresh to pin down: decide again
-      note(e, "suppressing"); if (Math.random() < 0.3) callout(e, "Suppressing!");
+      note(e, "suppressing");
       if (gs) gs.supp = { p: q.aim ?? { x: q.x, y: q.y + 1.2, z: q.z }, until: now + 30, ent: q.ent };   // the gun loop keeps up the fire (bursts at the gun's own rate)
       turnTo(e, q, 20);
       // on the move (not pinning for a flank): keep walking while suppressing
       if (["charge", "follow", "patrol"].includes(d.func) && S.plan !== "fix") return undefined;
       return { g: "g_none", t: "t_mid", urgent: false };
     }
-    case "fallback": note(e, "falling back"); if (Math.random() < 0.3) callout(e, "Fall back!"); return B.target ? go(B.target) : undefined;
+    case "fallback": note(e, "falling back"); return B.target ? go(B.target) : undefined;
     case "terrain": note(e, "taking high ground"); return S.keyPt ? go(S.keyPt, false) : undefined;
     case "position": if (!B.target || flat(B.target, e.location) < 0.9) { B.act = "hold"; return undefined; } note(e, "taking a firing position"); return go(B.target, false);
     case "sandbag": {
@@ -5657,8 +5691,8 @@ const LINE_INFO = {
   grenade: ["Frag out! Get down!", "throwing a grenade / molotov, or one lands near him"],
 };
 const heardLine = []; // recent lines: { key, dim, x, z, t } (nobody repeats a line someone near just said)
-const LINE_WIN = (key) => (IDLE_LINES.includes(key) ? 6000 : key === "medic" ? 240 : key === "hit" || key === "man_down" ? 100 : 160);
-const callGap = () => [200, 100, 60][Math.max(0, Math.min(2, Number(setting("vfreq", 1))))];   // per man: Low / Normal / High
+const LINE_WIN = (key) => (IDLE_LINES.includes(key) ? 6000 : key === "medic" ? 240 : key === "hit" || key === "man_down" || key === "target_down" ? 60 : 100);   // (v6.9.1: 5 s for battle lines, was 8)
+const callGap = () => [120, 60, 30][Math.max(0, Math.min(2, Number(setting("vfreq", 1))))];   // per man: Low / Normal / High
 function playLine(dim, at, lang, key, pitch = 1, who) {
   try { dim.playSound(`war.voice.${lang}.${key}`, at, { volume: 1.0, pitch }); } catch {}
   if (setting("vsubs", false) || who?.forceSubs) {
@@ -5696,6 +5730,16 @@ function callout(e, text, opt = {}) {
 }
 // v6.8: the squad answers. A man reloading gets cover ("Suppressing!"), a wounded man's call is answered by the medic
 // coming ("Moving up!"), "Contact!" gets "Enemy spotted!" from someone else, idle talk is sometimes answered.
+// v6.9.1: a new decision in a fight gets its line (the dedupe and per-man gaps keep it from becoming a chorus)
+function decisionLine(e, act, underFire) {
+  const r = Math.random();
+  if (act === "flank") { if (r < 0.6) callout(e, "Flanking!"); }
+  else if (act === "suppress") { if (r < 0.45) callout(e, "Suppressing!"); }
+  else if (act === "fallback") { if (r < 0.6) callout(e, "Fall back!"); }
+  else if (act === "cover") { if (r < 0.45) callout(e, underFire ? "Taking fire!" : "Cover me!"); }
+  else if (act === "advance") { if (r < (underFire ? 0.4 : 0.2)) callout(e, r < 0.15 ? "Cover me!" : "Moving up!"); }
+  else if (act === "peek" || act === "position" || act === "terrain") { if (r < 0.2) callout(e, "Cover me!"); }
+}
 function afterLine(e, key, now) {
   // (the mate is looked up on the reply's own tick: nearSnap rewrites each entry's distance, and a line can be said
   //  in the middle of someone's target scan over that same list)
@@ -5832,6 +5876,13 @@ function goDown(e, killer) {
   updateName(e);
   radio(e, "man down, needs a medic");
   try { const fv = Number(P(e, "war:faction")); const near = nearbyCombatants(e.dimension.id, e.location, 10).find((o) => o.typeId === SOLDIER && o.id !== e.id && Number(P(o, "war:faction")) === fv && !downed.has(o.id)); if (near) callout(near, "Man down!"); } catch {}
+  // v6.9.1: he calls for a medic right away (~1.5 s after he drops), not up to 18 s later
+  medicCall.set(e.id, now);
+  system.runTimeout(() => { try { if (e.isValid && downed.has(e.id) && !medicComing(e.id, tick())) callout(e, "Medic!"); } catch {} }, 30);
+}
+function medicComing(id, now) {
+  for (const [mid, mt] of medicTask) if (mt.target === id && now - (mt.t ?? 0) < 60) { const m = world.getEntity(mid); if (m?.isValid && !downed.has(mid)) return true; }
+  return false;
 }
 function revive(e, hpTo = 6) {
   downed.delete(e.id); downPos.delete(e.id);
@@ -5856,12 +5907,12 @@ system.runInterval(() => {
       system.runTimeout(() => { try { if (e.isValid) e.remove(); } catch {} }, 6);       // if the kill didn't take, he's removed
       continue;
     }
-    // v6.6: calling for a medic: every ~18 s, only if no medic is already on his way, and only about half the wounded call
-    if (now % 20 === 0 && (e.id.charCodeAt(e.id.length - 1) & 1) && now - Number(medicCall.get(id) ?? -9999) > 360) {
+    // calling for a medic: at once when he drops (goDown), then every ~10 s while no medic is on his way (v6.9.1: was
+    // every 18 s and only half the wounded). Two men down side by side don't both yell it: a "Medic!" heard within 40
+    // blocks in the last 12 s keeps the others quiet.
+    if (now % 20 === 0 && now - Number(medicCall.get(id) ?? -9999) > 200) {
       medicCall.set(id, now);
-      let coming = false;
-      for (const [mid, mt] of medicTask) if (mt.target === id && now - (mt.t ?? 0) < 60) { const m = world.getEntity(mid); if (m?.isValid && !downed.has(mid)) { coming = true; break; } }   // (v6.9: a medic who's down, gone or gave up isn't coming)
-      if (!coming) callout(e, "Medic!");
+      if (!medicComing(id, now)) callout(e, "Medic!");
     }
     // pinned where he fell, lying down, at the edge of death: no getting up on his own
     try {
@@ -7121,13 +7172,13 @@ function drillMove(e, d, now, melee, anchor, leash) {
     if (spot && straightReach(e.dimension, e.location, spot)) {
       D.scoot = spot; D.scootUntil = now + 60;
       for (const st of gunState.values()) if (st.target?.id === e.id) st.next = Math.max(st.next, now + 8);   // those aiming at him lose their sight picture
-      note(e, "shifting position");
+      note(e, "shifting position"); if (Math.random() < 0.4) callout(e, Math.random() < 0.5 ? "Moving up!" : "Cover me!");
       const s = myMarker(e, spot);
       if (s) return { g: "g_wp", slot: s, t: "t_mid", urgent: true };
     }
   }
   // ---- cover and move
-  if (B.act === "advance" && (S.plan === "contact" || S.plan === "assault") && (S.n ?? 0) >= 3 && ["charge", "follow", "patrol"].includes(d.func)) {
+  if (B.act === "advance" && (S.plan === "contact" || S.plan === "assault") && (S.n ?? 0) >= 3 && (["charge", "follow", "patrol"].includes(d.func) || S.counter)) {
     const moving = (Math.floor(now / 70) & 1) === teamOf(e);
     if (!moving && t?.isValid && shotAt(e, d, t, now)) { note(e, "covering the advance"); return { g: "g_none", t: "t_mid", urgent: false }; }
     if (!moving) {                                                       // v5.4: no aimed shot: covering fire on the window / doorway they were just seen in
@@ -7559,6 +7610,7 @@ const EFFECTIVE = { rifle: 70, semi: 60, smg: 35, mg: 75, shotgun: 16, at: 60, p
 function engageRange(e, d, t, now) {
   const spec = GUN_SPEC[d.weapon];
   if (!spec) return 0;
+  if (d.div === "grenadier" && gdp(e, "war:throw")) return THROW_RANGE;   // (v6.9.1: a thrower closes to throwing range and stops there)
   let r = EFFECTIVE[d.weapon] ?? 40;
   if (["hold", "post", "sentry", "stand"].includes(d.func)) r *= 1.4;
   const fa = firedAt.get(e.id);
@@ -7989,6 +8041,7 @@ function reflexMove(e, d, now, anchor, leash) {
   if (spot) spot = safeSpot(e, spot, now);
   if (!spot || !straightReach(e.dimension, e.location, spot)) return undefined;
   claimSpot(e, spot, now);
+  if (Math.random() < 0.4) callout(e, "Taking fire!");                  // (v6.9.1)
   B.reflex = { spot, until: now + 50, kind };
   const st = gunState.get(e.id); if (st) st.check = now;
   note(e, kind);
