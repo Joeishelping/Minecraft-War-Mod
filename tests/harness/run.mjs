@@ -482,7 +482,7 @@ const S = {
     timing.clear();
     step(ticks, true);
     const mainMs = [...timing].filter(([k]) => k.includes("main.js")).reduce((t, [, v]) => t + v, 0) / ticks;
-    report({ n: N, mainMsPerTick: +mainMs.toFixed(2), shots: SIM.shots.length });
+    report({ n: N, mainMsPerTick: +mainMs.toFixed(2), shots: SIM.shots.length, mw: globalThis.__mw });
   },
 
   // battle learning: many 8 v 8 fights in one world; faction 1 learns, faction 2 keeps the defaults (opt learn2=1: both learn)

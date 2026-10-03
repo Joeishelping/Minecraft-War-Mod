@@ -35,7 +35,10 @@ Armies march on **marches** (`startMarch`): one planned path, a guide that runs 
 member walks to his own formation marker (`placeFormation`, key `war:fmk`, set as `war:catchup`); in tight stretches
 or far behind he follows the route himself on his own marker (`war:mymk`, driven by the route driver / glider), with a
 hold time before switching back (`driveOn`). The lanes (`m.lanes`) are only the march's shared goal tags and the
-arrival spots. A soldier's own
+arrival spots. v6.0: formation and drive markers are only placed where a straight walk is safe (`straightReach`);
+next to a drop (`edgeAt`) the glider carries them; a leg ends when the front is within a few points of its end; the
+march holds while a member is locked in a fight (`combatLock`) and bounds while taking fire (`m.fireT`).
+**Rescue** ("v6.0: rescue"): the only teleports: inside a block, cut off with no progress for 30 s, a failed ladder. A soldier's own
 errands are **personal routes** (`planPersonalTo` / `travel`), followed by `followPersonal` and the route driver.
 
 ## The decision chain (`think`, every second per soldier, staggered)
@@ -49,7 +52,8 @@ In order; the first that returns a move wins:
 5. `spreadMove` (spreading out / making room)
 6. `combatMove`: the squad brain `brainMove` (fire, advance, cover, peek, suppress, flank, position, sandbags, building
    tactics) plus close-combat drills; skipped for ~5 s after a fresh order so orders take effect at once
-7. `engagement` (stop to shoot / move for a clear shot / close in)
+7. `engagement` (stop to shoot / move for a clear shot / close in; v6.0: `updateLock` commits a marcher to an enemy
+   soldier/player until he's down or lost for 15 s, hunting his last position)
 8. `reinforceMove` (help a mauled squad nearby), catching up on a march, `patrolSweep`
 9. **extensions, `when: "last"`**
 10. otherwise: the order itself (hold the spot, march lane, follow...)
@@ -85,7 +89,13 @@ x1.4; returning fire x1.15); `shotAt`: the shot he'd really take now. Suppressio
 - Factions of nearby entities from the shared snapshot (`nearSnap`: `c.f`, `c.down`), not `P(o, "war:faction")` in a loop.
 - Thinking (`think`) and perception (`perceive`) are rotations with a fixed budget per tick (`THINK_MAX`, `PERC_MAX`);
   `isHot` decides who may be looked at less often. Don't add per-soldier loops that run every tick for everyone.
-- Anything that teleports a soldier checks the target cell first (`glideFree`): never into a block.
+- Anything that teleports a soldier checks the target cell first (`glideFree`, `floorUnder`): never into a block, never
+  over thin air.
+
+## Armbands
+`war:role` (entity property, 0-6) picks the band texture in `controller.render.war_band` (RP); geometry
+`geometry.war_band` puts a band on both upper arms (bones named like the player model's, so every animation moves it).
+`ROLE_OF` maps a soldier type to its band; add a texture to `textures/entity/war_band/` and the array for a new type.
 
 ## Adding things
 

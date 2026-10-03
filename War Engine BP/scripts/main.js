@@ -1,4 +1,4 @@
-// War Engine v5.9: faction NPC war framework
+// War Engine v6.0: faction NPC war framework
 import { world, system, Player, ItemStack, EquipmentSlot, GameMode } from "@minecraft/server";
 import { ActionFormData, ModalFormData, FormCancelationReason } from "@minecraft/server-ui";
 import { SKINS } from "./skins.js";
@@ -36,6 +36,7 @@ const DIV = {
 // v6.0: the armband each type wears (RP: controller.render.war_band): 1 green foot, 2 white/red cross medic, 3 blue guard,
 // 4 yellow garrison, 5 orange grenadier, 6 brown houndmaster (cavalry: none)
 const ROLE_OF = { foot: 1, medic: 2, guard: 3, garrison: 4, grenadier: 5, houndmaster: 6, cavalier: 0 };
+const roleFor = (e) => (setting("bands", true) ? ROLE_OF[String(gdp(e, "war:div") ?? "foot")] ?? 0 : 0);
 const ARMY_FUNCS = [["hold", "Hold"], ["patrol", "Patrol"], ["follow", "Follow me"]];
 const FUNCS = {
   foot: ARMY_FUNCS, grenadier: ARMY_FUNCS, houndmaster: ARMY_FUNCS, cavalier: ARMY_FUNCS,
@@ -448,7 +449,7 @@ function setupSoldier(e, s, player, { heal = true } = {}) {
   setP(e, "war:skin", s.skin ?? 0);
   setP(e, "war:cav", div === "cavalier");
   setP(e, "war:medic", div === "medic");
-  setP(e, "war:role", ROLE_OF[div] ?? 0);
+  setP(e, "war:role", setting("bands", true) ? ROLE_OF[div] ?? 0 : 0);
   sdp(e, "war:div", div);
   sdp(e, "war:squad", s.squad ?? 0);
   sdp(e, "war:radius", s.radius ?? 8);
@@ -974,7 +975,7 @@ function freshSeen(e) {
   for (const [k, v] of [["war:pose", 0], ["war:firing", false], ["war:aiming", false]]) { try { if (e.getProperty(k) !== v) e.setProperty(k, v); } catch {} sdp(e, `p_${k}`, v); propMemo.delete(`${e.id}|${k}`); }
   poseOf.delete(e.id);
   try { if (gdp(e, "war:div") === "guard") { const h = e.getComponent("minecraft:health"); if (h && h.effectiveMax < 40) e.triggerEvent("war:hp_60"); } } catch {}
-  try { setP(e, "war:role", ROLE_OF[String(gdp(e, "war:div") ?? "foot")] ?? 0); } catch {}
+  try { setP(e, "war:role", roleFor(e)); } catch {}
 }
 // "hot": fighting, moving, near a player, just ordered or hurt; worked out at most every second per soldier
 const hotMemo = new Map();
@@ -2194,9 +2195,12 @@ async function warTable(player, pre) {
       .toggle("Soldiers spare villagers and traders", { defaultValue: !!setting("civil", true) })
       .toggle("Soldiers may place / break blocks when stuck (restored after ~1 min)", { defaultValue: !!setting("build", true) })
       .toggle("Close-combat drills (cover-and-move, shoot-and-scoot, flinch)", { defaultValue: !!setting("drills", true) })
-      .toggle("Kneel / go prone in firefights (new animations)", { defaultValue: !!setting("poses", true) })
+      .toggle("Kneel in firefights", { defaultValue: !!setting("poses", true) })
       .toggle("Soldiers cut off and outnumbered may surrender", { defaultValue: !!setting("isosurr", true) })
       .toggle("Battle learning (factions adapt their tactics from their own battles)", { defaultValue: !!setting("learn", true) })
+      .toggle("Rescue stuck soldiers (teleport to a squad mate, last resort only)", { defaultValue: !!setting("rescue", true) })
+      .toggle("On the march, finish an enemy off before carrying on", { defaultValue: !!setting("commit", true) })
+      .toggle("Armbands showing each soldier's type", { defaultValue: !!setting("bands", true) })
       .toggle("§cReset what every faction has learned", { defaultValue: false });
     const sr = await show(sf, player);
     if (!sr || sr.canceled || !sr.formValues) return;
@@ -2210,7 +2214,11 @@ async function warTable(player, pre) {
     sdp(world, "war:set_poses", !!sr.formValues[7]);
     sdp(world, "war:set_isosurr", !!sr.formValues[8]);
     sdp(world, "war:set_learn", !!sr.formValues[9]);
-    if (sr.formValues[10]) { learned = {}; saveLearned(); player.sendMessage("§eEvery faction's learned tactics were reset to the defaults."); }
+    sdp(world, "war:set_rescue", !!sr.formValues[10]);
+    sdp(world, "war:set_commit", !!sr.formValues[11]);
+    sdp(world, "war:set_bands", !!sr.formValues[12]);
+    for (const e of allOf(SOLDIER)) { try { setP(e, "war:role", roleFor(e)); } catch {} }
+    if (sr.formValues[13]) { learned = {}; saveLearned(); player.sendMessage("§eEvery faction's learned tactics were reset to the defaults."); }
     player.sendMessage("§aSettings saved.");
     return warTable(player, 5);
     player.sendMessage("§aSettings saved.");
@@ -2647,8 +2655,8 @@ function clearShot(dim, from, to) {
   let inner = LOS.get(ka);
   if (!inner) { inner = new Map(); LOS.set(ka, inner); }
   const c = inner.get(kb), now = tick();
-  if (c && now - c.t < 10) return c.v;
-  if (losThisTick > 350) return c ? c.v : false;                      // over the per-tick cap: reuse what we knew
+  if (c && now - c.t < (bigBattle ? 20 : 10)) return c.v;
+  if (losThisTick > (bigBattle ? 160 : 260)) return c ? c.v : false;  // over the per-tick cap: reuse what we knew (v6.0: lower caps)
   losThisTick++;
   let v = false;
   try { v = !dim.getBlockFromRay(from, { x: dx / l, y: dy / l, z: dz / l }, { maxDistance: l - 0.3, includeLiquidBlocks: false, includePassableBlocks: false }); } catch {}
@@ -3111,7 +3119,7 @@ function perceive(e, now) {
     // mid-battle, distant mobs are ignored unless they're on top of him or attacking
     .filter((c) => !isMob(c.o) || !soldiersAround || c.dd < 6 || attackedRecently(e, c.o, now))
     .sort((a, b) => (Number(isMob(a.o)) - Number(isMob(b.o))) || a.dd - b.dd)
-    .slice(0, 5);                                                // nearest few only (keeps raycasts cheap)
+    .slice(0, bigBattle ? 3 : 5);                                // nearest few only (keeps raycasts cheap; v6.0: 3 in a huge battle)
   const visible = new Set();
   let best, bestScore = -1e9;
   for (const { o, dd } of cands) {
@@ -3190,13 +3198,14 @@ world.afterEvents.entityHurt.subscribe((ev) => {
 // v5.9: perception is a rotation with a fixed budget per tick too (everyone every ~half second up to ~320 soldiers);
 // soldiers in the background look every third turn
 const PERC_MAX = 32;
-let percCursor = 0, percAcc = 0;
+let percCursor = 0, percAcc = 0, bigBattle = false;
 const percPass = new Map();
 system.runInterval(() => {
   const now = tick();
   const list = allOf(SOLDIER), n = list.length;
   if (n) {
-    percAcc = Math.min(PERC_MAX, percAcc + n / 10);
+    bigBattle = n > 300;
+    percAcc = Math.min(bigBattle ? 24 : PERC_MAX, percAcc + n / 10);
     const per = Math.min(n, Math.floor(percAcc));
     percAcc -= per;
     for (let k = 0; k < per; k++) {
@@ -3277,7 +3286,7 @@ function updateLock(e, d, s, now) {
 function engagement(e, d, now, orderGoal, melee) {
   const s = perc.get(e.id);
   if (!s || d.retreat || d.surr || d.div === "medic" || d.func === "escort" || d.func === "squad") return undefined;
-  const L = ["charge", "patrol"].includes(d.func) ? updateLock(e, d, s, now) : undefined;
+  const L = ["charge", "patrol"].includes(d.func) && setting("commit", true) ? updateLock(e, d, s, now) : undefined;
   const stance = String(gdp(e, "war:stance") ?? "aggressive");
   const anchor = ["hold", "post", "sentry", "stand"].includes(d.func) ? marker(orderGoal) : undefined;
   let leash = ANCHOR_LEASH(d, melee);
@@ -5860,10 +5869,11 @@ function marchOfE(e) {
   const id = laneOf.get(g) ?? laneOf.get(Number(gdp(e, "war:chargegoal") ?? 0));
   return id ? getMarches()[id] : undefined;
 }
-function doingWell(o, now) {
+function doingWell(o, now, m) {
   if (!o?.isValid || downed.has(o.id) || pows.has(o.id) || isRiding(o) || climbing.has(o.id) || combatLock.has(o.id)) return false;
   const mk = rescueMark.get(o.id);
-  if (!mk || now - mk.t > 200) return false;                      // he's not getting anywhere either
+  const there = m?.final && m.pos && Math.hypot(o.location.x - m.pos.x, o.location.z - m.pos.z) < 15 && Math.abs(o.location.y - m.pos.y) < 3;   // made it to the destination
+  if (!there && (!mk || now - mk.t > 200)) return false;          // he's not getting anywhere either
   const l = o.location;
   return standAt(o.dimension, Math.floor(l.x), Math.floor(l.y + 0.01), Math.floor(l.z), now) && glideFree(o.dimension, l.x, l.y, l.z);
 }
@@ -5873,14 +5883,20 @@ function rescueTo(e, why, now) {
   let best, bs = -1e9;
   const myP = m?.path ? routeProgress(m, e.location, e.id) : 0;
   for (const o of pool) {
-    if (o.id === e.id || o.dimension.id !== e.dimension.id || !doingWell(o, now) || dist(o.location, e.location) < 3) continue;
-    const sc = m?.path ? routeProgress(m, o.location, o.id) - myP : -dist(o.location, e.location) / 10;
+    if (o.id === e.id || o.dimension.id !== e.dimension.id || !doingWell(o, now, m) || dist(o.location, e.location) < 3) continue;
+    const sc = m?.final && m.pos ? -flat(o.location, m.pos) : m?.path ? routeProgress(m, o.location, o.id) - myP : -dist(o.location, e.location) / 10;
     if (sc > bs) { bs = sc; best = o; }
   }
   if (!best) return false;
   const l = best.location, b = best.getViewDirection?.() ?? { x: 0, z: 0 };
-  let to = { x: l.x - (b.x ?? 0) * 1.2, y: l.y, z: l.z - (b.z ?? 0) * 1.2 };   // just behind him
-  if (!glideFree(e.dimension, to.x, to.y, to.z) || !standAt(e.dimension, Math.floor(to.x), Math.floor(to.y + 0.01), Math.floor(to.z), now)) to = { x: l.x, y: l.y, z: l.z };
+  // a free spot by him (behind him first), never on top of anyone
+  const occupied = (q) => nearSnap(e.dimension.id, q, 1.2).some((c) => c.id !== e.id && c.type === SOLDIER && Math.abs(c.y - q.y) < 1.5);
+  let to;
+  for (const [ox, oz] of [[-(b.x ?? 0) * 1.5, -(b.z ?? 0) * 1.5], [1.5, 0], [-1.5, 0], [0, 1.5], [0, -1.5], [1.5, 1.5], [-1.5, -1.5], [1.5, -1.5], [-1.5, 1.5]]) {
+    const q = { x: Math.floor(l.x + ox) + 0.5, y: Math.floor(l.y + 0.01), z: Math.floor(l.z + oz) + 0.5 };
+    if (standAt(e.dimension, Math.floor(q.x), q.y, Math.floor(q.z), now) && glideFree(e.dimension, q.x, q.y, q.z) && !occupied(q) && localReach(e.dimension, l, q, 60)) { to = q; break; }
+  }
+  if (!to) return false;
   try { e.teleport(to, { dimension: best.dimension }); } catch { return false; }
   afterRescue(e, now, why);
   return true;
@@ -5892,6 +5908,8 @@ function afterRescue(e, now, why) {
 }
 system.runInterval(() => {
   const now = tick();
+  if (!setting("rescue", true)) return;
+  let rescuesNow = 0;
   for (const e of allOf(SOLDIER)) {
     try {
       if (downed.has(e.id) || pows.has(e.id) || isRiding(e) || ridingNest(e)) { rescueMark.delete(e.id); continue; }
@@ -5899,7 +5917,9 @@ system.runInterval(() => {
       let mk = rescueMark.get(e.id);
       // progress: on a march, getting further along its route (pacing up and down a trench isn't progress); otherwise moving
       const pi = m0?.path && !m0.final ? routeProgress(m0, l, e.id) : undefined;
-      if (!mk || (pi !== undefined ? pi >= (mk.pi ?? -1) + 3 || pi < (mk.pi ?? 0) - 10 : Math.hypot(l.x - mk.x, l.z - mk.z) > 3 || Math.abs(l.y - mk.y) > 2)) { mk = { x: l.x, y: l.y, z: l.z, t: now, pi }; rescueMark.set(e.id, mk); }
+      const dd = m0?.final && m0.pos ? Math.hypot(l.x - m0.pos.x, l.z - m0.pos.z) + Math.abs(l.y - m0.pos.y) : undefined;   // arrived march: getting closer to it
+      const moved = pi !== undefined ? pi >= (mk?.pi ?? -1) + 3 || pi < (mk?.pi ?? 0) - 10 : dd !== undefined ? dd < (mk?.dd ?? 1e9) - 3 : Math.hypot(l.x - (mk?.x ?? 1e9), l.z - (mk?.z ?? 0)) > 3 || Math.abs(l.y - (mk?.y ?? 0)) > 2;
+      if (!mk || moved) { mk = { x: l.x, y: l.y, z: l.z, t: now, pi, dd }; rescueMark.set(e.id, mk); }
       const busy = combatLock.has(e.id) || !!perc.get(e.id)?.threat || gdp(e, "war:ordergoal") !== undefined && Number(gdp(e, "war:goal") ?? 0) !== Number(gdp(e, "war:catchup") ?? -1) || (m0 && m0.members.some((id) => combatLock.has(id)));
       if (busy) mk.t = now;                                           // fighting (or his squad is): that's not being stuck
       if (now - (rescueT.get(e.id) ?? -99999) < 1200) continue;     // one rescue a minute at most
@@ -5924,10 +5944,18 @@ system.runInterval(() => {
       // 2. a loop: he should be moving, isn't fighting, and hasn't got anywhere for 30 s
       if (now - mk.t < 600) continue;
       const m = m0;
-      const moving = (m && !m.final && m.path) || personal.has(e.id);
+      const moving = (m && !m.final && m.path) || (m?.final && dd > 20) || personal.has(e.id);
       if (!moving || combatLock.has(e.id) || perc.get(e.id)?.threat) continue;
       if (m && m.members.some((id) => combatLock.has(id))) continue;   // the squad is holding for a fight: not stuck
-      rescueTo(e, "caught up with his squad", now);
+      if (squads.get(squadKey(e, sd(e)))?.known?.size) continue;     // his squad is in contact: that's fighting, not stuck
+      { const df = sd(e).faction; let crowd = 0, foe = false;            // a battle nearby, or jammed in a crowd: not stuck
+        for (const c of nearSnap(e.dimension.id, l, 40)) { if (c.id === e.id || c.down) continue; if (c.f && isHostile(df, c.f)) { foe = true; break; } if (c.dd < 4 && c.type === SOLDIER) crowd++; }
+        if (foe || crowd >= 4) continue; }
+      // cut off: no squad mate within 10 blocks (held up in his own squad's crowd isn't stuck: they'll move on)
+      const mates = m ? m.members : [];
+      if (mates.some((id) => { if (id === e.id) return false; const o = world.getEntity(id); return o?.isValid && !downed.has(id) && dist(o.location, l) < 10 && doingWell(o, now, m); })) continue;   // (a mate stuck with him doesn't count)
+      if (rescuesNow >= 2) continue;
+      if (rescueTo(e, "caught up with his squad", now)) rescuesNow++;
     } catch {}
   }
   if (now % 1200 < 20) for (const id of [...rescueMark.keys()]) if (!world.getEntity(id)) { rescueMark.delete(id); rescueT.delete(id); insideN.delete(id); ladderFail.delete(id); combatLock.delete(id); }
@@ -6082,11 +6110,10 @@ function queuedBehind(e, pts, i) {
   const nx = pts[Math.min(pts.length - 1, i + 1)], end = pts[pts.length - 1];
   const hx = nx.x - e.location.x, hz = nx.z - e.location.z, hl = Math.hypot(hx, hz);
   const myEnd = r3(end, e.location), f = Number(P(e, "war:faction") ?? 0);
-  for (const o of nearbyCombatants(e.dimension.id, e.location, 3)) {
-    if (o.id === e.id || o.typeId !== SOLDIER || downed.has(o.id)) continue;
-    const ol = o.location;
+  for (const c of nearSnap(e.dimension.id, e.location, 4.5)) {          // (v6.0: the shared snapshot, factions pre-read; live positions)
+    if (c.id === e.id || c.type !== SOLDIER || c.down || c.f !== f || !c.e.isValid) continue;
+    const o = c.e, ol = o.location;
     if (Math.abs(ol.y - e.location.y) > 1.2 || Math.hypot(ol.x - e.location.x, ol.z - e.location.z) > 1.2) continue;
-    if (Number(P(o, "war:faction") ?? 0) !== f) continue;
     const ox = ol.x - e.location.x, oz = ol.z - e.location.z;
     if (Math.hypot(ox, oz) < 0.4) { if (o.id < e.id) return true; continue; }  // on the same spot: one of them waits
     if (hl > 0.2 && (ox * hx + oz * hz) / hl < 0.15) continue;               // not in front of him
@@ -6669,6 +6696,7 @@ WarAPI.lib = {
   travel, planPersonalTo, followPersonal, personal, perc, squads, squadKey, gunState, brain, isHostile, isFriendly, factionOf, isDowned, isPow,
   shotAt, aimAt, canHit, clearShot, chest, headLoc, engageRange, tacSpot, freeSpot, spotNear, walkableNear, localReach, isIndoors, onStairs,
   tBlock, turnTo, push, radio, giveFunction, startMarch, nearestBlock, GUN_SPEC, EFFECTIVE, BW,
+  straightReach, standAt, edgeAt, combatLock, glideFree, insideBlock, ROLE_OF,
 };
 
 // the climb itself, from a route: up or down the run of ladder points starting at k, then onto the point after it

@@ -1,5 +1,44 @@
 # War Engine changelog
 
+## v6.0 (orders that get there, commit to the fight, rescue, armbands, tougher guards)
+
+- **Orders get there, long ones too.** A new test copies a real battlefield: hills, trenches with only two crossings,
+  walls with gaps, a pond, ruined houses, trees and shell craters, 245 and 450 blocks long, 12 soldiers, 9 different
+  layouts. v5.9 got the whole squad there in 1 of 3 layouts tested; v6.0 in 9 of 9 (245 blocks) and 4 of 4 (450
+  blocks). What was wrong:
+  - a soldier switching back from "following the route himself" to his formation place could freeze for good (the
+    formation code thought he was fighting). This is probably your "sometimes they get it, sometimes not at all";
+  - long orders are split into legs, and at the end of every leg the march waited for the squad to reach a point
+    they always stop 3 blocks short of: long marches froze;
+  - the "this march is stuck, find another way" check never fired (walking to a formation place counted as fighting);
+  - walking to their formation place or along the route, Minecraft's own walking cut straight across trenches, gaps
+    and the edges of bridges and fell in. Now soldiers only walk straight where a straight walk is safe; next to a
+    drop (a bridge, a ledge, a trench edge, a wall-top) the script carries them along the route;
+  - going down into a dip the script lowered them a moment too early (inside the ground), was refused by the no-clip
+    check, and they stood there forever; and it could carry them over thin air on a diagonal. Fixed both.
+  - going down the house stairs: v5.9 failed 3 of 3 tests; v6.0 3 of 3 arrive.
+- **Commit to the fight, then the order.** On a march or patrol, a soldier who engages an enemy soldier or player
+  stays on him until he's down or nobody in the squad has seen him for 15 s, hunting his last position if he ducks
+  away, and only then goes back to the order. While anyone in the squad is locked in a fight the march holds so the
+  squad stays together. A new order from you breaks it at once. If the enemy is AT the destination, marching on is the
+  attack. Test (a march past an enemy post): switches between "fighting" and "marching" per soldier 5.8 -> 2.4, the
+  enemy post always wiped out (v5.9 sometimes left it). War Table -> Settings to switch off.
+- **Bounding under fire.** A marching squad taking fire moves in bounds (~3 s forward, ~3 s down and shooting) instead
+  of walking steadily into the guns. Building assault test, 8 layouts: v5.9 attackers won 2, v6.0 won 5.
+- **Rescue (last resort, ONLY these cases):** a soldier stuck inside blocks; a soldier cut off and getting nowhere for
+  30 s while his squad moves on (not when he's fighting, jammed in a crowd, or near an enemy); a ladder climb that
+  failed. He's put on a free spot next to a squad mate who is doing well. At most once a minute per soldier.
+  War Table -> Settings to switch off.
+- **The "goofy" firing pose** was the prone pose: the gun model can't follow it (it pointed straight up), and since
+  v5.9 a soldier could stay lying down after a reload. Prone is gone (kneeling stays), and pose / aiming / firing are
+  reset when a world loads.
+- **Armbands** show each soldier's type: green foot soldier, white with a red cross medic, blue guard, yellow
+  garrison, orange grenadier, brown houndmaster (cavalry none). War Table -> Settings to switch off.
+- **Guards** have 40 health (was 18; foot soldiers 16). Guards already in your world get it when the world loads.
+- **Lag:** in a 200 v 200 test where the armies actually fight (v5.9's never met in that test), ~6.5-7.5 ms of script
+  time per tick on the test PC; in huge battles (300+ soldiers) each soldier checks his nearest 3 targets instead of
+  5 and looks around a little less often.
+
 ## v5.9 (squads that stay together, no clipping through walls, 200 v 200 without the lag)
 
 - **Squads no longer fall apart.** On a march, up to four soldiers used to share one formation marker and jostle each
