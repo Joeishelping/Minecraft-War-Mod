@@ -3,7 +3,7 @@
 import json, os, sys, zipfile
 root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 ver = json.load(open(os.path.join(root, "War Engine BP", "manifest.json")))["header"]["version"]
-out = sys.argv[1] if len(sys.argv) > 1 else os.path.join(root, "dist", f"War_Engine_v{ver[0]}_{ver[1]}.mcaddon")
+out = sys.argv[1] if len(sys.argv) > 1 else os.path.join(root, "dist", f"War_Engine_v{ver[0]}_{ver[1]}" + (f"_{ver[2]}" if ver[2] else "") + ".mcaddon")
 os.makedirs(os.path.dirname(out), exist_ok=True)
 with zipfile.ZipFile(out, "w", zipfile.ZIP_DEFLATED) as z:
     for pack in ("War Engine BP", "War Engine RP"):
