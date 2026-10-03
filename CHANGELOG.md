@@ -1,5 +1,75 @@
 # War Engine changelog
 
+## v6.2 (long orders that really go the distance, no walking into lava, unsticking, cleanup)
+
+Built on v6.0 (the version you liked). Only the safe parts of v6.1 were kept: the crash fix for long orders, and the
+lava and drop safety. New mechanics are on hold: this release only fixes things. Every number below comes from the
+test harness running in **Bedrock mode**: script speed like the real game, land unloaded beyond 160 blocks, mobs
+frozen beyond 64 blocks, sloppy walking and knockback. v6.0 was tested the same way.
+
+- **Long orders.** The real cause of "doesn't take long orders": Minecraft stops moving mobs ~64 blocks from every
+  player (the simulation distance). The land is still loaded there, but they just freeze. Now:
+  - The script spots a frozen soldier (should be walking, hasn't moved, no player nearby) and carries him along his
+    route at walking pace, single file. Back in range, normal walking takes over.
+  - Beyond the loaded land (about 10 chunks) nothing can be seen. The squad goes to the edge, spreads out (no pile),
+    and your faction gets one message: "waiting at the edge of the loaded land, come closer". It carries on as the
+    land loads.
+  - Routes over 160 blocks are planned in short legs on a coarse map. At the game's real speed, one 200-block
+    block-by-block search took over a minute while the squad stood still.
+  - Results at real speed (12 soldiers, cluttered battlefield, player following):
+
+    | Order | v6.0 | v6.2 |
+    |---|---|---|
+    | 245 blocks | ~3,900 ticks, standing still up to ~80 s at a time | ~2,700 ticks, longest pause ~11 s |
+    | 450 blocks | ~8,700 ticks | ~5,100 ticks |
+
+    300- and 330-block detours arrive too. With you standing still, 100 blocks arrives. 150+ blocks waits at the edge
+    of the loaded land, with the message.
+  - **Hard limit: 500 blocks** (setting `olimit`). A farther order is refused: "Too far: N blocks (limit 500)".
+  - Every order says where it's going and how far ("Squad 1 -> (x, z), N blocks"), and says when it arrives
+    ("Squad 1 in position"). If no way is found after several tries, they hold where they are and say so.
+  - The newest order always replaces the old one.
+- **Walls by lava, bridges over lava.** Every fight move now goes through one movement gate. Spots by lava, fire or a
+  deadly drop are never picked; a safer cell nearby is used instead. Minecraft's own walking is only used for a plain,
+  safe straight walk. Anything else is a planned route, so they use the bridge. Short hops are worked out instantly,
+  so fights don't wait on the planner (v6.1's sluggishness).
+  - A soldier on a bridge, wall-top or ledge is held still (no drifting, no knockback while waiting his turn) and
+    carried along.
+  - Test: 16 harsh castle battles with both sides charging, wall-top and lava channel layouts: 0 soldiers in the lava.
+- **Doing something stupid.**
+  - Pressing into a wall / going nowhere for 3 s: he re-decides (that spot is avoided). Next he gets a fresh route.
+    Still stuck about 12 s later (and not in a firefight): teleported next to a squad mate who is making progress.
+    He lands at least 1.5 blocks from everyone, never by a drop or lava, never in a pile.
+  - Fell into a trench or pit with no steps out: a short route out. If none exists, lifted out. That works even if
+    the whole squad is down there, onto a free spot on their route ahead. A route cut short no longer ends at the
+    bottom of a pit (a 450-block march used to end in a trench).
+  - A guessed straight line (no route found yet) no longer counts as "arrived". It used to say "in position" 100
+    blocks short.
+- **Fights.** A soldier being shot at returns fire at whatever shows of the shooter, even only a head in a window.
+  Before, attackers walked under machine-gun fire without firing a shot. A march only stops to bound (move/cover)
+  while someone is actually firing back.
+- **Cleanup / repair** (War Table -> "Cleanup / repair"):
+  - Repair: clears all marches, routes and stuck memory; everyone holds where they stand.
+  - Remove near me: radius 8-160 blocks.
+  - Remove a faction, or remove everything from the pack: soldiers, hounds, MG nests, vehicles, flags, markers,
+    shells. Things in unloaded land are removed the moment their land loads (each one carries a stamp). Nothing is
+    added to the world, no ticking areas.
+- **Errors** are no longer silent. Every loop is guarded: an error is logged once with a count (and shown in chat
+  with the readout setting on), and the system keeps running.
+
+**Limits (what can't be done, and what happens instead).**
+- Nothing in unloaded land can be moved or even seen by a script. Past ~10 chunks from every player, a squad waits at
+  the edge (with a message) until someone comes closer.
+- Out of simulation range they are carried along the route, but they don't fight there (the game doesn't simulate
+  them). Fights happen once a player is near.
+- A frozen soldier is detected after ~2 s of standing still when he should be walking, so out-of-range marching
+  starts with a short pause.
+- Defenders now man their windows quickly. A squad charging a building with machine guns across ~90 blocks of open
+  ground now loses. It used to win only because the defenders were slow to reach their windows. Attack with more
+  men, from cover, or from closer.
+- In plain normal-speed tests, some marches are a bit slower than v6.0 (245 blocks: ~2,500 vs ~2,150 ticks), because
+  they use short legs. At the game's real speed they are much faster (above).
+
 ## v6.1 (the crash on longer orders, castles and lava moats)
 
 - **The crash on march orders of ~100-280 blocks.** Orders under 280 blocks were worked out in one search of up to

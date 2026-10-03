@@ -41,6 +41,38 @@ march holds while a member is locked in a fight (`combatLock`) and bounds while 
 **Rescue** ("v6.0: rescue"): the only teleports: inside a block, cut off with no progress for 30 s, a failed ladder. A soldier's own
 errands are **personal routes** (`planPersonalTo` / `travel`), followed by `followPersonal` and the route driver.
 
+### v6.2: the movement gate, the danger map, out of range, stuck escalation, cleanup
+- **Danger map.** `dangerNear(dim, loc)` is true by lava, fire or a deadly drop (`dropOrHazard`, `hazardCell`).
+  Formation spots, lanes, rescue landings and spreading never pick such a cell. A soldier standing on one (a bridge, a
+  wall-top, a ledge: "a passage") is never walked by Minecraft: he is held (`g_none`, velocity cleared, also while
+  paused in a glider queue) and carried along a route.
+- **The movement gate.** Every move a fight decides on goes through `moveTo(e, spot, now, urgent, kind)`. `safeSpot`
+  picks the nearest safe, unclaimed cell he hasn't failed to reach lately (`failSpots`). Then he gets either a marker
+  (a plain safe straight walk: `straightReach`, which is false over any danger cell) or a route of his own (`travel`).
+  Short trips (≤14 blocks, ≤3 up/down) use `shortPath`, an instant BFS, so a fight move never waits on the planner.
+  Fix a movement bug here and it is fixed for every system.
+- **Out of range.** Beyond the simulation distance (~64 blocks from every player by default) mobs don't move, but
+  the land is loaded and scripts run. `trackRemote` / `isRemote` detect a frozen soldier: he wants to walk (`wantsWalk`),
+  hasn't moved for ~2 s, and no player is within 32 blocks. The route driver then carries him along his route. At the
+  end of the known route `remoteSpread` gives each man his own free cell, then leaves him there (`remoteSettled`, tied
+  to the route end). Beyond the loaded land nothing can be read: the route stops at the edge (`frontier`), the faction
+  is told once, and the march looks again every 10 s, only planning once the land past the edge is loaded.
+- **Long orders.** `orderLimit()` is the hard limit (setting `olimit`, default 500 blocks); orders beyond it are
+  refused with a message. Orders over 160 blocks, or when only the last leg of an earlier coarse plan is left, are
+  planned on the coarse map first and then in ~28-block fine legs. A route cut short never ends down in a pit.
+  A march that can't find a way after 3 wide replans holds at its front and says so.
+- **Stuck escalation** (rescue loop, every second). `pressing`: he wants to walk but has gone nowhere for 3 s. 1st:
+  re-decide, avoiding that spot. 2nd: a fresh route to his goal. Then, if not fighting: rescue. Below his route with
+  no way up (a trench with no steps, `belowRoute`), he gets his own short route; if that keeps failing, he is lifted
+  to a squad mate who's making progress (`rescueTo`). If the whole squad is down there with him, he goes onto a free
+  spot of his route ahead (`pitOut`). Landings are always 1.5 blocks from everyone and never by a danger cell.
+- **Cleanup / repair** (War Table, button "Cleanup / repair"). Every pack entity gets a generation stamp (`war:gen`)
+  when it spawns. Removing a faction or everything bumps the generation in `war:purge`. Anything loaded is removed at
+  once, and anything with an old stamp is removed when its land loads (a sweep every 5 s). Repair clears marches,
+  routes and memory maps, and every soldier holds where he stands.
+- **Errors** (`oops`): every loop is wrapped. An error is logged once with a count (and shown in chat when the readout
+  setting is on) instead of silently killing a loop.
+
 ## The decision chain (`think`, every second per soldier, staggered)
 
 In order; the first that returns a move wins:
@@ -137,4 +169,14 @@ node run.mjs load                                   # loads under Minecraft's lo
 node bench.mjs stairsDown,castleStairs,assault 5 <old scripts> -    # old vs new
 node ab.mjs '{"tac":true}' '{"tac":false}' 8         # two brains fight each other (weights/flags per side)
 node selfplay.mjs 10 5                              # tune BW by self-play
+node run.mjs battlefield - bedrock=1 len=450 follow=1 ticks=16000   # a long order at real Bedrock speed
 ```
+Bedrock mode (`bedrock=1`) makes the mock behave like the real game:
+- `slow=15` runs the script about 15x slower against the clock, so the planner gets as little done per tick as in
+  QuickJS;
+- `harsh` cuts corners, wobbles and knocks soldiers back when hit;
+- `loadR=160` unloads land beyond 160 blocks from every player (blocks throw, entities vanish);
+- `simR=64` stops mobs beyond 64 blocks from moving.
+
+Test long orders and anything near lava in this mode: normal mode is too kind. `lava` in a report counts soldiers
+that touched lava, and `errors` lists anything `oops` reported.

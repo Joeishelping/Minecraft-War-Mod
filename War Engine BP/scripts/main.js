@@ -1,4 +1,4 @@
-// War Engine v6.0: faction NPC war framework
+// War Engine v6.2: faction NPC war framework
 import { world, system, Player, ItemStack, EquipmentSlot, GameMode } from "@minecraft/server";
 import { ActionFormData, ModalFormData, FormCancelationReason } from "@minecraft/server-ui";
 import { SKINS } from "./skins.js";
@@ -3735,7 +3735,7 @@ function startMarch(player, pool, dest, then) {
 function requestPlan(id, m, from, wide = false) {
   const dim = world.getDimension(m.dim);
   m.planning = true;
-  const far = Math.hypot(m.dest.x - from.x, m.dest.z - from.z) > 160;   // (v6.2: was 280: a 200-block fine search hit its size cap and stopped short, in a trench)
+  const far = Math.hypot(m.dest.x - from.x, m.dest.z - from.z) > 160;   // (v6.2: was 280: at the game's real script speed a 200-block fine search took ages and hit its size cap)
   // (v6.2: also when only the final leg is left of an earlier coarse plan, e.g. one cut short by unloaded land: a fine
   // search all the way to a far destination took a minute of planning while the squad stood at the end of its route)
   if ((!m.legs || m.legs.length <= 1) && far) {
@@ -3914,7 +3914,11 @@ system.runInterval(() => {
     // v6.0: under fire the march bounds: ~3 s forward, ~3 s down and firing, instead of walking steadily into the guns
     const underFire = members.some((e) => now - (hurtBy.get(e.id)?.t ?? -999) < 60 || (shotsAtMe.get(e.id) ?? []).some((t) => now - t < 40));
     if (underFire) m.fireT = now;
-    const bounding = now - (m.fireT ?? -999) < 200 && Math.floor(now / 60) % 2 === 1 && Math.hypot(m.dest.x - c.x, m.dest.z - c.z) < 80;   // (v6.2: near the objective only, not on a long road)
+    // v6.2: stopping (to bound, or to hold for a fight) only while someone is actually firing back: shot at from a window
+    // they can't answer (only a head showing, too far), standing still in the open just got them killed: keep closing in
+    const replying = members.some((e) => now - (gunState.get(e.id)?.lastShot ?? -999) < 80);
+    if (underFire && !replying && contact) contact = false;
+    const bounding = replying && now - (m.fireT ?? -999) < 200 && Math.floor(now / 60) % 2 === 1 && Math.hypot(m.dest.x - c.x, m.dest.z - c.z) < 80;   // (v6.2: near the objective only, not on a long road)
     if (!contact && !bounding) m.idx = Math.min(m.path.length - 1, Math.max(m.idx ?? 0, j));
     if (lead > (m.bestIdx ?? 0)) { m.wides = 0; m.edgeMsg = m.frontier ? m.edgeMsg : false; }
     if (lead > (m.bestIdx ?? 0) || fighting || contact || bounding) { m.bestIdx = Math.max(m.bestIdx ?? 0, lead); m.progT = now; }
@@ -3940,7 +3944,7 @@ system.runInterval(() => {
     const last = m.path[m.path.length - 1];
     // (v6.0: the squad stops ~3 blocks short of its markers: "at the end" when the front is within a few points of it;
     // waiting for the exact last point froze long marches at the end of a leg)
-    const atEnd = m.idx >= m.path.length - 1 && (flat(last, c) < 8 || prog[0] >= m.path.length - 4);
+    const atEnd = m.idx >= m.path.length - 1 && (flat(last, c) < 8 || (prog[0] >= m.path.length - 4 && !m.path.guess));   // (v6.2: a guessed straight line is never "arrived": it said "in position" 100 blocks short)
     if (atEnd) {
       const lt = m.legT ?? { x: m.dest.x, z: m.dest.z, final: true };
       const atDest = Math.hypot(m.dest.x - last.x, m.dest.z - last.z) <= 6 && (!Number.isFinite(m.dest.y) || Math.abs(m.dest.y - last.y) <= 2) && !last.climb;
@@ -6842,7 +6846,9 @@ function shotAt(e, d, t, now) {
   if (!aim) return undefined;
   const dd = dist(t.location, e.location), r = ridingNest(e) ? 140 : engageRange(e, d, t, now);
   if (dd > r) return undefined;
-  if (aim.y > chest(t).y + 0.1 && dd > r * (bwOf(d.faction).headK ?? HEAD_K) && d.weapon !== "sniper") return undefined;
+  const fa = firedAt.get(e.id);
+  const returning = attackedRecently(e, t, now, 80) || (fa && fa.by === t.id && now - fa.t < 80);   // (v6.2: he's shooting at us: return fire at whatever shows)
+  if (aim.y > chest(t).y + 0.1 && dd > r * (bwOf(d.faction).headK ?? HEAD_K) && d.weapon !== "sniper" && !returning) return undefined;
   return aim;
 }
 // ---- suppression only where it makes sense: an enemy seen in the last 3 s, within range, and a clear line to the
