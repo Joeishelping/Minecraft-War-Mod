@@ -35,7 +35,7 @@ async function pool(jobs) {
   return out;
 }
 // score from the candidate's side: its surviving strength share minus the other side's (each normalized by its start)
-const START = { field: [8, 8], assault: [8, 4] };   // [faction 1, faction 2]
+const START = { field: [8, 8], assault: [8, 6] };   // [faction 1, faction 2]
 function score(r, scen, candSide) {
   if (!r || r.errorCount) return -1;
   const [n1, n2] = START[scen], s1 = r.str1 / n1, s2 = r.str2 / n2;

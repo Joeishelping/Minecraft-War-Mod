@@ -8,10 +8,10 @@ import path from "node:path";
 export const SIM = {
   tick: 0, loading: true, calls: new Map(), entities: new Map(), blocks: new Map(), states: new Map(),
   bounds: { x0: -200, x1: 200, z0: -200, z1: 200, y0: -10, y1: 120 }, groundY: 0, nextId: 1,
-  intervals: [], timeouts: [], seed: 1, log: [], shots: [], hits: 0, defs: {}, dynWorld: new Map(),
+  intervals: [], timeouts: [], callsBy: new Map(), cur: undefined, seed: 1, log: [], shots: [], hits: 0, defs: {}, dynWorld: new Map(),
   errors: [], gameMode: "creative",
 };
-const count = (k) => SIM.calls.set(k, (SIM.calls.get(k) ?? 0) + 1);
+const count = (k) => { SIM.calls.set(k, (SIM.calls.get(k) ?? 0) + 1); if (SIM.cur) { const m = SIM.callsBy.get(SIM.cur) ?? new Map(); m.set(k, (m.get(k) ?? 0) + 1); SIM.callsBy.set(SIM.cur, m); } };
 // deterministic random (scenarios replay the same way)
 let rs = 12345;
 export function seed(n) { rs = n >>> 0 || 1; }
@@ -435,12 +435,16 @@ export function step(n = 1, profile = false) {
       if (SIM.tick < h.next) continue;
       h.next = SIM.tick + h.n;
       const t0 = profile ? performance.now() : 0;
+      SIM.cur = h.src;
       try { h.f(); } catch (err) { SIM.errors.push(`interval ${h.src}: ${err?.stack ?? err}`); }
+      SIM.cur = undefined;
       if (profile) timing.set(h.src, (timing.get(h.src) ?? 0) + performance.now() - t0);
     }
     const due = SIM.timeouts.filter((h) => h.at <= SIM.tick);
     SIM.timeouts = SIM.timeouts.filter((h) => h.at > SIM.tick);
+    SIM.cur = "timeouts";
     for (const h of due) { try { h.f(); } catch (err) { SIM.errors.push(`timeout: ${err?.stack ?? err}`); } }
+    SIM.cur = undefined;
     for (const e of [...SIM.entities.values()]) { try { aiTick(e); physTick(e); } catch (err) { SIM.errors.push(`sim: ${err?.stack ?? err}`); } }
   }
 }

@@ -1,7 +1,9 @@
-// War Engine v5.5: faction NPC war framework
+// War Engine v5.6: faction NPC war framework
 import { world, system, Player, ItemStack, EquipmentSlot, GameMode } from "@minecraft/server";
 import { ActionFormData, ModalFormData, FormCancelationReason } from "@minecraft/server-ui";
 import { SKINS } from "./skins.js";
+import { WarAPI } from "./api.js";
+import "./extensions/index.js";
 
 // ================================================================ constants
 const SOLDIER = "war:soldier", HOUND = "war:hound", WAYPOINT = "war:waypoint", FLAG = "war:flag";
@@ -134,9 +136,13 @@ const setJSON = (h, key, val) => sdp(h, key, JSON.stringify(val));
 // reads hundreds per tick; only this add-on writes them, so the mirror is always right. Unchanged values aren't rewritten.
 const DPC = new Map(); // entity id ("@world" for the world) -> Map(key -> value)
 const dpMap = (h) => { const id = h === world ? "@world" : h.id; let m = DPC.get(id); if (!m) { m = new Map(); DPC.set(id, m); } return m; };
+// v5.6: bookkeeping that only matters while the world runs (stuck checks, pace rolls, heal timers) never touches the
+// game's storage at all
+const TRANSIENT = new Set(["war:lp", "war:lpt", "war:pace", "war:pacet", "war:selfheal", "war:stuck", "war:calm", "war:readout", "war:healt", "war:covert"]);
 function gdp(h, k) {
   const m = dpMap(h);
   if (m.has(k)) return m.get(k);
+  if (TRANSIENT.has(k)) return undefined;
   const v = h.getDynamicProperty(k);
   m.set(k, v);
   return v;
@@ -144,7 +150,7 @@ function gdp(h, k) {
 function sdp(h, k, v) {
   const m = dpMap(h);
   if (m.has(k) && m.get(k) === v && (v === undefined || typeof v !== "object")) return;
-  h.setDynamicProperty(k, v);
+  if (!TRANSIENT.has(k)) h.setDynamicProperty(k, v);
   m.set(k, v && typeof v === "object" ? { ...v } : v);
 }
 system.runInterval(() => { for (const id of [...DPC.keys()]) if (id !== "@world" && !world.getEntity(id)) DPC.delete(id); }, 1200);
@@ -186,13 +192,20 @@ function mainhand(player) {
 // Values set on the same tick an entity spawns can be dropped by the game, so every
 // property is mirrored in a dynamic property and re-applied until it sticks.
 const PROPS = ["war:faction", "war:skin", "war:ranged", "war:cav", "war:medic", "war:rally", "war:gun", "war:firing", "war:aiming", "war:down", "war:nest", "war:pose"];
+const propMemo = new Map(); // "id|key" -> value read from the entity (only this add-on changes them, through setP)
 function P(e, key) {
   const v = gdp(e, `p_${key}`);
   if (v !== undefined) return v;
-  try { return e.getProperty(key); } catch { return undefined; }
+  const mk = `${e.id}|${key}`;
+  if (propMemo.has(mk)) return propMemo.get(mk);
+  let r; try { r = e.getProperty(key); } catch {}
+  propMemo.set(mk, r);
+  if (propMemo.size > 20000) propMemo.clear();
+  return r;
 }
 function setP(e, key, val) {
   sdDrop(e);
+  propMemo.delete(`${e.id}|${key}`);
   sdp(e, `p_${key}`, val);
   try { e.setProperty(key, val); } catch {}
   const ent = e;
@@ -438,6 +451,7 @@ function setupSoldier(e, s, player, { heal = true } = {}) {
   equip(e, weaponItem(e));
   equipArmor(e, s.armor ?? "none");
   applyRelations(e);
+  for (const f of WarAPI.hooks.setup) { try { f(e, s); } catch {} }
   if (s.func === "__none") return e;
   const ok = FUNCS[div].some((f) => f[0] === s.func);
   return giveFunction(e, ok ? s.func : FUNCS[div][0][0], player);
@@ -653,9 +667,12 @@ function think(e) {
     const cu = d.func === "charge" ? gdp(e, "war:catchup") : undefined;
     const bLeash = d.func === "post" ? 2 : d.func === "sentry" ? d.radius + 4 : d.func === "hold" ? (freeOf(e) ? aoOf(e) : 18) : 6;
     const wet = inWater(e);
-    const engaged = medicMove(e, d, now) ?? shakenMove(e, d, now) ?? waterExit(e, d, now) ?? (personal.has(e.id) ? followPersonal(e, now) : undefined) ?? spreadMove(e, now) ?? (wet ? undefined : combatMove(e, d, now, melee, anchor, bLeash)) ?? (wet ? undefined : engagement(e, d, now, d.goal, melee)) ?? reinforceMove(e, d, now) ??
+    // v5.6: a fresh order is obeyed at once: for ~5 s after it nothing stops him to fight (he still shoots on the move)
+    const fresh = now - Number(gdp(e, "war:ordt") ?? -99999) < 100 && (["charge", "follow", "patrol"].includes(d.func) || (anchor && dist(anchor.location, e.location) > 6));
+    const fight = !fresh && !wet;
+    const engaged = medicMove(e, d, now) ?? shakenMove(e, d, now) ?? waterExit(e, d, now) ?? extDecide("first", e, d, now) ?? (personal.has(e.id) ? followPersonal(e, now) : undefined) ?? spreadMove(e, now) ?? (fight ? combatMove(e, d, now, melee, anchor, bLeash) : undefined) ?? (fight ? engagement(e, d, now, d.goal, melee) : undefined) ?? (fresh ? undefined : reinforceMove(e, d, now)) ??
       (cu !== undefined && marker(Number(cu)) ? (note(e, "catching up"), { g: "g_wp", slot: Number(cu), t: "t_mid", urgent: true }) : undefined) ??
-      patrolSweep(e, d, now);
+      patrolSweep(e, d, now) ?? extDecide("last", e, d, now);
     // how far each stationary order may leave its spot to fight: post barely, hold to meet a charge, sentry its whole radius
     const leash = d.func === "post" ? (melee ? 4 : 2) : d.func === "sentry" ? d.radius + 4 : d.func === "hold" ? (freeOf(e) ? aoOf(e) : 18) : (freeOf(e) && d.func === "stand" ? 12 : 4);
     if (anchor && !riding && dist(e.location, anchor.location) > leash + 2 && Number(gdp(e, "war:calm") ?? 0) <= now) {
@@ -707,6 +724,7 @@ function think(e) {
     // a gunner with an enemy right on top of him fights hand-to-hand, then goes back to shooting
     if (GUNS.includes(d.weapon) && d.weapon !== "at" && !calm && closeEnemy(e, d, 2.5)) { want.w = "w_melee"; want.t = "t_short"; want.r = "r_on"; }
   }
+  for (const f of WarAPI.hooks.think) { try { f(e, d, want, now); } catch {} }   // extensions may adjust the decision
   setGroups(e, want);
   if (!riding) unstick(e, d, fighting);
 }
@@ -768,7 +786,7 @@ function grenadier(e, d, now) {
     if (o.id === e.id) continue;
     let ok = false;
     if (o.typeId === SOLDIER || o.typeId === HOUND) ok = isHostile(d.faction, factionOf(o));
-    else if (o.typeId === "minecraft:player") { try { ok = o.getGameMode() !== GameMode.Creative && isHostile(d.faction, factionOf(o)); } catch {} }
+    else if (o.typeId === "minecraft:player") { try { ok = playerFair(o) && isHostile(d.faction, factionOf(o)); } catch {} }
     else if (o.typeId === "war:tank") {
       const crew = o.getComponent("minecraft:rideable")?.getRiders() ?? [];
       ok = crew.some((c) => isHostile(d.faction, factionOf(c)));
@@ -826,7 +844,7 @@ function unstick(e, d, fighting) {
   // ---- climb assist (every second): step up, boost over 2-high walls, hop small gaps (off-route only)
   if (now % 20 < 10 && !onRoute) {
     const ax = p0.x + hx * 0.9, az = p0.z + hz * 0.9, y = Math.floor(p0.y);
-    const at = (dy) => solidAt(dim, { x: ax, y: y + dy, z: az });
+    const at = (dy) => { try { const b = tBlock(dim, ax, y + dy, az); return !!b && !b.isAir && !b.isLiquid; } catch { return false; } };
     if (at(0) && !at(1) && !at(2)) {                      // 1-block step
       push(e, { x: hx * 0.15, y: 0.42, z: hz * 0.15 }, 2);
     } else if (at(0) && at(1) && !at(2) && !at(3)) {      // 2-high wall: boost onto it
@@ -868,7 +886,7 @@ function unstick(e, d, fighting) {
 }
 function standable(dim, loc) {
   try {
-    const feet = dim.getBlock(loc), head = dim.getBlock({ x: loc.x, y: loc.y + 1, z: loc.z }), floor = dim.getBlock({ x: loc.x, y: loc.y - 1, z: loc.z });
+    const feet = tBlock(dim, loc.x, loc.y, loc.z), head = tBlock(dim, loc.x, loc.y + 1, loc.z), floor = tBlock(dim, loc.x, loc.y - 1, loc.z);   // (terrain memory)
     return feet?.isAir && head?.isAir && floor && !floor.isAir && !floor.isLiquid;
   } catch { return false; }
 }
@@ -899,7 +917,7 @@ world.afterEvents.entitySpawn.subscribe((ev) => {
       const o = owner;
       system.runTimeout(() => { if (o.isValid) setP(o, "war:firing", false); }, 4);
       try {
-        const h = owner.getHeadLocation(), v = owner.getViewDirection();
+        const h = headLoc(owner), v = owner.getViewDirection();
         owner.dimension.spawnParticle("ww:flash", { x: h.x + v.x * 1.3, y: h.y - 0.25 + v.y * 1.3, z: h.z + v.z * 1.3 });
       } catch {}
     } catch {}
@@ -908,6 +926,7 @@ world.afterEvents.entitySpawn.subscribe((ev) => {
 
 // ================================================================ main loops
 let phase = 0;
+const propSync = new Map(); // id -> tick his entity properties were last re-applied
 system.runInterval(() => {
   markerCache = new Map();
   phase ^= 1;
@@ -916,7 +935,7 @@ system.runInterval(() => {
   for (const e of soldiers) {
     try {
       if (gdp(e, "war:div") === undefined) { setupSoldier(e, { faction: 0, div: "foot", func: "hold" }, undefined); continue; }
-      syncProps(e);
+      if (tick() - (propSync.get(e.id) ?? -9999) > 200) { propSync.set(e.id, tick()); syncProps(e); }
       // old one-number goal tags (v4.2.1 and earlier): re-tag with the two-part scheme
       if (!e.hasTag("war_g2")) { setGoal(e, Number(gdp(e, "war:goal") ?? 0)); e.addTag("war_g2"); }
       // soldiers armed before guns were drawn on the model: re-arm once
@@ -1258,7 +1277,7 @@ function turnToward(cur, want, maxStep) {
 }
 // What's under the shooter's crosshair (block or entity), up to `range` blocks.
 function aimPoint(v, shooter, range = 150) {
-  const eye = shooter.getHeadLocation(), dir = shooter.getViewDirection(), dim = v.dimension;
+  const eye = headLoc(shooter), dir = shooter.getViewDirection(), dim = v.dimension;
   const crew = (v.getComponent("minecraft:rideable")?.getRiders() ?? []).map((r) => r.id);
   let best = range, at;
   try {
@@ -1890,6 +1909,7 @@ async function giveOrderInner(player, cfg) {
     } catch {}
   }
   player.onScreenDisplay.setActionBar(`§e${ORDERS[cfg.order][1]}: §f${n} soldier${n === 1 ? "" : "s"} §7(sneak + use repeats)`);
+  for (const f of WarAPI.hooks.order) { try { f(player, cfg, pool); } catch {} }
 }
 
 // ================================================================ Unit Wand
@@ -2563,13 +2583,24 @@ function clearShot(dim, from, to) {
   return v;
 }
 function vehicleFaction(v) { for (let i = 1; i <= NF; i++) if (v.hasTag(`war_f${i}`)) return i; return 0; }
+// v5.6: a player who joins a faction is fair game for that faction's enemies in any game mode but spectator (creative
+// players were ignored before, so testing in creative looked like the enemy didn't care). Creative still takes no damage.
+const modeMemo = new Map(); // player id -> { t, fair }
+function playerFair(p) {
+  const c = modeMemo.get(p.id);
+  if (c && tick() - c.t < 20) return c.fair;
+  let fair = false;
+  try { fair = p.getGameMode() !== GameMode.Spectator; } catch {}
+  modeMemo.set(p.id, { t: tick(), fair });
+  return fair;
+}
 function isTargetFor(e, d, o) {
   if (o.id === e.id) return false;
   if (o.typeId === SOLDIER && (downed.has(o.id) || pows.has(o.id))) return false;   // nobody shoots the downed or prisoners
   if (d.weapon === "at") return VEHICLES.includes(o.typeId) && isHostile(d.faction, vehicleFaction(o));
   if (VEHICLES.includes(o.typeId)) return false;
   if (o.typeId === SOLDIER || o.typeId === HOUND) return isHostile(d.faction, factionOf(o)) || isProvoker(d.faction, o, tick());
-  if (o.typeId === "minecraft:player") { try { return o.getGameMode() !== GameMode.Creative && o.getGameMode() !== GameMode.Spectator && (isHostile(d.faction, factionOf(o)) || isProvoker(d.faction, o, tick())); } catch { return false; } }
+  if (o.typeId === "minecraft:player") { try { return playerFair(o) && (isHostile(d.faction, factionOf(o)) || isProvoker(d.faction, o, tick())); } catch { return false; } }
   // vanilla mobs: only once one of them has attacked one of ours, and only when it's close
   const as = assist.get(e.id);
   if ((as && as.id === o.id && tick() - as.t < 200) || attackedRecently(e, o, tick())) return true;
@@ -2579,7 +2610,7 @@ function isTargetFor(e, d, o) {
   return dd <= 9;                                                                      // anything hostile this close is a danger
 }
 function pickTarget(e, d, spec) {
-  const eye = e.getHeadLocation();
+  const eye = headLoc(e);
   let best, bd = spec.sight + 0.01;
   for (const o of nearbyCombatants(e.dimension.id, e.location, spec.sight)) {
     if (!isTargetFor(e, d, o)) continue;
@@ -2620,7 +2651,7 @@ function nudge(e, toward, strength = 0.45, p = 3) {
 function sidestep(e, d, target) {
   const leash = stepLeash(d);
   const anchor = ["hold", "post", "sentry", "stand"].includes(d.func) ? marker(d.goal) : undefined;
-  const h = e.getHeadLocation(), c = chest(target);
+  const h = headLoc(e), c = chest(target);
   const dx = c.x - h.x, dz = c.z - h.z, l = Math.hypot(dx, dz) || 1;
   const px = -dz / l, pz = dx / l;
   for (const k of [1, -1, 2, -2, 3, -3]) {
@@ -2642,7 +2673,7 @@ function firedOn(t, shooter, now) {
 }
 // can the bullet actually get there? checked from the muzzle, at the chest and a bit above it
 function muzzleOf(e, t) {
-  const h = e.getHeadLocation(), c = chest(t);
+  const h = headLoc(e), c = chest(t);
   const dx = c.x - h.x, dy = c.y - h.y, dz = c.z - h.z, l = Math.hypot(dx, dy, dz) || 1;
   return { x: h.x + (dx / l) * 0.9, y: h.y - 0.2 + (dy / l) * 0.9, z: h.z + (dz / l) * 0.9 };
 }
@@ -2660,8 +2691,14 @@ function aimAt(e, t) {
   return undefined;
 }
 const canHit = (e, t) => !!aimAt(e, t);
+// a soldier's eyes, worked out instead of asked from the game (v5.6: the gun loop asked for it hundreds of times a tick)
+function headLoc(o) {
+  if (o.typeId !== SOLDIER) return o.getHeadLocation();
+  const l = o.location, ps = poseOf.get(o.id) ?? 0;
+  return { x: l.x, y: l.y + (ps === 2 ? 0.45 : ps === 1 ? 1.1 : 1.62), z: l.z };
+}
 function fireGun(e, spec, t, aim) {
-  const h = e.getHeadLocation(), c0 = aim ?? chest(t);
+  const h = headLoc(e), c0 = aim ?? chest(t);
   let c = c0;
   try { const v = t.getVelocity(); const tt = Math.hypot(c0.x - h.x, c0.y - h.y, c0.z - h.z) / spec.speed; c = { x: c0.x + v.x * tt, y: c0.y, z: c0.z + v.z * tt }; } catch {}  // lead the target
   let dx = c.x - h.x, dy = c.y - h.y, dz = c.z - h.z;
@@ -2715,7 +2752,7 @@ function gunTick(e, now) {
   if (!!P(e, "war:aiming") !== aiming) setP(e, "war:aiming", aiming);
   if (!st.target && st.supp && now < st.supp.until && now >= st.next && st.supp.ent?.isValid && !downed.has(st.supp.ent.id)) {   // v5.4: suppressing a window / doorway
     const p = st.supp.p;
-    if (!friendlyInLine(e, d, e.getHeadLocation(), p, st.supp.ent) && turnTo(e, p, 20) <= 25) {
+    if (!friendlyInLine(e, d, headLoc(e), p, st.supp.ent) && turnTo(e, p, 20) <= 25) {
       fireAtPoint(e, spec, { x: p.x, y: p.y - 1, z: p.z });
       st.lastShot = now; st.ammo--;
       if (st.ammo > 0) st.next = now + Math.max(2, spec.gap); else { st.ammo = spec.mag; st.next = now + spec.reload + Math.floor(Math.random() * 8); }
@@ -2727,7 +2764,7 @@ function gunTick(e, now) {
   if (!t.isValid) { st.target = undefined; return; }
   if (!shotAt(e, d, t, now)) return;                                    // beyond the gun's useful range, or a head too far to hit: close in first (v5.4)
   if (closeEnemy(e, d, 2.5)) return;                                    // hand-to-hand right now
-  const from = e.getHeadLocation();
+  const from = headLoc(e);
   if (friendlyInLine(e, d, from, chest(t), t)) {                        // never shoot through a friendly
     if (now >= st.step && !isRiding(e)) { st.step = now + 25; sidestep(e, d, t); }
     st.next = now + 6;
@@ -2778,7 +2815,7 @@ world.afterEvents.entityHurt.subscribe((ev) => {
       sdp(e, "war:covert", now + 200);
       const anchor = ["hold", "sentry", "stand"].includes(d.func) ? marker(d.goal) : undefined;
       const leash = stepLeash(d) + 1;
-      const shooter = a.getHeadLocation ? a.getHeadLocation() : a.location;
+      const shooter = a.getHeadLocation ? headLoc(a) : a.location;
       for (const [id, c] of [...coverClaim]) if (now - c.t > 300 || id === e.id) coverClaim.delete(id);
       for (const r of [1.5, 3, 4.5]) for (let i = 0; i < 12; i++) {
         const ang = (i / 12) * Math.PI * 2;
@@ -2854,10 +2891,15 @@ function pstate(e) {
   return s;
 }
 function sightOf(d) { return d.weapon === "sniper" ? 250 : GUNS.includes(d.weapon) ? 200 : 60; } // melee soldiers watch the near area
+const lightMemo = new Map(); let todT = -1, todV = 6000;
 function lightAt(dim, loc) {
   try {
-    const block = dim.getLightLevel(loc), sky = dim.getSkyLightLevel(loc);
-    const t = world.getTimeOfDay(); // 0..24000, night roughly 13000..23000
+    if (tick() !== todT) { todT = tick(); todV = world.getTimeOfDay(); }
+    const k = `${dim.id}|${Math.floor(loc.x / 2)}|${Math.floor(loc.y)}|${Math.floor(loc.z / 2)}`, c = lightMemo.get(k);   // v5.6: light is remembered ~5 s per spot
+    let block, sky;
+    if (c && tick() - c.t < 100) { block = c.b; sky = c.s; }
+    else { block = dim.getLightLevel(loc); sky = dim.getSkyLightLevel(loc); lightMemo.set(k, { b: block, s: sky, t: tick() }); if (lightMemo.size > 20000) lightMemo.clear(); }
+    const t = todV; // 0..24000, night roughly 13000..23000
     const day = t < 12500 || t > 23200 ? 1 : t < 13500 ? 1 - (t - 12500) / 1000 * 0.7 : t > 22200 ? 0.3 + (t - 22200) / 1000 * 0.7 : 0.3;
     return Math.max(block, sky * day);
   } catch { return 15; }
@@ -2878,8 +2920,11 @@ const noiseFrom = new Map(); // entity id -> tick it last made combat noise
 const provoked = new Map();  // "faction:attackerId" -> until tick
 const assist = new Map();    // soldier id -> { id, t } : an attacker hurting a comrade nearby
 function isProvoker(f, o, now) { return (provoked.get(`${f}:${o.id}`) ?? 0) > now; }
+const rotMemo = new Map(); // id -> { t, y } (one rotation read per soldier per tick)
 function facingAngle(e, to) {
-  const yaw = e.getRotation().y * Math.PI / 180;
+  let r = rotMemo.get(e.id);
+  if (!r || r.t !== tick()) { r = { t: tick(), y: e.getRotation().y }; rotMemo.set(e.id, r); if (rotMemo.size > 4000) rotMemo.clear(); }
+  const yaw = r.y * Math.PI / 180;
   const fx = -Math.sin(yaw), fz = Math.cos(yaw);
   const dx = to.x - e.location.x, dz = to.z - e.location.z, l = Math.hypot(dx, dz) || 1;
   return Math.acos(Math.max(-1, Math.min(1, (fx * dx + fz * dz) / l))) * 180 / Math.PI; // 0 = straight ahead
@@ -2932,7 +2977,7 @@ function perceive(e, now) {
   const s = pstate(e);
   if (d.surr || d.div === "medic") { s.threat = undefined; s.alert = "calm"; return; }
   const base = sightOf(d);
-  const eye = e.getHeadLocation();
+  const eye = headLoc(e);
   const all = nearbyCombatants(e.dimension.id, e.location, base)
     .filter((o) => isTargetFor(e, d, o))
     .map((o) => ({ o, dd: dist(o.location, e.location) }));
@@ -3675,7 +3720,7 @@ function descend(e, goalLoc) {
 // edge of what the game runs, the destination is estimated along the same line.
 function aimFar(player) {
   try { const s = lookedSpot(player, 200); if (s) return s; } catch {}
-  const eye = player.getHeadLocation(), dir = player.getViewDirection(), dim = player.dimension;
+  const eye = headLoc(player), dir = player.getViewDirection(), dim = player.dimension;
   let lastGroundY = player.location.y, tExit = 0;
   for (let t = 4; t <= 600; t += 4) {
     const p = { x: eye.x + dir.x * t, y: eye.y + dir.y * t, z: eye.z + dir.z * t };
@@ -4253,8 +4298,8 @@ system.runInterval(() => {
         const height = oc.y - S.enemyC.y;
         let cov = 0, pairs = 0;
         for (const q of known.slice(0, 4)) for (const e of ours.slice(0, 4)) {
-          if (!clearShot(e.dimension, e.getHeadLocation(), chest(q.ent))) continue;
-          pairs++; if (!clearShot(e.dimension, e.getHeadLocation(), { x: q.x, y: q.y + 0.5, z: q.z })) cov++;
+          if (!clearShot(e.dimension, headLoc(e), chest(q.ent))) continue;
+          pairs++; if (!clearShot(e.dimension, headLoc(e), { x: q.x, y: q.y + 0.5, z: q.z })) cov++;
         }
         const dug = height <= -2 || (pairs > 0 && cov / pairs > 0.4);
         if (S.plan === "advance" || S.plan === "defend") S.plan = "contact";
@@ -4314,7 +4359,7 @@ system.runInterval(() => {
 function suppressNear(t, w) { try { for (const o of nearbyCombatants(t.dimension.id, t.location, 3)) if (o.typeId === SOLDIER) suppB.set(o.id, Math.min(30, (suppB.get(o.id) ?? 0) + (w === "mg" ? 1.6 : w === "smg" ? 0.8 : 0.4))); } catch {} }
 // fire at a position (suppressing a last known position, no clear view needed)
 function fireAtPoint(e, spec, p) {
-  const h = e.getHeadLocation();
+  const h = headLoc(e);
   let dx = p.x - h.x, dy = p.y + 1 - h.y, dz = p.z - h.z;
   const n = Math.hypot(dx, dy, dz) || 1;
   const r = () => (Math.random() + Math.random() - 1) * spec.spread * 3;
@@ -4419,6 +4464,7 @@ function brainMove(e, d, now, melee, anchor, leash) {
     const dd = t ? dist(t.location, e.location) : 1e9;
     const shot = !!shotAt(e, d, t, now);
     const exposure = exposureAt(e.dimension, e.location, known.slice(0, 3));
+    B.exp = exposure;
     const covered = t ? !clearShot(e.dimension, chest(t), { x: e.location.x, y: e.location.y + 0.5, z: e.location.z }) : false;
     const underFire = now - (firedAt.get(e.id)?.t ?? -999) < 40 || attackedRecently(e, t ?? e, now, 40);
     const p = t ? Math.min(1, (GOOD_RANGE_B[d.weapon] ?? 40) / Math.max(1, dd)) * (shot ? 1 : 0) : 0;
@@ -4438,6 +4484,8 @@ function brainMove(e, d, now, melee, anchor, leash) {
     const hp = e.getComponent("minecraft:health");
     if (hp && hp.currentValue < 5 && exposure >= 2) opts.push(["fallback", BW.fall]);
     if (!moving) opts.push(["hold", 0.5 + (t ? 0 : 0.3)]);
+    const tac = BW.tac !== false;
+    if (tac && !moving && S.enemyC && (!shot || (underFire && exposure > 0)) && now - (B.posT ?? -999) > 60) opts.push(["position", 0.55 + (!shot ? 0.35 : 0) + (underFire && exposure > 0 ? 0.5 : 0)]);   // v5.6: a better firing position near his post
     if (S.keyPt && (d.weapon === "mg" || d.weapon === "sniper" || !moving) && !shot) opts.push(["terrain", BW.terrain + (d.weapon === "sniper" ? 0.8 : 0)]);
     if (d.weapon === "sniper" && t && shot) opts.push(["fire", 1.6]);                  // a sniper with a shot takes it
     if ((!moving || underFire) && S.enemyC) {
@@ -4452,15 +4500,27 @@ function brainMove(e, d, now, melee, anchor, leash) {
     opts.sort((a, b) => b[1] - a[1]);
     B.act = opts[0][0];
     B.spot = undefined;
-    if (B.act === "cover") B.target = spotNear(e, (w) => !t || !clearShot(e.dimension, chest(t), { x: w.x, y: w.y + 0.5, z: w.z }), anchor, leash);
+    const ts = (o) => tac ? tacSpot(e, d, S, { anchor, leash, ...o }, now) : undefined;
+    if (B.act === "cover") {
+      const r = ts({ rMin: 1.5, rMax: 6, wCover: 1.6, wShot: 0.7, margin: 0.3 });     // v5.6: real cover that can still fire back
+      B.target = r ? r.spot : spotNear(e, (w) => !t || !clearShot(e.dimension, chest(t), { x: w.x, y: w.y + 0.5, z: w.z }), anchor, leash);
+      if (r?.stay) B.act = shot ? "fire" : "hold";
+    } else if (B.act === "position") {
+      B.posT = now;
+      const r = ts({ rMin: 1.5, rMax: Math.min(9, leash ?? 9), wCover: 1, wShot: 1.4, margin: 0.6 });
+      B.target = r?.spot; if (!B.target) B.act = shot ? "fire" : "hold";
+    }
     else if (B.act === "peek") {
       const n = nearestKnownB(S, e);
       // rare, believable mistake: a stale sighting (2+ s old, not shooting at us) is remembered a little off
       let tp = n?.q; if (tp && now - tp.t > 40 && !underFire && Math.random() < 0.05) tp = { ...tp, x: tp.x + (Math.random() - 0.5) * 10, z: tp.z + (Math.random() - 0.5) * 10 };
-      B.target = tp ? spotNear(e, (w) => clearShot(e.dimension, { x: w.x, y: w.y + 1.6, z: w.z }, { x: tp.x, y: tp.y + 1.2, z: tp.z }), anchor, leash, 8) : undefined;
+      const r = tac && tp && tp === n?.q ? ts({ rMin: 1.5, rMax: 8, wCover: 0.6, wShot: 2, margin: 0.2 }) : undefined;   // v5.6: a spot with a shot, and cover if there is any
+      B.target = r?.spot ?? (tp ? spotNear(e, (w) => clearShot(e.dimension, { x: w.x, y: w.y + 1.6, z: w.z }, { x: tp.x, y: tp.y + 1.2, z: tp.z }), anchor, leash, 8) : undefined);
     } else if (B.act === "fallback") {
       const n = nearestKnownB(S, e);
       if (n) { const dx = e.location.x - n.q.x, dz = e.location.z - n.q.z, L = Math.hypot(dx, dz) || 1; B.target = walkableNear(e.dimension, e.location.x + dx / L * 8, e.location.z + dz / L * 8, e.location.y); }
+    } else if (B.act === "advance" && S.plan !== "advance" && moving && tac && (B.target = ts({ rMin: 4, rMax: 10, toward: S.enemyC, wProg: 1.3, wCover: 1, wShot: 0.6, margin: -9 })?.spot)) {
+      // v5.6: bounding from cover to cover toward the enemy (the evaluator's pick, kept in B.target)
     } else if (B.act === "advance" && S.plan !== "advance" && moving) {
       // covered approach: of three directions toward the enemy, the least exposed
       const g = S.enemyC; const dx = g.x - e.location.x, dz = g.z - e.location.z, L = Math.hypot(dx, dz) || 1;
@@ -4476,8 +4536,7 @@ function brainMove(e, d, now, melee, anchor, leash) {
     } else B.target = undefined;
   }
   {
-    const shot0 = t?.isValid ? canHit(e, t) : false;
-    const bm = buildingMove(e, d, now, S, t, B, now - (firedAt.get(e.id)?.t ?? -999) < 40, exposureAt(e.dimension, e.location, [...S.known.values()].slice(0, 3)), ["charge", "follow", "patrol"].includes(d.func), anchor);
+    const bm = buildingMove(e, d, now, S, t, B, now - (firedAt.get(e.id)?.t ?? -999) < 40, B.exp ?? 0, ["charge", "follow", "patrol"].includes(d.func), anchor);
     if (bm) return bm;
   }
   switch (B.act) {
@@ -4497,6 +4556,7 @@ function brainMove(e, d, now, melee, anchor, leash) {
     }
     case "fallback": note(e, "falling back"); return B.target ? go(B.target) : undefined;
     case "terrain": note(e, "taking high ground"); return S.keyPt ? go(S.keyPt, false) : undefined;
+    case "position": if (!B.target || flat(B.target, e.location) < 0.9) { B.act = "hold"; return undefined; } note(e, "taking a firing position"); return go(B.target, false);
     case "sandbag": {
       if (!B.sandbag) return undefined;
       const dSb = flat(B.sandbag, e.location);
@@ -4644,7 +4704,7 @@ async function blowHorn(player) {
   let n = 0;
   for (const e of soldiers) {
     freshMind(e);
-    sdp(e, "war:cmdr", player.id); sdp(e, "war:stance", "aggressive");
+    sdp(e, "war:cmdr", player.id); sdp(e, "war:stance", "aggressive"); sdp(e, "war:ordt", now);
     sdp(e, "war:ao", 100); sdp(e, "war:free", true); sdp(e, "war:then", "hold");
     hornCone.set(e.id, { x: player.location.x, z: player.location.z, dx: dir.x / hl, dz: dir.z / hl, until: now + 1200 });
     giveFunction(e, mapFunc("charge", sd(e).div), player, march.lanes[n % march.lanes.length]); n++;
@@ -5094,7 +5154,7 @@ system.runInterval(() => {
       if (r.typeId === "minecraft:player") {
         n.setRotation({ x: 0, y: r.getRotation().y });                         // the gun follows your view
         if (consumeFire(r) && now >= st.next) {
-          const dir = r.getViewDirection(), h = r.getHeadLocation();
+          const dir = r.getViewDirection(), h = headLoc(r);
           for (let k = 0; k < 6 && st.ammo > 0; k++) {
             system.runTimeout(() => {
               try {
@@ -5240,7 +5300,7 @@ const insideGoal = (dim, n) => { try {
 function openWindow(e, t, now) {
   if (!setting("build", true) || !canBuild(e, now)) return false;
   try {
-    const h = e.getHeadLocation(), c = chest(t), dx = c.x - h.x, dy = c.y - h.y, dz = c.z - h.z, L = Math.hypot(dx, dy, dz) || 1;
+    const h = headLoc(e), c = chest(t), dx = c.x - h.x, dy = c.y - h.y, dz = c.z - h.z, L = Math.hypot(dx, dy, dz) || 1;
     const hit = e.dimension.getBlockFromRay(h, { x: dx / L, y: dy / L, z: dz / L }, { maxDistance: 4, includePassableBlocks: false });
     const b = hit?.block;
     if (!b || !b.typeId.includes("glass")) return false;
@@ -5789,10 +5849,11 @@ system.runInterval(() => {
   for (const e of allOf(SOLDIER)) {
     try {
       if (climbing.has(e.id) || gliders.has(e.id) || downed.has(e.id) || isRiding(e)) continue;
-      const v = e.getVelocity(), sp = Math.hypot(v.x, v.z);
-      if (sp < 0.03) continue;
+      if (!personal.has(e.id) && gdp(e, "war:catchup") === undefined) continue;   // v5.6: only men stepping a route themselves (formation walkers use Minecraft's own edge sense)
       const r = routeOf(e);
       if (!r) continue;
+      const v = e.getVelocity(), sp = Math.hypot(v.x, v.z);
+      if (sp < 0.03) continue;
       const l = e.location, fy = Math.floor(l.y + 0.01);
       const pts = r.pts, i = r.idx;
       // a drop: nothing at his feet there (not a step up) and open air 3 deep below it
@@ -5841,7 +5902,7 @@ function shotAt(e, d, t, now) {
 // spot he was at (the window or doorway he ducked behind). Never at a remembered position behind a wall.
 function suppressPoint(e, d, S, now) {
   if (!GUN_SPEC[d.weapon] || !S) return undefined;
-  const h = e.getHeadLocation();
+  const h = headLoc(e);
   let best, bd = 1e9;
   for (const q of S.known.values()) {
     if (now - q.t > 60) continue;
@@ -5981,3 +6042,96 @@ system.runInterval(() => {
     } catch { gliders.delete(id); }
   }
 }, 1);
+
+// ================================================================ v5.6: tactical positions
+// The way a good squad leader reads ground: every candidate spot around a soldier is scored for cover from the enemies
+// the squad knows about (their eyes can't see his chest there), a shot at one of them within his gun's range, ground
+// gained toward the objective, a little height, and against crowding a mate, standing in a doorway or on the stairs,
+// or a long walk. Cheap terms first; line-of-sight rays only for the few most promising spots (bounded per call and per
+// tick), and the spot must be reachable on foot. Used to bound forward from cover to cover, to take cover that can still
+// fire back, to peek, and to pick firing positions when holding.
+const TW = { cover: 2.0, shot: 2.0, prog: 1.6, height: 0.2, crowd: 1.6, dist: 0.06 };
+let tacBudget = 0;
+system.runInterval(() => { tacBudget = 8; }, 1);
+function tacSpot(e, d, S, o, now) {
+  if (tacBudget <= 0 || !S?.known?.size) return undefined;
+  tacBudget--;
+  const here = e.location, dim = e.dimension;
+  const known = [...S.known.values()].filter((q) => now - q.t < 300 && q.ent?.isValid && !downed.has(q.ent.id))
+    .sort((a, b) => flat(a, here) - flat(b, here)).slice(0, 2);
+  if (!known.length) return undefined;
+  const range = engageRange(e, d, undefined, now) || 40, f = d.faction;
+  const center = o.center ?? here;
+  const cands = [{ x: here.x, y: Math.floor(here.y + 0.01), z: here.z, r: 0 }];
+  for (let r = o.rMin; r <= o.rMax + 0.01; r += 1.5) for (let k = 0; k < 8; k++) {
+    const a = (k / 8) * Math.PI * 2 + r * 0.9;
+    const w = walkableNear(dim, center.x + Math.cos(a) * r, center.z + Math.sin(a) * r, here.y);
+    if (!w || Math.abs(w.y - here.y) > 1.5) continue;
+    if (o.anchor && flat(w, o.anchor.location) > o.leash) continue;
+    cands.push({ ...w, r: flat(w, here) });
+  }
+  const mates = nearbyCombatants(dim.id, center, o.rMax + 5).filter((m) => m.typeId === SOLDIER && m.id !== e.id && !downed.has(m.id) && Number(P(m, "war:faction") ?? 0) === f);
+  const scored = [];
+  for (const c of cands) {
+    if (c.r > 0 && (claimedByOther(c, e.id, now) || onWayThrough(dim, c))) continue;
+    let s = -TW.dist * c.r + TW.height * Math.max(-2, Math.min(3, c.y - here.y));
+    if (o.toward) {
+      const g = flat(here, o.toward) - flat(c, o.toward);
+      s += TW.prog * (o.wProg ?? 1) * Math.max(-1, Math.min(1, g / 6));
+      if (c.r > 0 && g < 1.5) s -= 1;                                    // a bound that gains nothing isn't a bound
+    }
+    let crowd = 0;
+    for (const m of mates) { const ml = m.location; if (Math.hypot(ml.x - c.x, ml.z - c.z) < 1.6 && Math.abs(ml.y - c.y) < 1.5) crowd++; }
+    c.s = s - TW.crowd * crowd;
+    scored.push(c);
+  }
+  scored.sort((a, b) => b.s - a.s);
+  const top = scored.slice(0, 6);
+  if (!top.includes(scored.find((c) => c.r === 0) ?? top[0])) { const h = scored.find((c) => c.r === 0); if (h) top.push(h); }   // always judge where he stands too
+  let rays = 0;
+  for (const c of top) {
+    let cover = 0, shot = 0;
+    for (const q of known) {
+      if (rays > 30) break;
+      rays++;
+      if (!clearShot(dim, { x: q.x, y: q.y + 1.6, z: q.z }, { x: c.x, y: c.y + 1.1, z: c.z })) cover += 1 / known.length;   // his chest hidden from that enemy
+      if (Math.hypot(q.x - c.x, q.z - c.z) <= range) { rays++; if (clearShot(dim, { x: c.x, y: c.y + 1.62, z: c.z }, { x: q.x, y: q.y + 1.5, z: q.z })) shot = 1; }
+    }
+    c.s += TW.cover * (o.wCover ?? 1) * cover + TW.shot * (o.wShot ?? 1) * shot;
+    c.cover = cover; c.shot = shot;
+  }
+  top.sort((a, b) => b.s - a.s);
+  const cur = top.find((c) => c.r === 0);
+  for (const c of top) {
+    if (c.r === 0) return { spot: undefined, stay: true, score: c.s, cover: c.cover, shot: c.shot };   // where he is is best: stay
+    if (cur && c.s < cur.s + (o.margin ?? 0.4)) return { spot: undefined, stay: true, score: cur.s };   // not worth the move
+    if (localReach(dim, here, c)) { claimSpot(e, c, now); return { spot: { x: c.x, y: c.y, z: c.z }, score: c.s, cover: c.cover, shot: c.shot }; }
+  }
+  return undefined;
+}
+
+// ================================================================ v5.6: extensions
+// Registered behaviours get their turn in the decision chain ("first": before the combat brain; "last": when nothing
+// else wants the soldier). Their errors never reach the core. See scripts/api.js and DEVELOPING.md.
+function extDecide(when, e, d, now) {
+  for (const b of WarAPI.behaviors) {
+    if (b.when !== when) continue;
+    try { const mv = b.decide(e, d, now, WarAPI.lib); if (mv) { if (mv.note) note(e, mv.note); return mv; } } catch {}
+  }
+  return undefined;
+}
+function nearestBlock(e, test, r = 8) {
+  let best, bd = 1e9;
+  const p = e.location;
+  for (let dx = -r; dx <= r; dx++) for (let dz = -r; dz <= r; dz++) for (const dy of [0, 1]) {
+    try { const b = tBlock(e.dimension, p.x + dx, Math.floor(p.y) + dy, p.z + dz); if (b && test(b)) { const dd = Math.hypot(dx, dz); if (dd < bd) { bd = dd; best = { x: Math.floor(p.x + dx) + 0.5, y: Math.floor(p.y) + dy, z: Math.floor(p.z + dz) + 0.5 }; } } } catch {}
+  }
+  return best;
+}
+system.runInterval(() => { if (!WarAPI.hooks.tick.length) return; const now = tick(); for (const f of WarAPI.hooks.tick) { try { f(now); } catch {} } }, 1);
+WarAPI.lib = {
+  SOLDIER, world, system, tick, sd, gdp, sdp, P, setP, note, dist, flat, allOf, nearbyCombatants, marker, makeWaypoint, myMarker, setGoal,
+  travel, planPersonalTo, followPersonal, personal, perc, squads, squadKey, gunState, brain, isHostile, isFriendly, factionOf, isDowned, isPow,
+  shotAt, aimAt, canHit, clearShot, chest, headLoc, engageRange, tacSpot, freeSpot, spotNear, walkableNear, localReach, isIndoors, onStairs,
+  tBlock, turnTo, push, radio, giveFunction, startMarch, nearestBlock, GUN_SPEC, EFFECTIVE, BW,
+};

@@ -14,7 +14,7 @@ const scriptsDir = path.resolve(process.argv[3] && process.argv[3] !== "-" ? pro
 const opt = Object.fromEntries((process.argv.slice(4)).map((a) => a.split("=")));
 const runDir = path.join(here, `run_${process.pid}`);
 fs.mkdirSync(runDir, { recursive: true });
-for (const f of fs.readdirSync(scriptsDir)) fs.copyFileSync(path.join(scriptsDir, f), path.join(runDir, f));
+fs.cpSync(scriptsDir, runDir, { recursive: true });
 // expose the add-on's internals to the scenarios (appended to the copy only)
 const HOOK = ["BW", "BW_F", "HEAD_K", "medicMove", "shakenMove", "waterExit", "followPersonal", "spreadMove", "combatMove", "engagement", "reinforceMove", "patrolSweep", "marker", "think", "routeOf", "lookahead", "queuedBehind", "climbing", "laneOf", "trackIdx", "giveOrder", "startMarch", "giveFunction", "setupSoldier", "sd", "perc", "squads", "getMarches", "personal", "downed", "goDown", "marker", "gunState", "brain", "notes", "setRelPair", "travel", "isDowned"];
 if (opt.thinkdbg) { const f = path.join(runDir, "main.js"); fs.writeFileSync(f, fs.readFileSync(f, "utf8").replace("    // how far each stationary order may leave its spot to fight", "    if (globalThis.__thinkDbg) globalThis.__thinkDbg(e, engaged, cu, d);\n    // how far each stationary order may leave its spot to fight")); }
@@ -186,6 +186,18 @@ const S = {
     report({ ticks: SIM.tick - t0, defendersLeft: alive(2).filter((e) => !W.isDowned(e)).length, attackersLeft: alive(1).filter((e) => !W.isDowned(e)).length, bunchAvg: +(M.bunchPairs / M.bunchSamples).toFixed(2), maxCluster: M.maxCluster, notes: M.notes });
   },
 
+  // a player (creative, as when testing) who joined faction 2 stands 30 blocks from faction 1's soldiers: they must target him
+  async playerTarget() {
+    spawnPlayer({ x: 0, y: 0, z: 30 });
+    player.tags.delete("war_f1"); player.tags.add("war_f2");
+    for (let i = 0; i < 4; i++) soldier(1, { x: i * 2 + 0.5, y: 0, z: 0.5 }, "rifle", 1, "hold");
+    W.setRelPair(1, 2, "1", false);
+    step(400);
+    const s = SIM.shots.filter((x) => x.owner?.props?.get("war:faction") === 1);
+    const atPlayer = s.filter((x) => x.nearPlayer).length;
+    report({ shots: s.length, ok: s.length > 0 });
+  },
+
   // half the squad goes down mid-march: the rest must carry on, not wait ~30 s for them
   async downedMarch() {
     spawnPlayer({ x: 0, y: 0, z: -10 });
@@ -208,7 +220,7 @@ const S = {
   async assault() {
     building(0, 0);
     spawnPlayer({ x: 6, y: 0, z: -120 });
-    for (let i = 0; i < 4; i++) soldier(2, { x: 2 + i * 2.5 + 0.5, y: 11, z: 2.5 }, "rifle", 1, "hold");
+    for (let i = 0; i < Number(opt.def ?? 6); i++) soldier(2, i < 4 ? { x: 2 + i * 2.5 + 0.5, y: 11, z: 2.5 } : { x: 3 + (i - 4) * 5 + 0.5, y: 6, z: 2.5 }, i < 4 ? "rifle" : "mg", 1, "hold");
     const att = []; for (let i = 0; i < 8; i++) att.push(soldier(1, { x: (i % 4) * 2 + 0.5, y: 0, z: -95 - Math.floor(i / 4) * 2 + 0.5 }, ["rifle", "smg", "semi", "mg"][i % 4]));
     W.setRelPair(1, 2, "1", false);
     step(20);
@@ -262,9 +274,11 @@ const S = {
   // 8 v 8 across broken ground: low walls, a hut and a hill between them (both sides attack)
   async field() {
     SIM.bounds = { x0: -100, x1: 100, z0: -100, z1: 100, y0: -10, y1: 60 };
-    hill(-20, 0, 12, 5);
-    for (const [x, z] of [[-8, -25], [10, -18], [0, -8], [16, 4], [-14, 12], [6, 20], [-4, 30], [20, -30]]) fill(x, 0, z, x + 3, 0, z, "cobblestone");   // low walls
-    fill(24, 0, -4, 30, 3, 4, "stone_bricks"); fill(25, 0, -3, 29, 3, 3, "air"); fill(24, 4, -4, 30, 4, 4, "oak_planks"); setBlock(27, 0, -4, "air"); setBlock(27, 1, -4, "air"); setBlock(27, 0, 4, "air"); setBlock(27, 1, 4, "air");   // a hut
+    // mirror-symmetric ground (point symmetry through the centre), so neither side has the better half
+    const sym = (fn) => { fn(1); fn(-1); };
+    sym((k) => hill(-20 * k, 6 * k, 10, 4));
+    for (const [x, z] of [[-8, -25], [10, -18], [0, -8], [16, -4], [-14, -12], [6, -20], [-4, -30], [20, -30]]) sym((k) => { const xx = x * k, zz = z * k; fill(Math.min(xx, xx + 3 * k), 0, zz, Math.max(xx, xx + 3 * k), 0, zz, "cobblestone"); });   // low walls
+    fill(-3, 0, -2, 3, 3, 2, "stone_bricks"); fill(-2, 0, -1, 2, 3, 1, "air"); fill(-3, 4, -2, 3, 4, 2, "oak_planks"); for (const z of [-2, 2]) { setBlock(0, 0, z, "air"); setBlock(0, 1, z, "air"); }   // a hut in the middle
     spawnPlayer({ x: 0, y: 0, z: -90 });
     const W8 = ["rifle", "smg", "semi", "mg", "rifle", "semi", "smg", "rifle"];
     for (let i = 0; i < 8; i++) soldier(1, { x: (i % 4) * 2.5 - 4 + 0.5, y: 0, z: -55 - Math.floor(i / 4) * 2.5 + 0.5 }, W8[i]);
@@ -291,13 +305,15 @@ const S = {
     step(20);
     await order(1, { x: 0, y: 0, z: 60 });
     await order(2, { x: 0, y: 0, z: -60 });
-    SIM.calls.clear();
+    SIM.calls.clear(); SIM.callsBy.clear();
     const t0 = performance.now(), k0 = SIM.tick, ticks = Number(opt.ticks ?? 600);
     for (let k = 0; k < ticks; k += 10) { step(10, true); sample(1); }
     const ms = (performance.now() - t0) / ticks;
     const zs = (f) => { const a = alive(f).map((e) => e._loc.z); return a.length ? `${Math.min(...a).toFixed(0)}..${Math.max(...a).toFixed(0)}` : "-"; };
     console.error("z1", zs(1), "z2", zs(2), "marches", JSON.stringify(Object.values(W.getMarches()).map((m) => ({ planning: m.planning, path: m.path?.length, idx: m.idx, final: m.final, members: m.members?.length }))));
     const top = [...timing].sort((a, b) => b[1] - a[1]).slice(0, 8).map(([k, v]) => `${(v / ticks).toFixed(2)}ms ${k.replace(/.*run_\d+\//, "")}`);
+    const by = [...SIM.callsBy].map(([k, m]) => [k.replace(/.*run_\d+\//, ""), [...m].filter(([n]) => n !== "location").reduce((t, [, v]) => t + v, 0) / ticks, [...m].filter(([n]) => n !== "location").sort((a, b) => b[1] - a[1]).slice(0, 4).map(([n, v]) => `${n}:${(v / ticks).toFixed(0)}`).join(" ")]).sort((a, b) => b[1] - a[1]).slice(0, 12);
+    console.error(by.map((x) => `${x[1].toFixed(0).padStart(6)}  ${x[0]}  ${x[2]}`).join("\n"));
     report({ notes: M.notes, n: N, simMsPerTick: +ms.toFixed(1), left1: alive(1).filter((e) => !W.isDowned(e)).length, left2: alive(2).filter((e) => !W.isDowned(e)).length, shots: SIM.shots.length, hits: SIM.hits, topIntervals: top, ...callsPerTick(SIM.tick - k0) });
   },
 };
