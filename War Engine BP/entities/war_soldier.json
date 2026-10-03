@@ -76,6 +76,15 @@
           ],
           "default": 0,
           "client_sync": true
+        },
+        "war:role": {
+          "type": "int",
+          "range": [
+            0,
+            6
+          ],
+          "default": 0,
+          "client_sync": true
         }
       }
     },
@@ -12138,8 +12147,8 @@
       },
       "war:hp_60": {
         "minecraft:health": {
-          "value": 18,
-          "max": 18
+          "value": 40,
+          "max": 40
         }
       },
       "war:hp_80": {

@@ -33,6 +33,9 @@ const DIV = {
   houndmaster: { name: "Houndmaster", hp: "hp_40", weapon: true },
   cavalier: { name: "Cavalier", hp: "hp_80", weapon: true },
 };
+// v6.0: the armband each type wears (RP: controller.render.war_band): 1 green foot, 2 white/red cross medic, 3 blue guard,
+// 4 yellow garrison, 5 orange grenadier, 6 brown houndmaster (cavalry: none)
+const ROLE_OF = { foot: 1, medic: 2, guard: 3, garrison: 4, grenadier: 5, houndmaster: 6, cavalier: 0 };
 const ARMY_FUNCS = [["hold", "Hold"], ["patrol", "Patrol"], ["follow", "Follow me"]];
 const FUNCS = {
   foot: ARMY_FUNCS, grenadier: ARMY_FUNCS, houndmaster: ARMY_FUNCS, cavalier: ARMY_FUNCS,
@@ -191,7 +194,7 @@ function mainhand(player) {
 // ================================================================ entity properties
 // Values set on the same tick an entity spawns can be dropped by the game, so every
 // property is mirrored in a dynamic property and re-applied until it sticks.
-const PROPS = ["war:faction", "war:skin", "war:ranged", "war:cav", "war:medic", "war:rally", "war:gun", "war:firing", "war:aiming", "war:down", "war:nest", "war:pose"];
+const PROPS = ["war:faction", "war:skin", "war:ranged", "war:cav", "war:medic", "war:rally", "war:gun", "war:firing", "war:aiming", "war:down", "war:nest", "war:pose", "war:role"];
 const propMemo = new Map(); // "id|key" -> value read from the entity (only this add-on changes them, through setP)
 function P(e, key) {
   const v = gdp(e, `p_${key}`);
@@ -445,6 +448,7 @@ function setupSoldier(e, s, player, { heal = true } = {}) {
   setP(e, "war:skin", s.skin ?? 0);
   setP(e, "war:cav", div === "cavalier");
   setP(e, "war:medic", div === "medic");
+  setP(e, "war:role", ROLE_OF[div] ?? 0);
   sdp(e, "war:div", div);
   sdp(e, "war:squad", s.squad ?? 0);
   sdp(e, "war:radius", s.radius ?? 8);
@@ -948,6 +952,7 @@ system.runInterval(() => {
     try {
       if (!e.isValid) continue;
       if (gdp(e, "war:div") === undefined) { setupSoldier(e, { faction: 0, div: "foot", func: "hold" }, undefined); continue; }
+      if (!propSync.has(e.id)) freshSeen(e);                               // v6.0: first time this session
       if (now - (propSync.get(e.id) ?? -9999) > 200) { propSync.set(e.id, now); syncProps(e); }
       // old one-number goal tags (v4.2.1 and earlier): re-tag with the two-part scheme
       if (!g2Done.has(e.id)) { g2Done.add(e.id); if (!e.hasTag("war_g2")) { setGoal(e, Number(gdp(e, "war:goal") ?? 0)); e.addTag("war_g2"); } }
@@ -962,6 +967,15 @@ system.runInterval(() => {
   thinkCursor = (thinkCursor + per) % n;
   if (now % 1200 === 0) { for (const id of [...thinkPass.keys()]) if (!world.getEntity(id)) { thinkPass.delete(id); g2Done.delete(id); hotMemo.delete(id); } }
 }, 1);
+// v6.0: the moment-to-moment look (pose, aiming, firing) isn't saved with the world, but the game keeps the entity's
+// last values: after a reload a soldier could stay kneeling / prone / aiming forever. Reset once per session; guards
+// made before v6.0 get their new health.
+function freshSeen(e) {
+  for (const [k, v] of [["war:pose", 0], ["war:firing", false], ["war:aiming", false]]) { try { if (e.getProperty(k) !== v) e.setProperty(k, v); } catch {} sdp(e, `p_${k}`, v); propMemo.delete(`${e.id}|${k}`); }
+  poseOf.delete(e.id);
+  try { if (gdp(e, "war:div") === "guard") { const h = e.getComponent("minecraft:health"); if (h && h.effectiveMax < 40) e.triggerEvent("war:hp_60"); } } catch {}
+  try { setP(e, "war:role", ROLE_OF[String(gdp(e, "war:div") ?? "foot")] ?? 0); } catch {}
+}
 // "hot": fighting, moving, near a player, just ordered or hurt; worked out at most every second per soldier
 const hotMemo = new Map();
 function isHot(e, now) {
@@ -3234,9 +3248,34 @@ system.runInterval(() => {
 
 // ---- the decision: what this soldier does about what he perceives, by stance and order
 const ANCHOR_LEASH = (d, melee) => d.func === "post" ? (melee ? 4 : 2) : d.func === "sentry" ? d.radius + 4 : d.func === "hold" ? 18 : d.func === "stand" ? 4 : Infinity;
+// v6.0: committing to a fight. On the move (a march, a patrol) a soldier who has engaged an enemy soldier or player
+// fights him until he's down, gone (nobody in the squad has seen him for 15 s) or far away, and only then goes back
+// to the order: no more "shoot, march on, see him again, stop again" loops. A new order breaks the lock at once.
+const combatLock = new Map(); // id -> { id, ent, t (start), seenT, at }
+const LOCK_LOST = 300;
+const gun0 = (d) => GUNS.includes(d.weapon) || d.weapon === "sword" || d.weapon === "crossbow";
+function updateLock(e, d, s, now) {
+  let L = combatLock.get(e.id);
+  const t = s?.threat;
+  if (t?.isValid && (t.typeId === SOLDIER || t.typeId === "minecraft:player") && !downed.has(t.id)) {
+    const dd = dist(t.location, e.location);
+    if (L?.id === t.id || dd <= Math.max(60, engageRange(e, d, t, now))) {
+      if (!L || L.id !== t.id) { L = { id: t.id, ent: t, t: now }; combatLock.set(e.id, L); }
+      L.seenT = now; L.at = { x: t.location.x, y: t.location.y, z: t.location.z };
+    }
+  }
+  if (!L) return undefined;
+  const S = squads.get(squadKey(e, d)), q = S?.known?.get(L.id);
+  if (q && now - q.t < 40 && q.t > (L.seenT ?? 0)) { L.seenT = q.t; L.at = { x: q.x, y: q.y, z: q.z }; }   // a mate still sees him
+  const ent = L.ent;
+  const gone = !ent?.isValid || downed.has(L.id) || pows.has(L.id) || (ent.typeId === SOLDIER && gdp(ent, "war:surr")) || !isHostile(d.faction, factionOf(ent));
+  if (gone || now - L.seenT > LOCK_LOST || Number(gdp(e, "war:ordt") ?? -1) > L.t || dist(L.at, e.location) > 110) { combatLock.delete(e.id); return undefined; }
+  return L;
+}
 function engagement(e, d, now, orderGoal, melee) {
   const s = perc.get(e.id);
   if (!s || d.retreat || d.surr || d.div === "medic" || d.func === "escort" || d.func === "squad") return undefined;
+  const L = ["charge", "patrol"].includes(d.func) ? updateLock(e, d, s, now) : undefined;
   const stance = String(gdp(e, "war:stance") ?? "aggressive");
   const anchor = ["hold", "post", "sentry", "stand"].includes(d.func) ? marker(orderGoal) : undefined;
   let leash = ANCHOR_LEASH(d, melee);
@@ -3254,7 +3293,7 @@ function engagement(e, d, now, orderGoal, melee) {
       // v5.4: stop to shoot only within the gun's useful range and with a clear shot; no clear shot -> go and get one
       // (a spot nearby that sees him, his floor if he's above or below, or along a real route toward him)
       const range = engageRange(e, d, t, now);
-      const stopRange = Math.min(range, ["charge", "follow"].includes(d.func) ? 45 : 90);
+      const stopRange = Math.min(range, ["charge", "follow"].includes(d.func) && !L ? 45 : 90);
       if (dd <= stopRange && shotAt(e, d, t, now)) { note(e, "firing"); return { g: "g_none", t: "t_mid", urgent: false }; } // stop and shoot
       if (dd <= stopRange) {
         const tc = chest(t);
@@ -3268,13 +3307,20 @@ function engagement(e, d, now, orderGoal, melee) {
         note(e, "moving for a clear shot");
         return travel(e, t.location, "engage", now, true);
       }
-      const moving = ["charge", "follow", "patrol"].includes(d.func);
+      const moving = ["charge", "follow", "patrol"].includes(d.func) && !L;   // (locked on: he goes after him, not on with the order)
       if (dd > 60 || moving) { note(e, dd > range ? `closing in (${Math.round(dd)} blocks)` : `firing at ${Math.round(dd)} blocks`); return undefined; } // keep to the order: it's taking him there (the brain fights close in)
       if (!anchor) { note(e, "closing in"); return travel(e, t.location, "engage", now, true); }        // a real route, not vanilla's beeline
     } else if (dd > 40 && !attackedRecently(e, t, now)) return undefined;     // melee doesn't run 100 blocks after someone
     note(e, isMob(t) ? "fighting a mob" : "engaging");
     const slot = slotForThreat(t);
     return slot ? { g: "g_wp", slot, t: "t_mid", urgent: true } : { g: "g_none", t: "t_mid", urgent: true };
+  }
+  if (L?.at && gun0(d)) {                                                     // locked on and he's out of sight: hunt him down
+    const dl = dist(L.at, e.location);
+    if (dl > 5) { note(e, "hunting the enemy"); return travel(e, L.at, "engage", now, true); }
+    note(e, "searching for the enemy");
+    turnTo(e, { x: e.location.x + Math.cos(now / 7), z: e.location.z + Math.sin(now / 7) }, 25);
+    return { g: "g_none", t: "t_mid", urgent: false };
   }
   const moving = ["charge", "follow", "patrol"].includes(d.func);
   if (moving && s.searchUntil > now + 60) s.searchUntil = now + 60;          // marching: a quick look, then carry on
@@ -3482,8 +3528,8 @@ function placeFormation(m, dim, p0, list, shape) {
   const back = (k) => path[Math.max(0, ci - k)];
   list.forEach((e, i) => {
     if (personal.has(e.id)) return;                                 // on an errand of his own
-    const fm = Number(gdp(e, "war:fmk") ?? 0);
-    if (gdp(e, "war:ordergoal") !== undefined && (!fm || Number(gdp(e, "war:goal") ?? 0) !== fm)) return;   // fighting: the brain moves him
+    const cu = gdp(e, "war:catchup");
+    if (gdp(e, "war:ordergoal") !== undefined && (cu === undefined || Number(gdp(e, "war:goal") ?? 0) !== Number(cu))) return;   // fighting: the brain moves him
     let at;
     if (single) at = back((i + 1) * 2);
     else {
@@ -3659,21 +3705,25 @@ system.runInterval(() => {
     for (const e of members) { cx += e.location.x; cy += e.location.y; cz += e.location.z; }
     const c = { x: cx / members.length, y: cy / members.length, z: cz / members.length };
     const fighting = members.some((e) => gdp(e, "war:ordergoal") !== undefined);
+    const contact = members.some((e) => combatLock.has(e.id));      // v6.0: someone's locked in a fight: the squad holds together here
     // the front of the group sets the pace (60th percentile of the members who are up and moving)
     const progOf = new Map(members.map((e) => [e.id, routeProgress(m, e.location, e.id)]));
     const prog = [...progOf.values()].sort((a, b) => b - a);
     const lead = prog[Math.floor((prog.length - 1) * 0.4)];
     let j = lead, len = 0;                                       // ~6 blocks of route ahead of the lead, gates or not
     while (j < m.path.length - 1 && len < 6) { const a = m.path[j], b = m.path[j + 1]; len += Math.hypot(b.x - a.x, b.z - a.z) + Math.abs(b.y - a.y); j++; }
-    m.idx = Math.min(m.path.length - 1, Math.max(m.idx ?? 0, j));
-    if (lead > (m.bestIdx ?? 0) || fighting) { m.bestIdx = Math.max(m.bestIdx ?? 0, lead); m.progT = now; }
+    if (!contact) m.idx = Math.min(m.path.length - 1, Math.max(m.idx ?? 0, j));
+    if (lead > (m.bestIdx ?? 0) || fighting || contact) { m.bestIdx = Math.max(m.bestIdx ?? 0, lead); m.progT = now; }
     // who follows the route himself: anyone in a tight stretch, and anyone well behind the guide. v5.9: once he
     // drives he keeps driving until he's been clear and caught up for 1.5 s (no flip-flopping between the two); everyone
     // else walks to his OWN formation spot (v5.4-5.8: up to four men shared one lane marker and jostled for it)
     for (const e of all) {
       if (!marchActive(e)) { formMode.delete(e.id); driveOn.delete(e.id); if (gdp(e, "war:catchup") !== undefined) sdp(e, "war:catchup", undefined); continue; }
       const pi = progOf.get(e.id) ?? 0;
-      const raw = m.idx - pi >= 10 || tightAt(dim, m.path, pi, e.location);   // (a straggler ~20 blocks back, or a tight stretch)
+      // (a straggler ~20 blocks back, a tight stretch, or v6.0: his formation place isn't a plain straight walk from where
+      // he is: a trench, a drop, a wall between: Minecraft's walking would drop him in or get him stuck)
+      const fm = formMode.has(e.id) ? marker(Number(gdp(e, "war:fmk") ?? 0)) : undefined;
+      const raw = m.idx - pi >= 10 || tightAt(dim, m.path, pi, e.location) || (fm && !straightReach(dim, e.location, fm.location));
       let dv = driveOn.get(e.id);
       if (raw) { dv = { off: 0 }; driveOn.set(e.id, dv); }
       else if (dv && (++dv.off >= 3 && m.idx - pi <= 6)) { driveOn.delete(e.id); dv = undefined; }
@@ -5739,7 +5789,7 @@ system.runInterval(() => {
   const now = tick();
   for (const [id, c] of [...climbing]) {
     const e = world.getEntity(id);
-    if (!e?.isValid || now - c.t > 400) { climbing.delete(id); continue; }
+    if (!e?.isValid || now - c.t > 400) { climbing.delete(id); if (e?.isValid) ladderFail.set(id, now); continue; }
     try {
       const y = e.location.y, dy = c.toY - y;
       if (Math.abs(dy) > 0.15) {
@@ -5747,7 +5797,7 @@ system.runInterval(() => {
         if (!glideFree(e.dimension, c.x, ny, c.z) || (dy > 0 && !cellOpen(tBlock(e.dimension, c.x, Math.floor(ny + 0.01) + 2, c.z)) && ny + 1.8 > Math.floor(ny + 0.01) + 2)) {
           c.blocked = (c.blocked ?? 0) + 1;                                                    // v5.9: a shut trapdoor / a ceiling: never into it
           if (c.blocked === 3) openAt(e.dimension, { x: c.x, y: Math.floor(ny) + 2, z: c.z });
-          if (c.blocked > 12) { climbing.delete(id); glideBan.set(id, now + 60); personal.delete(id); }
+          if (c.blocked > 12) { climbing.delete(id); glideBan.set(id, now + 60); personal.delete(id); ladderFail.set(id, now); }
           continue;
         }
         e.teleport({ x: c.x, y: ny, z: c.z });                                                 // up or down the ladder
@@ -5760,6 +5810,97 @@ system.runInterval(() => {
   }
 }, 1);
 system.runInterval(() => { for (const e of allOf(SOLDIER)) { try { if (personal.has(e.id) || gdp(e, "war:catchup") !== undefined) startClimbIfNeeded(e); } catch {} } }, 4);   // (v5.9: only men stepping a route themselves)
+
+// ================================================================ v6.0: rescue (the last resort, and ONLY for these)
+// 1. stuck inside blocks (feet or head in a solid block for 2 s): out to the nearest open spot, else to a squad mate;
+// 2. caught in a loop: on a march / his own route, not fighting, no real progress for 30 s while a squad mate IS
+//    getting on: put next to that mate;
+// 3. a ladder climb that failed: put next to a mate who got past it.
+// "A mate doing well": same march (or squad), on his feet, not fighting, moved recently, further along, on solid
+// ground. At most one rescue per soldier per minute. Everything else is walked, climbed and planned, never teleported.
+const ladderFail = new Map(); // id -> tick a climb gave up
+const rescueMark = new Map(); // id -> { x, y, z, t } where/when he last made real progress
+const rescueT = new Map();    // id -> tick of his last rescue
+const insideN = new Map();    // id -> checks in a row inside a block
+// his body (mid and head, not his feet: path blocks, soul sand and the like sit his feet a little inside the block)
+function insideBlock(e) {
+  try { const l = e.location; return !cellOpen(tBlock(e.dimension, l.x, l.y + 0.6, l.z)) || !cellOpen(tBlock(e.dimension, l.x, l.y + 1.5, l.z)); } catch { return false; }
+}
+function marchOfE(e) {
+  const g = Number(gdp(e, "war:ordergoal") ?? gdp(e, "war:goal") ?? 0);
+  const id = laneOf.get(g) ?? laneOf.get(Number(gdp(e, "war:chargegoal") ?? 0));
+  return id ? getMarches()[id] : undefined;
+}
+function doingWell(o, now) {
+  if (!o?.isValid || downed.has(o.id) || pows.has(o.id) || isRiding(o) || climbing.has(o.id) || combatLock.has(o.id)) return false;
+  const mk = rescueMark.get(o.id);
+  if (!mk || now - mk.t > 200) return false;                      // he's not getting anywhere either
+  const l = o.location;
+  return standAt(o.dimension, Math.floor(l.x), Math.floor(l.y + 0.01), Math.floor(l.z), now) && glideFree(o.dimension, l.x, l.y, l.z);
+}
+function rescueTo(e, why, now) {
+  const d = sd(e), m = marchOfE(e);
+  const pool = m ? m.members.map((id) => world.getEntity(id)).filter(Boolean) : nearbyCombatants(e.dimension.id, e.location, 96).filter((o) => o.typeId === SOLDIER && Number(P(o, "war:faction") ?? 0) === d.faction && sd(o).squad === d.squad);
+  let best, bs = -1e9;
+  const myP = m?.path ? routeProgress(m, e.location, e.id) : 0;
+  for (const o of pool) {
+    if (o.id === e.id || o.dimension.id !== e.dimension.id || !doingWell(o, now) || dist(o.location, e.location) < 3) continue;
+    const sc = m?.path ? routeProgress(m, o.location, o.id) - myP : -dist(o.location, e.location) / 10;
+    if (sc > bs) { bs = sc; best = o; }
+  }
+  if (!best) return false;
+  const l = best.location, b = best.getViewDirection?.() ?? { x: 0, z: 0 };
+  let to = { x: l.x - (b.x ?? 0) * 1.2, y: l.y, z: l.z - (b.z ?? 0) * 1.2 };   // just behind him
+  if (!glideFree(e.dimension, to.x, to.y, to.z) || !standAt(e.dimension, Math.floor(to.x), Math.floor(to.y + 0.01), Math.floor(to.z), now)) to = { x: l.x, y: l.y, z: l.z };
+  try { e.teleport(to, { dimension: best.dimension }); } catch { return false; }
+  afterRescue(e, now, why);
+  return true;
+}
+function afterRescue(e, now, why) {
+  rescueT.set(e.id, now); rescueMark.set(e.id, { ...e.location, t: now }); insideN.delete(e.id);
+  personal.delete(e.id); travelTo.delete(e.id); gliders.delete(e.id); climbing.delete(e.id); ladderFail.delete(e.id); driveOn.delete(e.id);
+  note(e, why);
+}
+system.runInterval(() => {
+  const now = tick();
+  for (const e of allOf(SOLDIER)) {
+    try {
+      if (downed.has(e.id) || pows.has(e.id) || isRiding(e) || ridingNest(e)) { rescueMark.delete(e.id); continue; }
+      const l = e.location, m0 = marchOfE(e);
+      let mk = rescueMark.get(e.id);
+      // progress: on a march, getting further along its route (pacing up and down a trench isn't progress); otherwise moving
+      const pi = m0?.path && !m0.final ? routeProgress(m0, l, e.id) : undefined;
+      if (!mk || (pi !== undefined ? pi >= (mk.pi ?? -1) + 3 || pi < (mk.pi ?? 0) - 10 : Math.hypot(l.x - mk.x, l.z - mk.z) > 3 || Math.abs(l.y - mk.y) > 2)) { mk = { x: l.x, y: l.y, z: l.z, t: now, pi }; rescueMark.set(e.id, mk); }
+      if (now - (rescueT.get(e.id) ?? -99999) < 1200) continue;     // one rescue a minute at most
+      // 1. inside a block
+      if (!climbing.has(e.id) && insideBlock(e)) {
+        const n = (insideN.get(e.id) ?? 0) + 1; insideN.set(e.id, n);
+        if (n >= 2) {
+          const bx = Math.floor(l.x), by = Math.floor(l.y + 0.01), bz = Math.floor(l.z);
+          let out;
+          for (let r = 1; r <= 3 && !out; r++) for (let dy = -1; dy <= 2 && !out; dy++) for (let dx = -r; dx <= r && !out; dx++) for (let dz = -r; dz <= r && !out; dz++) {
+            if (Math.max(Math.abs(dx), Math.abs(dz)) !== r) continue;
+            if (standAt(e.dimension, bx + dx, by + dy, bz + dz, now)) out = { x: bx + dx + 0.5, y: by + dy, z: bz + dz + 0.5 };
+          }
+          if (out) { try { e.teleport(out); afterRescue(e, "freed from a wall", now); } catch {} }
+          else rescueTo(e, "freed from a wall", now);
+          continue;
+        }
+      } else insideN.delete(e.id);
+      // 3. a ladder that beat him
+      const lf = ladderFail.get(e.id);
+      if (lf !== undefined) { ladderFail.delete(e.id); if (now - lf < 100 && rescueTo(e, "helped up the ladder", now)) continue; }
+      // 2. a loop: he should be moving, isn't fighting, and hasn't got anywhere for 30 s
+      if (now - mk.t < 600) continue;
+      const m = m0;
+      const moving = (m && !m.final && m.path) || personal.has(e.id);
+      if (!moving || combatLock.has(e.id) || perc.get(e.id)?.threat) continue;
+      if (m && m.members.some((id) => combatLock.has(id))) continue;   // the squad is holding for a fight: not stuck
+      rescueTo(e, "caught up with his squad", now);
+    } catch {}
+  }
+  if (now % 1200 < 20) for (const id of [...rescueMark.keys()]) if (!world.getEntity(id)) { rescueMark.delete(id); rescueT.delete(id); insideN.delete(id); ladderFail.delete(id); combatLock.delete(id); }
+}, 20);
 
 // ---- one way to travel anywhere: a direct step only when it's close and plainly reachable on foot;
 // otherwise a proper dense route (the same planner and follower as every march)
@@ -6078,7 +6219,7 @@ function wantPose(e, now) {
   const from = (h) => ({ x: l.x, y: l.y + h, z: l.z });
   if (tc && dist(t.location, l) < 10) return clearShot(e.dimension, from(1.1), tc) ? 1 : 0;   // enemy close: ready to get up
   const low = !isIndoors(e) && ((["mg", "sniper"].includes(d.weapon) && still > 40) || supp > 16);
-  if (low && (!tc || clearShot(e.dimension, from(0.5), tc))) return 2;
+  if (low && (!tc || clearShot(e.dimension, from(0.5), tc))) return 1;   // v6.0: no more going prone (the gun model can't follow it: it pointed straight up)
   if (!tc || clearShot(e.dimension, from(1.1), tc)) return 1;
   return 0;
 }
@@ -6363,7 +6504,9 @@ system.runInterval(() => {
       const seg = Math.hypot(b.x - a.x, b.z - a.z) || 1;
       const f = 1 - Math.hypot(b.x - nx, b.z - nz) / seg;
       let y = b.climb ? p.y : b.y > a.y ? (f >= 0.3 ? b.y : a.y) : b.y < a.y ? (f >= 0.6 ? b.y : a.y) : b.y;   // (to a ladder: on his own level)
-      if (b.y > y && !glideFree(e.dimension, nx, y, nz) && glideFree(e.dimension, nx, b.y, nz)) y = b.y;   // a full-block step: up it as he reaches it
+      if (!glideFree(e.dimension, nx, y, nz)) {                    // v6.0: up a full step as he reaches it, down only once he's over the drop
+        for (const yy of [b.y, a.y, p.y]) if (yy !== y && glideFree(e.dimension, nx, yy, nz)) { y = yy; break; }
+      }
       const nb = pts[Math.min(pts.length - 1, g.k + 1)];
       // v5.9: never into a wall. The step must be open at his feet and head (corners cut between two route points,
       // a door shut behind someone, a block placed since the route was planned): slide along the wall if one axis is

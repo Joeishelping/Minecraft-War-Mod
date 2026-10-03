@@ -16,7 +16,7 @@ const runDir = path.join(here, `run_${process.pid}`);
 fs.mkdirSync(runDir, { recursive: true });
 fs.cpSync(scriptsDir, runDir, { recursive: true });
 // expose the add-on's internals to the scenarios (appended to the copy only)
-const HOOK = ["getLearned", "learned", "generals", "planRoute", "BW", "BW_F", "HEAD_K", "medicMove", "shakenMove", "waterExit", "followPersonal", "spreadMove", "combatMove", "engagement", "reinforceMove", "patrolSweep", "marker", "think", "routeOf", "lookahead", "queuedBehind", "climbing", "laneOf", "trackIdx", "giveOrder", "startMarch", "giveFunction", "setupSoldier", "sd", "perc", "squads", "getMarches", "personal", "downed", "goDown", "marker", "gunState", "brain", "notes", "setRelPair", "travel", "isDowned"];
+const HOOK = ["gliders", "glideBan", "driveOn", "formMode", "tightAt", "combatLock", "routeProgress", "getLearned", "learned", "generals", "planRoute", "BW", "BW_F", "HEAD_K", "medicMove", "shakenMove", "waterExit", "followPersonal", "spreadMove", "combatMove", "engagement", "reinforceMove", "patrolSweep", "marker", "think", "routeOf", "lookahead", "queuedBehind", "climbing", "laneOf", "trackIdx", "giveOrder", "startMarch", "giveFunction", "setupSoldier", "sd", "perc", "squads", "getMarches", "personal", "downed", "goDown", "marker", "gunState", "brain", "notes", "setRelPair", "travel", "isDowned"];
 if (opt.thinkdbg) { const f = path.join(runDir, "main.js"); fs.writeFileSync(f, fs.readFileSync(f, "utf8").replace("    // how far each stationary order may leave its spot to fight", "    if (globalThis.__thinkDbg) globalThis.__thinkDbg(e, engaged, cu, d);\n    // how far each stationary order may leave its spot to fight")); }
 fs.appendFileSync(path.join(runDir, "main.js"), `\nglobalThis.__war = {};\n${HOOK.map((n) => `try { globalThis.__war.${n} = ${n}; } catch {}`).join("\n")}\n`);
 loadDefs(path.join(root, "War Engine BP"));
@@ -105,11 +105,14 @@ function shotStats(fac, from = 0) {
 // note the distance from shooter to nearest enemy at each shot
 const origPush = SIM.shots.push.bind(SIM.shots);
 SIM.shots.push = (x) => { try { const o = x.owner; let bd = 1e9; for (const e of alive()) if (e !== o && !W.isDowned(e) && e.props.get("war:faction") !== o.props.get("war:faction")) bd = Math.min(bd, Math.hypot(e._loc.x - o._loc.x, e._loc.z - o._loc.z)); x.dist = bd; const gs = W.gunState.get(o.id); x.supp = !!(gs && !gs.target && gs.supp && gs.supp.until > SIM.tick); } catch {} return origPush(x); };
+// v6.0: teleports of more than 2.5 blocks (rescues / anything that jumps a soldier)
+let bigTp = 0;
+{ const tp0 = MC.Entity.prototype.teleport; MC.Entity.prototype.teleport = function (loc, o) { if (this.typeId === SOLDIER && this._loc && Math.hypot(loc.x - this._loc.x, loc.y - this._loc.y, loc.z - this._loc.z) > 2.5) bigTp++; return tp0.call(this, loc, o); }; }
 // v5.9: no-clip watch: soldier samples (every 5 ticks) with a solid full block at his feet or head
 let clips = 0;
 const fullSolid = (x, y, z) => { const id = MC.idAt(x, y, z); return !MC.passCell(x, y, z) && !id.includes("stairs") && !id.includes("slab") && !id.includes("ladder") && !id.includes("door"); };
 MC.system.runInterval(() => { for (const e of alive()) { const l = e._loc; if (fullSolid(l.x, l.y + 0.05, l.z) || fullSolid(l.x, l.y + 1.2, l.z)) clips++; } }, 5);
-const report = (o) => { console.log(JSON.stringify({ scenario, ...o, clips, errors: SIM.errors.slice(0, 5), errorCount: SIM.errors.length })); };
+const report = (o) => { console.log(JSON.stringify({ scenario, ...o, clips, bigTp, errors: SIM.errors.slice(0, 5), errorCount: SIM.errors.length })); };
 
 // ---------------------------------------------------------------- scenarios
 const S = {
@@ -357,6 +360,76 @@ const S = {
     for (let t = 0; t < Number(opt.ticks ?? 2400); t += 10) { step(10); sample(1); if (!alive(1).filter((e) => !W.isDowned(e)).length || !alive(2).filter((e) => !W.isDowned(e)).length) break; }
     const up = (f) => alive(f).filter((e) => !W.isDowned(e)).reduce((t, e) => t + e.hp / e.maxHp, 0);
     report({ ticks: SIM.tick - t0, str1: +up(1).toFixed(2), str2: +up(2).toFixed(2), left1: alive(1).filter((e) => !W.isDowned(e)).length, left2: alive(2).filter((e) => !W.isDowned(e)).length, shots1: shotStats(1), shots2: shotStats(2), bunchAvg: +(M.bunchPairs / M.bunchSamples).toFixed(2), notes: M.notes });
+  },
+
+  // v6.0: a march that runs into an enemy position off to the side: do they deal with it, then carry on (no ping-pong)?
+  async marchContact() {
+    SIM.bounds = { x0: -80, x1: 80, z0: -30, z1: 220, y0: -10, y1: 60 };
+    fill(26, 0, 64, 26, 0, 80, "cobblestone"); fill(26, 1, 70, 26, 1, 74, "cobblestone");   // a low wall (a higher bit) the enemy holds
+    hill(-25, 110, 10, 4);
+    spawnPlayer({ x: 0, y: 0, z: -25 });
+    const W8 = ["rifle", "smg", "semi", "mg", "rifle", "semi", "smg", "rifle"];
+    for (let i = 0; i < 8; i++) soldier(1, { x: (i % 4) * 2 - 3 + 0.5, y: 0, z: Math.floor(i / 4) * 2 + 0.5 }, W8[i]);
+    for (let i = 0; i < Number(opt.enemies ?? 4); i++) soldier(2, { x: 28.5 + (i % 2), y: 0, z: 66.5 + i * 3 }, ["rifle", "semi", "mg", "rifle"][i % 4], 1, "hold");
+    W.setRelPair(1, 2, "1", false);
+    step(20);
+    const dest = { x: 0, y: 0, z: 180 };
+    await order(1, dest);
+    const t0 = SIM.tick; let arrived = -1;
+    const FIGHT = /firing|clear shot|hunting|searching for the enemy|engaging|closing in|taking cover|advancing|assault|flank|suppress|peek|cover|position|shifting/;
+    const MARCH = /marching|catching up|on the way through|waiting his turn|on the move/;
+    const last = new Map(), flips = new Map();
+    for (let t = 0; t < Number(opt.ticks ?? 4000) && arrived < 0; t += 10) {
+      step(10); sample(1);
+      for (const e of alive(1)) {
+        const tx = W.notes.get(e.id)?.text ?? ""; const k = FIGHT.test(tx) ? "F" : MARCH.test(tx) ? "M" : "";
+        if (!k) continue; const pk = last.get(e.id); if (pk && pk !== k) flips.set(e.id, (flips.get(e.id) ?? 0) + 1); last.set(e.id, k);
+      }
+      const up = alive(1).filter((e) => !W.isDowned(e));
+      if (up.length && up.filter((e) => Math.hypot(e._loc.x - dest.x, e._loc.z - dest.z) < 12).length >= Math.max(1, up.length - 1)) arrived = SIM.tick - t0;
+    }
+    const up = (f) => alive(f).filter((e) => !W.isDowned(e)).length;
+    const fl = [...flips.values()];
+    report({ arrivedTicks: arrived, attackersUp: up(1), enemiesUp: up(2), flipsMean: +(fl.reduce((a, b) => a + b, 0) / Math.max(1, alive(1).length)).toFixed(2), flipsMax: Math.max(0, ...fl), bunchAvg: +(M.bunchPairs / M.bunchSamples).toFixed(2), notes: M.notes });
+  },
+
+  // v6.0: a long march across a cluttered battlefield (seeded): hills, trenches with two crossings, walls with gaps,
+  // a pond, ruined houses, tree clumps, shell craters. Does the whole squad get there?
+  async battlefield() {
+    SIM.bounds = { x0: -90, x1: 90, z0: -30, z1: 260, y0: -12, y1: 60 };
+    let rs = Number(opt.seed ?? 7) * 2654435761 >>> 0 || 1; const R = () => { rs ^= rs << 13; rs >>>= 0; rs ^= rs >>> 17; rs ^= rs << 5; rs >>>= 0; return rs / 4294967296; };
+    const ri = (a, b) => a + Math.floor(R() * (b - a + 1));
+    for (let k = 0; k < 4; k++) hill(ri(-60, 60), ri(30, 220), ri(8, 18), ri(3, 9));
+    for (const tz of [70, 160]) {                                   // trenches: 2 deep, 2 wide, across the field; two plank crossings
+      fill(-90, -2, tz, 90, -1, tz + 1, "air");
+      for (const bx of [ri(-60, -10), ri(10, 60)]) fill(bx, -1, tz, bx + 2, -1, tz + 1, "oak_planks");
+    }
+    for (let k = 0; k < 6; k++) { const x = ri(-70, 50), z = ri(20, 230), L = ri(8, 24); fill(x, 0, z, x + L, 2, z, "stone_bricks"); const g = ri(2, L - 3); fill(x + g, 0, z, x + g + 1, 2, z, "air"); }   // walls with a gap
+    { const x = ri(-50, 30), z = ri(90, 140); fill(x, -2, z, x + 10, -1, z + 7, "water"); }                                                                  // a pond
+    for (let k = 0; k < 2; k++) { const b = building(ri(-70, 40), ri(40, 200), { windows: true }); fill(b.x0 + 3, 5, b.z0 + 3, b.x0 + 8, 15, b.z0 + 8, "air"); }  // ruined houses
+    for (let k = 0; k < 8; k++) { const x = ri(-80, 80), z = ri(10, 240); fill(x, 0, z, x, 3, z, "oak_log"); fill(x - 2, 3, z - 2, x + 2, 5, z + 2, "oak_leaves"); }   // trees
+    for (let k = 0; k < 14; k++) { const x = ri(-70, 70), z = ri(10, 240), r = ri(1, 3); for (let dx = -r; dx <= r; dx++) for (let dz = -r; dz <= r; dz++) if (Math.hypot(dx, dz) <= r) fill(x + dx, -Math.max(1, r - Math.round(Math.hypot(dx, dz))), z + dz, x + dx, -1, z + dz, "air"); }   // craters
+    fill(-8, -3, -6, 8, -1, 8, "grass_block"); fill(-8, 0, -6, 8, 6, 8, "air");                                                                 // a clear start area
+    spawnPlayer({ x: 0, y: 0, z: -25 });
+    const N = Number(opt.n ?? 12);
+    for (let i = 0; i < N; i++) soldier(1, { x: (i % 4) * 2 - 3 + 0.5, y: 0, z: Math.floor(i / 4) * 2 + 0.5 }, "rifle");
+    step(20);
+    const dest = { x: ri(-30, 30), y: 0, z: 245 };
+    fill(dest.x - 6, -3, dest.z - 6, dest.x + 6, -1, dest.z + 6, "grass_block"); fill(dest.x - 6, 0, dest.z - 6, dest.x + 6, 8, dest.z + 6, "air");
+    await order(1, dest);
+    const t0 = SIM.tick; let arrived = -1; const stillT = new Map(); let worstStill = 0;
+    for (let t = 0; t < Number(opt.ticks ?? 7000) && arrived < 0; t += 10) {
+      step(10); sample(1);
+      if (opt.mtrace && SIM.tick % 100 === 0) { const m = Object.values(W.getMarches())[0]; console.error("MT", SIM.tick, "idx", m?.idx, "p", JSON.stringify(m?.path?.[m.idx]), "shape", m?.shape, alive(1).map((e) => `${e._loc.x.toFixed(0)},${e._loc.z.toFixed(0)}${e.dyn.get("war:catchup") === e.dyn.get("war:fmk") ? "F" : "D"}${e.dyn.get("war:goal") === e.dyn.get("war:catchup") ? "" : "!"}`).join(" ")); }
+      for (const e of alive(1)) { const near = Math.hypot(e._loc.x - dest.x, e._loc.z - dest.z) < 12; const st = near ? 0 : (e.__still ?? 0); worstStill = Math.max(worstStill, st); }
+      if (alive(1).filter((e) => Math.hypot(e._loc.x - dest.x, e._loc.z - dest.z) < 12).length >= N - 1) arrived = SIM.tick - t0;
+    }
+    const there = alive(1).filter((e) => Math.hypot(e._loc.x - dest.x, e._loc.z - dest.z) < 12).length;
+    if (opt.blocks) { const [bx, bz] = opt.blocks.split(",").map(Number); for (let z = bz - 2; z <= bz + 4; z++) console.error("COL z", z, [-3, -2, -1, 0, 1, 2].map((y) => `${y}:${MC.idAt(bx, y, z).replace("minecraft:", "")}`).join(" ")); }
+    if (opt.dump) for (const [id, m] of Object.entries(W.getMarches())) console.error("MARCH", id, "idx", m.idx, "len", m.path?.length, "planning", m.planning, "final", m.final, "replans", m.replans, "legs", m.legs?.length, "dead", JSON.stringify(m.dead), "progT", SIM.tick - m.progT, "pathEnd", JSON.stringify(m.path?.[m.path.length - 1]), "guess", !!m.path?.guess, "path@idx", JSON.stringify(m.path?.slice(Math.max(0, (m.idx ?? 0) - 2), (m.idx ?? 0) + 3)));
+    if (opt.dump) for (const e of alive(1)) if (Math.hypot(e._loc.x - dest.x, e._loc.z - dest.z) >= 12) { const m = Object.values(W.getMarches())[0]; const g = W.gliders.get(e.id); const mk = W.marker(Number(e.dyn.get("war:catchup") ?? 0)); const pi = m?.path ? W.routeProgress(m, e._loc, e.id) : -1; console.error("DBG", e.id, "glider", g ? JSON.stringify({ k: g.k, paused: g.paused, wait: g.wait, blocked: g.blocked, t: SIM.tick - g.t }) : "-", "ban", (W.glideBan.get(e.id) ?? 0) - SIM.tick, "drive", JSON.stringify(W.driveOn.get(e.id)), "mk", mk ? JSON.stringify(mk._loc) : "-", "pi", pi, "tight", m?.path ? W.tightAt(overworld, m.path, pi, e._loc) : "-", "pts", JSON.stringify(m?.path?.slice(Math.max(0, pi - 1), pi + 3).map((p) => [p.x, p.y, p.z])), "nav", JSON.stringify(e.navGoal), "walk", JSON.stringify(e.walk), "vel", JSON.stringify(e.vel)); }
+    if (opt.dump) for (const e of alive(1)) if (Math.hypot(e._loc.x - dest.x, e._loc.z - dest.z) >= 12) console.error("LEFT", JSON.stringify(e._loc), W.notes.get(e.id)?.text, "cu", e.dyn.get("war:catchup"), "goal", e.dyn.get("war:goal"), "og", e.dyn.get("war:ordergoal"));
+    report({ arrivedTicks: arrived, there, of: N, worstStillSec: worstStill / 2, bunchAvg: +(M.bunchPairs / M.bunchSamples).toFixed(2), dest, final: alive(1).map((e) => `${Math.round(e._loc.x)},${Math.round(e._loc.y)},${Math.round(e._loc.z)}`), notes: M.notes });
   },
 
   // soldiers spread far apart (opt spread=1) or bunched (spread=0): the lag case from the field

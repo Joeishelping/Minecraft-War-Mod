@@ -798,6 +798,30 @@
           "*": true
         }
       ]
+    },
+    "controller.render.war_band": {
+      "arrays": {
+        "textures": {
+          "Array.band": [
+            "Texture.band_foot",
+            "Texture.band_foot",
+            "Texture.band_medic",
+            "Texture.band_guard",
+            "Texture.band_garrison",
+            "Texture.band_grenadier",
+            "Texture.band_houndmaster"
+          ]
+        }
+      },
+      "geometry": "Geometry.band",
+      "materials": [
+        {
+          "*": "Material.default"
+        }
+      ],
+      "textures": [
+        "Array.band[q.property('war:role')]"
+      ]
     }
   }
 }

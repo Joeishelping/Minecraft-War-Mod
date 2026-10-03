@@ -125,7 +125,13 @@
         "gt_lewis": "textures/entity/guns/Lewis",
         "gt_mas35": "textures/entity/guns/Mas35",
         "gt_m1903s": "textures/entity/guns/M1903s",
-        "gt_kar98s": "textures/entity/guns/Kar98s"
+        "gt_kar98s": "textures/entity/guns/Kar98s",
+        "band_foot": "textures/entity/war_band/band_foot",
+        "band_medic": "textures/entity/war_band/band_medic",
+        "band_guard": "textures/entity/war_band/band_guard",
+        "band_garrison": "textures/entity/war_band/band_garrison",
+        "band_grenadier": "textures/entity/war_band/band_grenadier",
+        "band_houndmaster": "textures/entity/war_band/band_houndmaster"
       },
       "geometry": {
         "default": "geometry.humanoid.custom",
@@ -156,10 +162,14 @@
         "g_lewis": "geometry.lewis",
         "g_mas35": "geometry.mas35",
         "g_m1903s": "geometry.m1903s",
-        "g_kar98s": "geometry.kar98s"
+        "g_kar98s": "geometry.kar98s",
+        "band": "geometry.war_band"
       },
       "render_controllers": [
         "controller.render.war_soldier",
+        {
+          "controller.render.war_band": "q.property('war:role') > 0 && !q.property('war:cav') && !q.property('war:down')"
+        },
         {
           "controller.render.war_gun_m1903": "q.property('war:gun') == 1 && !q.property('war:cav')"
         },
