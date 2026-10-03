@@ -388,18 +388,25 @@ const S = {
     const FIGHT = /firing|clear shot|hunting|searching for the enemy|engaging|closing in|taking cover|advancing|assault|flank|suppress|peek|cover|position|shifting/;
     const MARCH = /marching|catching up|on the way through|waiting his turn/;
     const last = new Map(), flips = new Map();
+    let killT = -1, killZ = 0, resume = -1; const afterNotes = {};
     for (let t = 0; t < Number(opt.ticks ?? 4000) && arrived < 0; t += 10) {
       step(10); sample(1);
+      if (opt.follow && SIM.tick % 20 === 0) { const u = alive(1); if (u.length) player._loc = { x: u.reduce((q, e) => q + e._loc.x, 0) / u.length, y: 0, z: u.reduce((q, e) => q + e._loc.z, 0) / u.length - 20 }; }
       for (const e of alive(1)) {
         const tx = W.notes.get(e.id)?.text ?? ""; const k = FIGHT.test(tx) ? "F" : MARCH.test(tx) ? "M" : "";
         if (!k) continue; const pk = last.get(e.id); if (pk && pk !== k) flips.set(e.id, (flips.get(e.id) ?? 0) + 1); last.set(e.id, k);
       }
       const up = alive(1).filter((e) => !W.isDowned(e));
       if (up.length && up.filter((e) => Math.hypot(e._loc.x - dest.x, e._loc.z - dest.z) < 12).length >= Math.max(1, up.length - 1)) arrived = SIM.tick - t0;
+      // v6.3: after the last enemy goes down, how long until the squad is on its way again (its middle 3 blocks further on)
+      const mz = up.reduce((q, e) => q + e._loc.z, 0) / Math.max(1, up.length);
+      if (killT < 0 && alive(2).filter((e) => !W.isDowned(e)).length === 0) { killT = SIM.tick; killZ = mz; }
+      if (killT >= 0 && resume < 0 && mz > killZ + 3) resume = SIM.tick - killT;
+      if (killT >= 0 && resume < 0 && opt.after) for (const e of up) { const n = W.notes.get(e.id)?.text; if (n) afterNotes[n] = (afterNotes[n] ?? 0) + 1; }
     }
     const up = (f) => alive(f).filter((e) => !W.isDowned(e)).length;
     const fl = [...flips.values()];
-    report({ arrivedTicks: arrived, attackersUp: up(1), enemiesUp: up(2), flipsMean: +(fl.reduce((a, b) => a + b, 0) / Math.max(1, alive(1).length)).toFixed(2), flipsMax: Math.max(0, ...fl), bunchAvg: +(M.bunchPairs / M.bunchSamples).toFixed(2), notes: M.notes });
+    report({ resumeAfterKill: resume, afterNotes: opt.after ? afterNotes : undefined, arrivedTicks: arrived, attackersUp: up(1), enemiesUp: up(2), flipsMean: +(fl.reduce((a, b) => a + b, 0) / Math.max(1, alive(1).length)).toFixed(2), flipsMax: Math.max(0, ...fl), bunchAvg: +(M.bunchPairs / M.bunchSamples).toFixed(2), notes: M.notes });
   },
 
   // v6.0: a long march across a cluttered battlefield (seeded): hills, trenches with two crossings, walls with gaps,
@@ -580,6 +587,48 @@ const S = {
     let arrived = -1; const t0 = SIM.tick;
     for (let t = 0; t < 4000 && arrived < 0; t += 10) { step(10); if (ms.filter((x) => x.isValid && Math.hypot(x._loc.x - 140, x._loc.z) < 12).length >= 4) arrived = SIM.tick - t0; }
     report({ heldN, unhurt, hidden, inLoops, withMe, put, minGap: +minGap.toFixed(2), byLava, released: W.held.size === 0 && guard.props.get("war:held") === false, guardStays, marchersArrived: arrived, enemyHit: enemy.hp < enemy.maxHp, msgs: SIM.log.filter((m) => /\[bar\]/.test(m)).slice(-3) });
+  },
+
+  // v6.3: two squads, one spot. mode=same: both ordered to the same point from different sides; mode=cross: they march
+  // through each other head-on along the same corridor (a gap in a wall); mode=follow: the second one right behind the first
+  async twoSquads() {
+    let mode = opt.mode ?? "same", mode2;
+    SIM.bounds = { x0: -80, x1: 80, z0: -40, z1: 160, y0: -8, y1: 30 };
+    fill(-80, -4, -40, 80, -1, 160, "stone");
+    if (mode === "cross") { fill(-80, 0, 60, 80, 3, 60, "stone_bricks"); fill(-1, 0, 60, 1, 2, 60, "air"); }   // a wall with a 3-wide gap
+    if (mode === "open") mode = "cross";     // (head-on in the open: no wall)
+    spawnPlayer({ x: 0, y: 0, z: 50 });
+    const A = [], B = [];
+    for (let i = 0; i < 8; i++) A.push(soldier(1, { x: -6 + (i % 4) * 2 + 0.5, y: 0, z: (mode === "same" ? 0 : 0) + Math.floor(i / 4) * 2 + 0.5 }, "rifle", 1, "hold"));
+    for (let i = 0; i < 8; i++) B.push(soldier(1, mode === "same" ? { x: 40 + (i % 4) * 2 + 0.5, y: 0, z: 30 + Math.floor(i / 4) * 2 + 0.5 } : mode === "cross" ? { x: -6 + (i % 4) * 2 + 0.5, y: 0, z: 120 + Math.floor(i / 4) * 2 + 0.5 } : { x: -6 + (i % 4) * 2 + 0.5, y: 0, z: -14 + Math.floor(i / 4) * 2 + 0.5 }, "rifle", 2, "hold"));
+    step(40);
+    const dA = mode === "cross" ? { x: 0, z: 120 } : { x: 0, z: 100 }, dB = mode === "cross" ? { x: 0, z: 0 } : { x: 0, z: 100 };
+    const go = (sq, d) => W.giveOrder(player, { faction: 1, order: 0, squad: sq, count: 0, radius: 200, stance: "aggressive", ao: 100, free: true, target: 5, cx: d.x, cz: d.z, cy: 0, then: "hold" });
+    await go(1, dA); await go(2, dB);
+    const t0 = SIM.tick; let doneA = -1, doneB = -1, worstStill = 0, jitter = 0;
+    const lastPos = new Map(), still = new Map();
+    const wa = () => { const e = (opt.side === "B" ? B : A)[Number(opt.wa)]; const g = W.gliders.get(e.id); const r = W.routeOf(e); const cu = e.dyn.get("war:catchup"); const mk = cu ? W.marker(Number(cu)) : undefined; console.error("WA", SIM.tick, e._loc.x.toFixed(2), e._loc.z.toFixed(2), (W.notes.get(e.id)?.text ?? "").slice(0, 16), g ? `G k${g.k} p${g.paused ? 1 : 0} b${g.blocked ?? 0} tgt ${g.pts[g.k]?.x},${g.pts[g.k]?.z}` : "-", "r", r ? `${r.idx}/${r.pts.length}` : "-", "mk", mk ? `${mk._loc.x.toFixed(1)},${mk._loc.z.toFixed(1)}` : "-", [...e.groups].filter((q) => /g_/.test(q)).join(","), W.driveOn.has(e.id) ? "D" : "", W.formMode.has(e.id) ? "F" : "", W.personal.has(e.id) ? "P" : ""); };
+    for (let t = 0; t < Number(opt.ticks ?? 5000) && (doneA < 0 || doneB < 0); t += 10) {
+      if (opt.wa !== undefined && SIM.tick >= Number(opt.from ?? 0) && SIM.tick <= Number(opt.to ?? 1e9)) { for (let q = 0; q < 10; q++) { step(1); wa(); } } else step(10);
+      sample(1);
+      if (opt.follow) { const u = [...A, ...B].filter((e) => e.isValid); player._loc = { x: u.reduce((q, e) => q + e._loc.x, 0) / u.length, y: 0, z: u.reduce((q, e) => q + e._loc.z, 0) / u.length }; }
+      if (false && opt.wa !== undefined && SIM.tick >= Number(opt.from ?? 0) && SIM.tick <= Number(opt.to ?? 1e9)) { const e = (opt.side === "B" ? B : A)[Number(opt.wa)]; const g = W.gliders.get(e.id); const r = W.routeOf(e); const cu = e.dyn.get("war:catchup"); const mk = cu ? W.marker(Number(cu)) : undefined; console.error("WA", SIM.tick, e._loc.x.toFixed(2), e._loc.z.toFixed(2), (W.notes.get(e.id)?.text ?? "").slice(0, 16), g ? `G k${g.k} p${g.paused ? 1 : 0} tgt ${g.pts[g.k]?.x},${g.pts[g.k]?.z} len${g.pts.length}` : "-", "r", r ? `${r.idx}/${r.pts.length}` : "-", "mk", mk ? `${mk._loc.x.toFixed(1)},${mk._loc.z.toFixed(1)}` : "-", "nav", e.navGoal ? `${e.navGoal.x.toFixed(1)},${e.navGoal.z.toFixed(1)}` : "-", [...e.groups].filter((q) => /g_/.test(q)).join(","), W.driveOn.has(e.id) ? "D" : "", W.formMode.has(e.id) ? "F" : ""); }
+      if (opt.gap && SIM.tick % 50 === 0) { const g = [...A, ...B].filter((e) => Math.abs(e._loc.z - 60) < 7); if (g.length) console.error("GAP", SIM.tick, g.map((e) => `${A.includes(e) ? "A" : "B"}${e._loc.x.toFixed(1)},${e._loc.z.toFixed(1)}:${(W.notes.get(e.id)?.text ?? "").slice(0, 14)}${W.gliders.has(e.id) ? `/G${W.gliders.get(e.id).k}p${W.gliders.get(e.id).paused ? 1 : 0}b${W.gliders.get(e.id).blocked ?? 0}w${W.gliders.get(e.id).wait}` : ""}${W.personal.has(e.id) ? "/P" : ""}`).join(" | ")); }
+      const near = (L, d) => L.filter((e) => e.isValid && Math.hypot(e._loc.x - d.x, e._loc.z - d.z) < 12).length;
+      if (doneA < 0 && near(A, dA) >= 7) doneA = SIM.tick - t0;
+      if (doneB < 0 && near(B, dB) >= 7) doneB = SIM.tick - t0;
+      for (const e of [...A, ...B]) {
+        const lp = lastPos.get(e.id), l = e._loc;
+        const moved = lp ? Math.hypot(l.x - lp.x, l.z - lp.z) : 9;
+        const dd = Math.min(Math.hypot(l.x - dA.x, l.z - dA.z), Math.hypot(l.x - dB.x, l.z - dB.z));
+        if (moved < 0.6 && dd > 12) still.set(e.id, (still.get(e.id) ?? 0) + 1); else still.set(e.id, 0);
+        if (lp && moved > 0.15 && moved < 0.6 && dd > 12) jitter++;                // shuffling on the spot
+        worstStill = Math.max(worstStill, still.get(e.id));
+        lastPos.set(e.id, { ...l });
+      }
+    }
+    const pos = (L) => L.map((e) => `${Math.round(e._loc.x)},${Math.round(e._loc.z)}`);
+    report({ mode, doneA, doneB, worstStillSec: worstStill / 2, jitter, bunchAvg: +(M.bunchPairs / M.bunchSamples).toFixed(2), maxCluster: M.maxCluster, A: pos(A), B: pos(B), notes: Object.fromEntries(Object.entries(M.notes).sort((a, b) => b[1] - a[1]).slice(0, 8)) });
   },
 
   async cleanup() {

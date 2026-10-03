@@ -3290,7 +3290,10 @@ function perceive(e, now) {
     if (d.squad) squadTarget.set(`${d.faction}:${d.squad}`, { id: best.id, t: now });
   } else if (s.threat) {
     if (!s.lostT) s.lostT = now;
-    if (!s.threat.isValid || now - s.lostT > 40) { aimedBy.get(s.threat.id)?.delete(e.id); s.threat = undefined; s.searchUntil = s.lastSeen ? now + 200 : 0; } // lost him: search ~10 s
+    if (!s.threat.isValid || now - s.lostT > 40) {                // lost him: search ~5 s (v6.3: was 10). Killed him: nothing to search for
+      const dead = !s.threat.isValid || downed.has(s.threat.id) || pows.has(s.threat.id) || (s.threat.getComponent?.("minecraft:health")?.currentValue ?? 1) <= 0;
+      aimedBy.get(s.threat.id)?.delete(e.id); s.threat = undefined; s.searchUntil = s.lastSeen && !dead ? now + 100 : 0;
+    }
   }
   if (!s.threat) {
     if (s.searchUntil > now) s.alert = "combat";
@@ -3407,7 +3410,7 @@ const ANCHOR_LEASH = (d, melee) => d.func === "post" ? (melee ? 4 : 2) : d.func 
 // fights him until he's down, gone (nobody in the squad has seen him for 15 s) or far away, and only then goes back
 // to the order: no more "shoot, march on, see him again, stop again" loops. A new order breaks the lock at once.
 const combatLock = new Map(); // id -> { id, ent, t (start), seenT, at }
-const LOCK_LOST = 300;
+const LOCK_LOST = 120;   // (v6.3: 6 s, was 15: they stood scanning long after the fight was over)
 const gun0 = (d) => GUNS.includes(d.weapon) || d.weapon === "sword" || d.weapon === "crossbow";
 function updateLock(e, d, s, now) {
   let L = combatLock.get(e.id);
@@ -3425,7 +3428,8 @@ function updateLock(e, d, s, now) {
   const S = squads.get(squadKey(e, d)), q = S?.known?.get(L.id);
   if (q && now - q.t < 40 && q.t > (L.seenT ?? 0)) { L.seenT = q.t; L.at = { x: q.x, y: q.y, z: q.z }; }   // a mate still sees him
   const ent = L.ent;
-  const gone = !ent?.isValid || downed.has(L.id) || pows.has(L.id) || (ent.typeId === SOLDIER && gdp(ent, "war:surr")) || !isHostile(d.faction, factionOf(ent));
+  const gone = !ent?.isValid || downed.has(L.id) || pows.has(L.id) || (ent.typeId === SOLDIER && gdp(ent, "war:surr")) || !isHostile(d.faction, factionOf(ent))
+    || (ent.typeId === "minecraft:player" && (ent.getComponent("minecraft:health")?.currentValue ?? 1) <= 0);   // (v6.3: a killed player stays a valid entity)
   if (gone || now - L.seenT > LOCK_LOST || Number(gdp(e, "war:ordt") ?? -1) > L.t || dist(L.at, e.location) > 110) { combatLock.delete(e.id); return undefined; }
   return L;
 }
@@ -3475,15 +3479,16 @@ function engagement(e, d, now, orderGoal, melee) {
   if (L?.at && gun0(d)) {                                                     // locked on and he's out of sight: hunt him down
     const dl = dist(L.at, e.location);
     if (dl > 5) { note(e, "hunting the enemy"); return travel(e, L.at, "engage", now, true); }
+    if (now - L.seenT > 50) { combatLock.delete(e.id); return undefined; }   // (v6.3: where he was last seen and he's not there: a quick look, then on)
     note(e, "searching for the enemy");
     turnTo(e, { x: e.location.x + Math.cos(now / 7), z: e.location.z + Math.sin(now / 7) }, 25);
     return { g: "g_none", t: "t_mid", urgent: false };
   }
   const moving = ["charge", "follow", "patrol"].includes(d.func);
-  if (moving && s.searchUntil > now + 60) s.searchUntil = now + 60;          // marching: a quick look, then carry on
-  if (anchor && s.searchUntil > now + 60) s.searchUntil = now + 60;          // posts: don't wander off searching
+  if (moving && s.searchUntil > now + 40) s.searchUntil = now + 40;          // marching: a quick look, then carry on
+  if (anchor && s.searchUntil > now + 40) s.searchUntil = now + 40;          // posts: don't wander off searching
   if (s.searchUntil > now && s.lastSeen && stance !== "defensive" && stance !== "holdfire") {
-    if (dist(e.location, s.lastSeen) < 3) { s.searchUntil = Math.min(s.searchUntil, now + 60); turnTo(e, { x: e.location.x + Math.cos(now / 7), z: e.location.z + Math.sin(now / 7) }, 25); }
+    if (dist(e.location, s.lastSeen) < 3) { s.searchUntil = Math.min(s.searchUntil, now + 40); turnTo(e, { x: e.location.x + Math.cos(now / 7), z: e.location.z + Math.sin(now / 7) }, 25); }
     if (!anchor || flat(s.lastSeen, anchor.location) <= leash) {
       const slot = makeWaypoint(e.dimension, s.lastSeen);
       if (slot) return { g: "g_wp", slot, t: "t_mid", urgent: false };
@@ -6437,9 +6442,13 @@ function queuedBehind(e, pts, i) {
   const nx = pts[Math.min(pts.length - 1, i + 1)], end = pts[pts.length - 1];
   const hx = nx.x - e.location.x, hz = nx.z - e.location.z, hl = Math.hypot(hx, hz);
   const myEnd = r3(end, e.location), f = Number(P(e, "war:faction") ?? 0);
+  const myM = marchOfE(e);
   for (const c of nearSnap(e.dimension.id, e.location, 4.5)) {          // (v6.0: the shared snapshot, factions pre-read; live positions)
     if (c.id === e.id || c.type !== SOLDIER || c.down || c.f !== f || !c.e.isValid) continue;
     const o = c.e, ol = o.location;
+    // v6.3: a man of another squad coming the other way isn't a queue: they pass each other (in a gap, both sides used
+    // to wait for the other one, then shove through, jammed on one spot)
+    if (myM) { const oM = marchOfE(o); if (oM && oM !== myM && !oM.final && Math.cos((oM.heading ?? 0) - (myM.heading ?? 0)) < -0.3) continue; }
     if (Math.abs(ol.y - e.location.y) > 1.2 || Math.hypot(ol.x - e.location.x, ol.z - e.location.z) > 1.2) continue;
     const ox = ol.x - e.location.x, oz = ol.z - e.location.z;
     if (Math.hypot(ox, oz) < 0.4) { if (o.id < e.id) return true; continue; }  // on the same spot: one of them waits
@@ -7177,7 +7186,10 @@ function floorUnder(dim, x, y, z) {
 }
 function glideStart(pts, i, loc) {
   let k = Math.min(pts.length - 1, i + 1);
-  if (i < pts.length && Math.hypot(pts[i].x - loc.x, pts[i].z - loc.z) > 0.3 && r3(pts[i], loc) < r3(pts[k], loc)) k = i;   // not at his point yet: that one first
+  // not at his point yet: that one first. v6.3: unless he's already past it toward the next one (then going back to it
+  // first carried him half a block backwards, his own walking took him forward again, and round it went: stuck in a gap)
+  const past = k !== i && i < pts.length && ((loc.x - pts[i].x) * (pts[k].x - pts[i].x) + (loc.z - pts[i].z) * (pts[k].z - pts[i].z)) > 0 && Math.abs(pts[k].y - pts[i].y) < 0.5 && Math.abs(loc.y - pts[i].y) < 0.6;
+  if (!past && i < pts.length && Math.hypot(pts[i].x - loc.x, pts[i].z - loc.z) > 0.3 && r3(pts[i], loc) < r3(pts[k], loc)) k = i;
   return k;
 }
 system.runInterval(() => {
