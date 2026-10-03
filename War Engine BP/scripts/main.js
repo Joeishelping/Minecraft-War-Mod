@@ -1,4 +1,4 @@
-// War Engine v5.6.1: faction NPC war framework
+// War Engine v5.7: faction NPC war framework
 import { world, system, Player, ItemStack, EquipmentSlot, GameMode } from "@minecraft/server";
 import { ActionFormData, ModalFormData, FormCancelationReason } from "@minecraft/server-ui";
 import { SKINS } from "./skins.js";
@@ -2912,6 +2912,8 @@ system.runInterval(() => {
 // Internal alert levels: calm -> suspicious (heard something) -> combat (sees an enemy).
 const perc = new Map();        // soldier id -> { seen: Map(id -> since), threat, threatT, lastSeen, lostT, noise, noiseT, alert, searchUntil, prevPos }
 const hurtBy = new Map();      // entity id -> { id, t }   (who last attacked it)
+const aimedBy = new Map();     // target id -> Set(soldier ids whose threat he is)  (v5.7: fire distribution)
+system.runInterval(() => { for (const [id, set] of [...aimedBy]) { for (const sid of [...set]) if (perc.get(sid)?.threat?.id !== id) set.delete(sid); if (!set.size) aimedBy.delete(id); } }, 100);
 const squadTarget = new Map(); // "faction:squad" -> { id, t }
 const lastPos = new Map();     // combatant id -> {x,y,z,t}  (to tell moving from still)
 const P1 = () => perc;         // (debug handle)
@@ -2991,7 +2993,9 @@ function threatScore(e, d, o, dd, now) {
   if (attackedRecently(e, o, now)) s += 120;                     // attacking me
   if (d.squad) {
     const st = squadTarget.get(`${d.faction}:${d.squad}`);
-    if (st && st.id === o.id && now - st.t < 100) s += 40;       // focus fire: the squad's target
+    const load = (aimedBy.get(o.id)?.size ?? 0) - (aimedBy.get(o.id)?.has(e.id) ? 1 : 0);   // squad mates already on him (not counting me)
+    if (st && st.id === o.id && now - st.t < 100 && (bwOf(d.faction).dist === false || load < 3)) s += 40;   // focus fire: the squad's target (until it's covered)
+    if (bwOf(d.faction).dist !== false && load >= 2 && !(attackedRecently(e, o, now, 60) && dd < 6)) s -= 14 * (load - 1);   // v5.7: two on him already: spread the fire
   }
   if (o.typeId === SOLDIER) {
     try {
@@ -3050,11 +3054,12 @@ function perceive(e, now) {
   for (const id of [...s.seen.keys()]) if (!visible.has(id)) s.seen.delete(id);
   if (best) {
     if (!s.threat || s.threat.id !== best.id) { s.threatT = now; if (!s.threat && Math.random() < 0.4) callout(e, "Enemy spotted!"); }
+    if (s.threat?.id !== best.id) { if (s.threat) aimedBy.get(s.threat.id)?.delete(e.id); let set = aimedBy.get(best.id); if (!set) { set = new Set(); aimedBy.set(best.id, set); } set.add(e.id); }
     s.threat = best; s.lastSeen = { ...best.location }; s.lostT = 0; s.alert = "combat";
     if (d.squad) squadTarget.set(`${d.faction}:${d.squad}`, { id: best.id, t: now });
   } else if (s.threat) {
     if (!s.lostT) s.lostT = now;
-    if (!s.threat.isValid || now - s.lostT > 40) { s.threat = undefined; s.searchUntil = s.lastSeen ? now + 200 : 0; } // lost him: search ~10 s
+    if (!s.threat.isValid || now - s.lostT > 40) { aimedBy.get(s.threat.id)?.delete(e.id); s.threat = undefined; s.searchUntil = s.lastSeen ? now + 200 : 0; } // lost him: search ~10 s
   }
   if (!s.threat) {
     if (s.searchUntil > now) s.alert = "combat";
@@ -3983,6 +3988,7 @@ function stepCost(a, b, diag, job) {
     }
   }
   if (job && inDead(job, b)) base += 40 * step;                 // a known dead end: only if there's truly nothing else
+  if (job?.danger && step === 1) base += exposedCost(job, b);   // v5.7: in a fight, ground the enemy can see costs extra
   if (b.w) base *= 10;                                          // swimming: only when it saves a lot
   else if (b.shore) base += 0.6;                                // keep off the shoreline
   if (b.ledge) base += 1.2;                                      // keep away from the edge of a drop
@@ -4008,7 +4014,8 @@ function planRoute(dim, start, goal, onDone, opts = {}) {
   const gy = Number.isFinite(goal.y) ? Math.floor(goal.y) : undefined;
   const job = { dim, goal: { x: Math.floor(goal.x), z: Math.floor(goal.z), y: step > 1 ? undefined : gy }, cells: new Map(), open: new Heap(), g: new Map(), came: new Map(),
     closed: new Set(), best: undefined, bestH: Infinity, exp: 0, max: opts.max ?? 9000, onDone, origin: { x: sx, z: sz }, maxRadius,
-    step, weight: opts.weight ?? 1.25, dead: opts.dead ?? [], goalFn: opts.goalFn, accept: opts.accept, prio: !!opts.prio };
+    step, weight: opts.weight ?? 1.25, dead: opts.dead ?? [], goalFn: opts.goalFn, accept: opts.accept, prio: !!opts.prio,
+    danger: opts.danger?.length ? opts.danger : undefined, exposed: new Map(), rays: 0 };
   const s0 = cellAt(job, sx, sz, start.y) ?? { x: sx, z: sz, y: Math.floor(start.y), w: false };
   const nkey = (x, z, y) => step > 1 ? `${x},${z}` : `${x},${z},${y}`;
   job.nkey = nkey;
@@ -4018,6 +4025,24 @@ function planRoute(dim, start, goal, onDone, opts = {}) {
   job.g.set(nkey(sx, sz, s0.y), 0);
   job.best = { x: sx, z: sz, key: nkey(sx, sz, s0.y) }; job.bestH = h0;
   planJobs.push(job);
+}
+// a cell the known enemies can see (chest height), checked once per cell per route, with a ray budget per route
+function exposedCost(job, b) {
+  const k = `${b.x},${b.y},${b.z}`;
+  let v = job.exposed.get(k);
+  if (v === undefined) {
+    v = 0;
+    if (job.rays < 300) {
+      const c = { x: b.x + 0.5, y: b.y + 1.2, z: b.z + 0.5 };
+      for (const q of job.danger) {
+        if (Math.abs(q.x - c.x) > 90 || Math.abs(q.z - c.z) > 90) continue;
+        job.rays++;
+        if (clearShot(job.dim, q, c)) { v = 4; break; }
+      }
+    }
+    job.exposed.set(k, v);
+  }
+  return v;
 }
 function finishJob(job, endKey, partial = false) {
   const pts = [];
@@ -4470,14 +4495,14 @@ function spotNear(e, test, anchor, leash, maxR = 4) {
 const STAND = new Map();
 system.runInterval(() => { if (STAND.size > 60000) STAND.clear(); }, 200);
 const reachMemo = new Map(); // "from cell>to cell" -> { v, t }  (v5.7: the same question is asked every thought)
-function localReach(dim, from, to, maxNodes = 250) {
+function localReach(dim, from, to, maxNodes = 400) {
   if (Math.abs(to.y - from.y) > 3) return false;
   if (flat(from, to) < 1.5) return true;
   const mk = `${dim.id[10] ?? ""}${Math.floor(from.x)},${Math.floor(from.y)},${Math.floor(from.z)}>${Math.floor(to.x)},${Math.floor(to.y)},${Math.floor(to.z)}`;
   const c = reachMemo.get(mk), now = tick();
-  if (c && now - c.t < 100) return c.v;
+  if (c && now - c.t < 100 && (c.v || c.n >= maxNodes)) return c.v;   // a "no" from a smaller search doesn't answer a bigger one
   const v = localReachBFS(dim, from, to, maxNodes);
-  reachMemo.set(mk, { v, t: now });
+  reachMemo.set(mk, { v, t: now, n: maxNodes });
   if (reachMemo.size > 6000) reachMemo.clear();
   return v;
 }
@@ -4519,7 +4544,10 @@ function planPersonalTo(e, kind, dest, now) {
   const gy = Math.floor(dest.y);
   const accept = kind === "advance" && Number.isFinite(dest.y) ? (n) => !n.climb && Math.abs(n.y - gy) <= 1 && Math.hypot(n.x + 0.5 - dest.x, n.z + 0.5 - dest.z) <= 12 : undefined;
   const far = flat(e.location, dest);                                           // v5.4: the search is sized to the trip (a short hop never ties up the planner)
-  planRoute(dim, e.location, dest, (pts, partial) => { pr.planning = false; pr.pts = pts; pr.idx = 0; if (pts && !partial) rememberRoute(dim, dest, pts); }, { max: Math.max(3000, Math.min(20000, Math.round(far * 300))), maxRadius: Math.min(90, far + 30), accept });
+  const Sq = squads.get(squadKey(e, sd(e)));
+  const danger = bwOf(sd(e).faction).cov !== false && Sq?.known?.size && ["advance", "engage", "spot", "rally", "refuge", "exit", "settle"].includes(kind)
+    ? [...Sq.known.values()].filter((q) => now - q.t < 300).slice(0, 4).map((q) => ({ x: q.x, y: q.y + 1.6, z: q.z })) : undefined;
+  planRoute(dim, e.location, dest, (pts, partial) => { pr.planning = false; pr.pts = pts; pr.idx = 0; if (pts && !partial) rememberRoute(dim, dest, pts); }, { max: Math.max(3000, Math.min(20000, Math.round(far * 300))), maxRadius: Math.min(90, far + 30), accept, danger });
 }
 function brainMove(e, d, now, melee, anchor, leash) {
   const BW = bwOf(d.faction);

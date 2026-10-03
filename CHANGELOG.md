@@ -1,5 +1,26 @@
 # War Engine changelog
 
+## v5.7 (lag for real, ladders fixed, smarter fire and movement)
+
+- **Lag.** v5.6 cut the game calls but the script's own computing barely moved, and Bedrock's script engine is much
+  slower than a PC's, so that was the lag you still saw. Profiled and cut: in a steady 40 v 40 fight the add-on's own
+  CPU per tick went from ~6.7 ms (v5.6.1; v5.3 ~7.1) to ~2.5 ms (about 2.7x less). How: what each block type means for
+  walking is worked out once per type instead of scanning name lists on every check (the single biggest cost); the
+  terrain, sky-light and line-of-sight memories use number keys instead of building text; "can I stand here" and
+  "can I walk there" answers are shared and remembered; aim, health and light are remembered for a moment; a 32-block
+  grid answers "who is near me", with factions pre-read, so perception skips friends without asking the game; the gun
+  loop runs every other tick and skips men with nothing to shoot; the tactical evaluator was trimmed; waypoint markers
+  no longer have collision, gravity or pathfinding.
+- **Ladders.** The real bug: route points are kept every ~2 blocks and approaches are often diagonal, so when the
+  ladder became a soldier's next point he was usually more than 1.3 blocks from it; the glider handed him to the
+  climber, the climber refused (too far), and he stood at the foot of the ladder forever. Now the glider walks him right
+  up to the ladder and starts the climb itself. Tested: up a 6-high wall, out of a 5-deep pit, ladder straight ahead or
+  off to either side (v5.6.1: 0 of 6 got out when the ladder was off to the side; v5.7: 6 of 6, ~7 s).
+- **Spreading fire.** No more whole squads on one enemy while others shoot freely: past two men on a target, the rest
+  pick other targets (self-defence and "he's shooting at me" still come first).
+- **Covered routes.** Moving in a fight (to the enemy's floor, closing in, to a spot indoors, falling back, taking
+  refuge), routes prefer ground the known enemies can't see: a few extra blocks to stay behind cover.
+
 ## v5.6.1
 
 - Creative players are no longer targeted (as before v5.6). Survival/adventure players on a hostile faction still are.
