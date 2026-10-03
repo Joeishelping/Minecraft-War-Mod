@@ -3488,17 +3488,24 @@ function arriveCharge(e, d) {
   if (dist(e.location, lane.location) > 4 && !(m?.finalT !== undefined && tick() - m.finalT > 200 && flat(e.location, lane.location) < 12 && Math.abs(e.location.y - lane.location.y) < 3)) return false;
   const then = m?.then ?? gdp(e, "war:then") ?? "hold";
   radio(e, `in position (${Math.round(e.location.x)}, ${Math.round(e.location.z)}), ${then === "patrol" ? "patrolling" : "holding"}`);
-  giveFunction(e, then === "patrol" ? "patrol" : (d.div === "garrison" ? "post" : "hold"), undefined, d.goal);
+  // v5.4: his own spot around his lane (several men share a lane: they no longer hold on one spot)
+  let spot = d.goal;
+  try { spot = formationSlot(e.dimension, lane.location, e, then === "patrol" ? 3 : 2) || d.goal; } catch {}
+  giveFunction(e, then === "patrol" ? "patrol" : (d.div === "garrison" ? "post" : "hold"), undefined, spot);
   return true;
 }
 // formation spots for Hold here / Patrol here (and as a fallback)
+// v5.4: every soldier gets his own spot (up to 17 around the point), never one shared by two
+const FORM_OFFS = [[0, 0], [-1, -1], [1, -1], [-1, 1], [1, 1], [0, -1.4], [0, 1.4], [-1.4, 0], [1.4, 0], [-2, -2], [2, -2], [-2, 2], [2, 2], [0, -2.8], [0, 2.8], [-2.8, 0], [2.8, 0]];
 function formationSlot(dim, center, e, spread = 3) {
-  const S = spread * spacingSetting() / 1.5;
-  const k = e.id.charCodeAt(e.id.length - 1) % 4;
-  const off = [[-1, -1], [1, -1], [-1, 1], [1, 1]][k];
-  let spot = walkableNear(dim, center.x + off[0] * S, center.z + off[1] * S, center.y);
-  if (!spot || Math.abs(spot.y - center.y) > 1 || !localReach(dim, center, spot)) spot = center;   // never into a pit or another room
-  return makeWaypoint(dim, spot) || makeWaypoint(dim, center);
+  const S = spread * spacingSetting() / 1.5, now = tick();
+  for (const off of FORM_OFFS) {
+    const spot = walkableNear(dim, center.x + off[0] * S, center.z + off[1] * S, center.y);
+    if (!spot || Math.abs(spot.y - center.y) > 1 || claimedByOther(spot, e.id, now) || !localReach(dim, center, spot)) continue;   // never into a pit or another room
+    claimSpot(e, spot, now);
+    return makeWaypoint(dim, spot, false) || makeWaypoint(dim, center);
+  }
+  return makeWaypoint(dim, center);
 }
 // keep a little space between moving soldiers (spacing setting, 1-2 blocks)
 system.runInterval(() => {
@@ -4168,6 +4175,9 @@ function shakenMove(e, d, now) {
 // gunner weighs fire / advance / cover / peek / suppress / flank / fall back / key terrain about
 // twice a second and commits to the choice. Orders still rule: a new order wipes all of this.
 const BW = {"fire":0.516,"expo":0.418,"adv":0.933,"close":0.55,"timing":0.884,"assault":0.899,"cover":0.439,"peek":0.72,"supp":0.5,"fall":0.155,"flankShare":0.17,"flankDist":33.963,"stallT":252.376,"ratioFix":1.483,"commit":10,"goodHit":0.21,"terrain":0.2};   // evolved by self-play in the battle simulator
+// per-faction weights (empty in play: everyone uses BW). The self-play tuner gives two sides different weights.
+const BW_F = {};
+const bwOf = (f) => BW_F[f] ?? BW;
 const squads = new Map();   // unit key -> { known: Map(id->{ent,x,y,z,t}), plan, contactT, flankPt, flankSlot, flankers:Set, suppressors:Set, enemyC, ratio, keyPt, t }
 const brain = new Map();    // soldier id -> { act, decT, spot, slot }
 const suppB = new Map();    // soldier id -> suppression points (from fire landing on/near him)
@@ -4204,6 +4214,7 @@ system.runInterval(() => {
   }
   for (const [k, ours] of groups) {
     try {
+      const BW = bwOf(sd(ours[0]).faction);
       let S = squads.get(k);
       if (!S) { S = { known: new Map(), plan: "advance", contactT: -1, flankers: new Set(), suppressors: new Set(), t: now }; squads.set(k, S); }
       S.t = now; S.n = ours.length;
@@ -4369,6 +4380,7 @@ function planPersonalTo(e, kind, dest, now) {
   planRoute(dim, e.location, dest, (pts, partial) => { pr.planning = false; pr.pts = pts; pr.idx = 0; if (pts && !partial) rememberRoute(dim, dest, pts); }, { max: Math.max(3000, Math.min(20000, Math.round(far * 300))), maxRadius: Math.min(90, far + 30), accept });
 }
 function brainMove(e, d, now, melee, anchor, leash) {
+  const BW = bwOf(d.faction);
   if (d.retreat || d.surr || d.div === "medic" || d.div === "guard" || isRiding(e)) return undefined;
   const stance = String(gdp(e, "war:stance") ?? "aggressive");
   if (stance === "holdfire") return undefined;
@@ -4586,7 +4598,7 @@ function reinforceSpot(e, d, now) {
 // ---- adapting: remember what failed. A flank that didn't break them -> next time the other side;
 // an assault that stalled -> pin them again; the same approach failing twice -> stop trying it for a while
 const squadMemory = new Map(); // key -> { failedSides: Set, flankFails, assaultFails, siegeUntil, lastPlan, lastEnemyPower, planT }
-function adaptSquad(k, S, now) {
+function adaptSquad(k, S, now, BW = bwOf(Number(String(k).split(":")[0]))) {
   const m = squadMemory.get(k) ?? { failedSides: new Set(), flankFails: 0, assaultFails: 0, siegeUntil: 0, lastPlan: "", planT: now };
   squadMemory.set(k, m);
   if (S.plan !== m.lastPlan) { m.lastPlan = S.plan; m.planT = now; m.startRatio = S.ratio; }
@@ -5627,8 +5639,8 @@ function drillMove(e, d, now, melee, anchor, leash) {
     const moving = (Math.floor(now / 70) & 1) === teamOf(e);
     if (!moving && t?.isValid && shotAt(e, d, t, now)) { note(e, "covering the advance"); return { g: "g_none", t: "t_mid", urgent: false }; }
     if (!moving) {                                                       // v5.4: no aimed shot: covering fire on the window / doorway they were just seen in
-      const q = suppressPoint(e, d, S, now), gs = gunState.get(e.id);
-      if (q && gs) { gs.supp = { p: q.aim, until: now + 30, ent: q.ent }; turnTo(e, q, 20); note(e, "covering fire"); return { g: "g_none", t: "t_mid", urgent: false }; }
+      const q = ["mg", "rifle", "semi"].includes(d.weapon) ? suppressPoint(e, d, S, now) : undefined, gs = gunState.get(e.id);
+      if (q && gs && now - q.t <= 40) { gs.supp = { p: q.aim, until: now + 30, ent: q.ent }; turnTo(e, q, 20); note(e, "covering fire"); return { g: "g_none", t: "t_mid", urgent: false }; }
     }
     if (moving && mv && underFire && S.enemyC && !isIndoors(e)) {
       const dx = S.enemyC.x - e.location.x, dz = S.enemyC.z - e.location.z, L = Math.hypot(dx, dz) || 1;
@@ -5806,7 +5818,7 @@ function shotAt(e, d, t, now) {
   if (!aim) return undefined;
   const dd = dist(t.location, e.location), r = ridingNest(e) ? 140 : engageRange(e, d, t, now);
   if (dd > r) return undefined;
-  if (aim.y > chest(t).y + 0.1 && dd > r * HEAD_K && d.weapon !== "sniper") return undefined;
+  if (aim.y > chest(t).y + 0.1 && dd > r * (bwOf(d.faction).headK ?? HEAD_K) && d.weapon !== "sniper") return undefined;
   return aim;
 }
 // ---- suppression only where it makes sense: an enemy seen in the last 3 s, within range, and a clear line to the
@@ -5910,6 +5922,6 @@ function combatMove(e, d, now, melee, anchor, leash) {
   if (mv && mv.g !== "g_none") return mv;
   const anchored = ["hold", "post", "sentry", "stand"].includes(d.func);
   if (!mv && !anchored) return mv;                                // marching on: spacing is the formation's job
-  if (!anchored && !squads.get(squadKey(e, d))?.known?.size) return mv;
+  if (!squads.get(squadKey(e, d))?.known?.size) return mv;        // no fight: each has his own spot already
   return unCrowd(e, d, now, anchor, leash) ?? mv;
 }

@@ -16,7 +16,7 @@ const runDir = path.join(here, `run_${process.pid}`);
 fs.mkdirSync(runDir, { recursive: true });
 for (const f of fs.readdirSync(scriptsDir)) fs.copyFileSync(path.join(scriptsDir, f), path.join(runDir, f));
 // expose the add-on's internals to the scenarios (appended to the copy only)
-const HOOK = ["medicMove", "shakenMove", "waterExit", "followPersonal", "spreadMove", "combatMove", "engagement", "reinforceMove", "patrolSweep", "marker", "think", "routeOf", "lookahead", "queuedBehind", "climbing", "laneOf", "trackIdx", "giveOrder", "startMarch", "giveFunction", "setupSoldier", "sd", "perc", "squads", "getMarches", "personal", "downed", "goDown", "marker", "gunState", "brain", "notes", "setRelPair", "travel", "isDowned"];
+const HOOK = ["BW", "BW_F", "HEAD_K", "medicMove", "shakenMove", "waterExit", "followPersonal", "spreadMove", "combatMove", "engagement", "reinforceMove", "patrolSweep", "marker", "think", "routeOf", "lookahead", "queuedBehind", "climbing", "laneOf", "trackIdx", "giveOrder", "startMarch", "giveFunction", "setupSoldier", "sd", "perc", "squads", "getMarches", "personal", "downed", "goDown", "marker", "gunState", "brain", "notes", "setRelPair", "travel", "isDowned"];
 if (opt.thinkdbg) { const f = path.join(runDir, "main.js"); fs.writeFileSync(f, fs.readFileSync(f, "utf8").replace("    // how far each stationary order may leave its spot to fight", "    if (globalThis.__thinkDbg) globalThis.__thinkDbg(e, engaged, cu, d);\n    // how far each stationary order may leave its spot to fight")); }
 fs.appendFileSync(path.join(runDir, "main.js"), `\nglobalThis.__war = {};\n${HOOK.map((n) => `try { globalThis.__war.${n} = ${n}; } catch {}`).join("\n")}\n`);
 loadDefs(path.join(root, "War Engine BP"));
@@ -29,6 +29,8 @@ try {
   W = globalThis.__war;
 } catch (err) { cleanup(); console.log(JSON.stringify({ scenario, loadError: String(err?.stack ?? err) })); process.exit(1); }
 finishLoading(); MC.debugHook();
+// self-play: each side can get its own brain weights
+for (const f of [1, 2]) { const j = process.env[`WAR_BW_${f}`]; if (j) W.BW_F[f] = { ...W.BW, headK: W.HEAD_K, ...JSON.parse(j) }; }
 cleanup();
 
 // ---------------------------------------------------------------- world building helpers
@@ -97,11 +99,11 @@ function shotStats(fac, from = 0) {
   const far = s.filter((x) => x.dist > 80 && x.dist < 1e8).length;
   const noEnemy = s.filter((x) => x.dist >= 1e8).length;
   const real = s.filter((x) => x.dist < 1e8);
-  return { noEnemy, meanDistReal: real.length ? Math.round(real.reduce((t, x) => t + x.dist, 0) / real.length) : 0, shots: s.length, hit: s.filter((x) => x.hit).length, wasted: s.filter((x) => !x.nearEnemy).length, beyond80: far, meanDist: s.length ? Math.round(s.reduce((t, x) => t + (x.dist ?? 0), 0) / s.length) : 0 };
+  return { suppShots: s.filter((x) => x.supp).length, suppWasted: s.filter((x) => x.supp && !x.nearEnemy).length, noEnemy, meanDistReal: real.length ? Math.round(real.reduce((t, x) => t + x.dist, 0) / real.length) : 0, shots: s.length, hit: s.filter((x) => x.hit).length, wasted: s.filter((x) => !x.nearEnemy).length, beyond80: far, meanDist: s.length ? Math.round(s.reduce((t, x) => t + (x.dist ?? 0), 0) / s.length) : 0 };
 }
 // note the distance from shooter to nearest enemy at each shot
 const origPush = SIM.shots.push.bind(SIM.shots);
-SIM.shots.push = (x) => { try { const o = x.owner; let bd = 1e9; for (const e of alive()) if (e !== o && !W.isDowned(e) && e.props.get("war:faction") !== o.props.get("war:faction")) bd = Math.min(bd, Math.hypot(e._loc.x - o._loc.x, e._loc.z - o._loc.z)); x.dist = bd; } catch {} return origPush(x); };
+SIM.shots.push = (x) => { try { const o = x.owner; let bd = 1e9; for (const e of alive()) if (e !== o && !W.isDowned(e) && e.props.get("war:faction") !== o.props.get("war:faction")) bd = Math.min(bd, Math.hypot(e._loc.x - o._loc.x, e._loc.z - o._loc.z)); x.dist = bd; const gs = W.gunState.get(o.id); x.supp = !!(gs && !gs.target && gs.supp && gs.supp.until > SIM.tick); } catch {} return origPush(x); };
 const report = (o) => { console.log(JSON.stringify({ scenario, ...o, errors: SIM.errors.slice(0, 5), errorCount: SIM.errors.length })); };
 
 // ---------------------------------------------------------------- scenarios
@@ -185,7 +187,8 @@ const S = {
       if (opt.dbg && SIM.tick % 100 === 0) for (const e of alive(1)) { const ps = W.perc.get(e.id), gs = W.gunState.get(e.id), t = ps?.threat; console.error(SIM.tick, e.id.slice(-5), e._loc.x.toFixed(1), e._loc.y.toFixed(1), e._loc.z.toFixed(1), W.sd(e).weapon, W.sd(e).func, "down", W.isDowned(e), "alert", ps?.alert, "threat", t ? `${t.id.slice(-5)}@${Math.round(Math.hypot(t._loc.x - e._loc.x, t._loc.z - e._loc.z))}` : "-", "gsT", gs?.target ? "Y" : "-", "seen", ps?.seen?.size, "note", W.notes.get(e.id)?.text, SIM.tick - (W.notes.get(e.id)?.t ?? 0), "grp", [...e.groups].filter((g) => /g_|t_|s_/.test(g)).join(","), "goal", e.dyn.get("war:goal"), "og", e.dyn.get("war:ordergoal"), "cu", e.dyn.get("war:catchup"), "nav", e.navGoal ? `${e.navGoal.x.toFixed(1)},${e.navGoal.y.toFixed(1)},${e.navGoal.z.toFixed(1)}` : "-", "known", W.squads.get(`1:1`)?.known?.size); }
       if (!alive(2).filter((e) => !W.isDowned(e)).length) break;
     }
-    report({ ticks: SIM.tick - t0, defendersLeft: alive(2).filter((e) => !W.isDowned(e)).length, attackersLeft: alive(1).filter((e) => !W.isDowned(e)).length, firstAttackerUpstairs: firstUp, attackerShots: shotStats(1), defenderShots: shotStats(2), bunchAvg: +(M.bunchPairs / M.bunchSamples).toFixed(2), maxCluster: M.maxCluster, notes: M.notes, ...callsPerTick(SIM.tick) });
+    const up = (f) => alive(f).filter((e) => !W.isDowned(e)).reduce((t, e) => t + e.hp / e.maxHp, 0);
+    report({ str1: +up(1).toFixed(2), str2: +up(2).toFixed(2), ticks: SIM.tick - t0, defendersLeft: alive(2).filter((e) => !W.isDowned(e)).length, attackersLeft: alive(1).filter((e) => !W.isDowned(e)).length, firstAttackerUpstairs: firstUp, attackerShots: shotStats(1), defenderShots: shotStats(2), bunchAvg: +(M.bunchPairs / M.bunchSamples).toFixed(2), maxCluster: M.maxCluster, notes: M.notes, ...callsPerTick(SIM.tick) });
   },
 
   // over a hill and down the other side
@@ -219,6 +222,26 @@ const S = {
       if (alive(1).filter((e) => Math.hypot(e._loc.x - dest.x, e._loc.z - dest.z) < 12).length >= 10) arrived = SIM.tick - t0;
     }
     report({ arrivedTicks: arrived, firstMove, wet: alive(1).filter((e) => e.isInWater).length, bunchAvg: +(M.bunchPairs / M.bunchSamples).toFixed(2), maxCluster: M.maxCluster, final: alive(1).map((e) => `${Math.round(e._loc.x)},${Math.round(e._loc.z)}`), ...callsPerTick(SIM.tick) });
+  },
+
+  // 8 v 8 across broken ground: low walls, a hut and a hill between them (both sides attack)
+  async field() {
+    SIM.bounds = { x0: -100, x1: 100, z0: -100, z1: 100, y0: -10, y1: 60 };
+    hill(-20, 0, 12, 5);
+    for (const [x, z] of [[-8, -25], [10, -18], [0, -8], [16, 4], [-14, 12], [6, 20], [-4, 30], [20, -30]]) fill(x, 0, z, x + 3, 0, z, "cobblestone");   // low walls
+    fill(24, 0, -4, 30, 3, 4, "stone_bricks"); fill(25, 0, -3, 29, 3, 3, "air"); fill(24, 4, -4, 30, 4, 4, "oak_planks"); setBlock(27, 0, -4, "air"); setBlock(27, 1, -4, "air"); setBlock(27, 0, 4, "air"); setBlock(27, 1, 4, "air");   // a hut
+    spawnPlayer({ x: 0, y: 0, z: -90 });
+    const W8 = ["rifle", "smg", "semi", "mg", "rifle", "semi", "smg", "rifle"];
+    for (let i = 0; i < 8; i++) soldier(1, { x: (i % 4) * 2.5 - 4 + 0.5, y: 0, z: -55 - Math.floor(i / 4) * 2.5 + 0.5 }, W8[i]);
+    for (let i = 0; i < 8; i++) soldier(2, { x: (i % 4) * 2.5 - 4 + 0.5, y: 0, z: 55 + Math.floor(i / 4) * 2.5 + 0.5 }, W8[i], 1);
+    W.setRelPair(1, 2, "1", false);
+    step(20);
+    await order(1, { x: 0, y: 0, z: 50 });
+    await order(2, { x: 0, y: 0, z: -50 });
+    const t0 = SIM.tick;
+    for (let t = 0; t < Number(opt.ticks ?? 2400); t += 10) { step(10); sample(1); if (!alive(1).filter((e) => !W.isDowned(e)).length || !alive(2).filter((e) => !W.isDowned(e)).length) break; }
+    const up = (f) => alive(f).filter((e) => !W.isDowned(e)).reduce((t, e) => t + e.hp / e.maxHp, 0);
+    report({ ticks: SIM.tick - t0, str1: +up(1).toFixed(2), str2: +up(2).toFixed(2), left1: alive(1).filter((e) => !W.isDowned(e)).length, left2: alive(2).filter((e) => !W.isDowned(e)).length, shots1: shotStats(1), shots2: shotStats(2), bunchAvg: +(M.bunchPairs / M.bunchSamples).toFixed(2), notes: M.notes });
   },
 
   // open-field battle, N v N: script cost per tick (the lag)
