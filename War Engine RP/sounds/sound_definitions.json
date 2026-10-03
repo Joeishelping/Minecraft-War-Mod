@@ -884,6 +884,898 @@
           "volume": 1.0
         }
       ]
+    },
+    "war.voice.hebrew.spotted": {
+      "category": "hostile",
+      "min_distance": 6.0,
+      "max_distance": 32.0,
+      "sounds": [
+        {
+          "name": "sounds/war_voice/hebrew/spotted",
+          "volume": 1.0
+        }
+      ]
+    },
+    "war.voice.hebrew.contact": {
+      "category": "hostile",
+      "min_distance": 6.0,
+      "max_distance": 32.0,
+      "sounds": [
+        {
+          "name": "sounds/war_voice/hebrew/contact",
+          "volume": 1.0
+        }
+      ]
+    },
+    "war.voice.hebrew.flanking": {
+      "category": "hostile",
+      "min_distance": 6.0,
+      "max_distance": 32.0,
+      "sounds": [
+        {
+          "name": "sounds/war_voice/hebrew/flanking",
+          "volume": 1.0
+        }
+      ]
+    },
+    "war.voice.hebrew.charge": {
+      "category": "hostile",
+      "min_distance": 6.0,
+      "max_distance": 32.0,
+      "sounds": [
+        {
+          "name": "sounds/war_voice/hebrew/charge",
+          "volume": 1.0
+        }
+      ]
+    },
+    "war.voice.hebrew.gogogo": {
+      "category": "hostile",
+      "min_distance": 6.0,
+      "max_distance": 32.0,
+      "sounds": [
+        {
+          "name": "sounds/war_voice/hebrew/gogogo",
+          "volume": 1.0
+        }
+      ]
+    },
+    "war.voice.hebrew.moving_up": {
+      "category": "hostile",
+      "min_distance": 6.0,
+      "max_distance": 32.0,
+      "sounds": [
+        {
+          "name": "sounds/war_voice/hebrew/moving_up",
+          "volume": 1.0
+        }
+      ]
+    },
+    "war.voice.hebrew.suppressing": {
+      "category": "hostile",
+      "min_distance": 6.0,
+      "max_distance": 32.0,
+      "sounds": [
+        {
+          "name": "sounds/war_voice/hebrew/suppressing",
+          "volume": 1.0
+        }
+      ]
+    },
+    "war.voice.hebrew.hit": {
+      "category": "hostile",
+      "min_distance": 6.0,
+      "max_distance": 32.0,
+      "sounds": [
+        {
+          "name": "sounds/war_voice/hebrew/hit",
+          "volume": 1.0
+        }
+      ]
+    },
+    "war.voice.hebrew.man_down": {
+      "category": "hostile",
+      "min_distance": 6.0,
+      "max_distance": 32.0,
+      "sounds": [
+        {
+          "name": "sounds/war_voice/hebrew/man_down",
+          "volume": 1.0
+        },
+        {
+          "name": "sounds/war_voice/hebrew/man_down_2",
+          "volume": 1.0
+        }
+      ]
+    },
+    "war.voice.hebrew.okay": {
+      "category": "hostile",
+      "min_distance": 6.0,
+      "max_distance": 32.0,
+      "sounds": [
+        {
+          "name": "sounds/war_voice/hebrew/okay",
+          "volume": 1.0
+        }
+      ]
+    },
+    "war.voice.hebrew.fall_back": {
+      "category": "hostile",
+      "min_distance": 6.0,
+      "max_distance": 32.0,
+      "sounds": [
+        {
+          "name": "sounds/war_voice/hebrew/fall_back",
+          "volume": 1.0
+        }
+      ]
+    },
+    "war.voice.hebrew.cover_me": {
+      "category": "hostile",
+      "min_distance": 6.0,
+      "max_distance": 32.0,
+      "sounds": [
+        {
+          "name": "sounds/war_voice/hebrew/cover_me",
+          "volume": 1.0
+        }
+      ]
+    },
+    "war.voice.hebrew.target_down": {
+      "category": "hostile",
+      "min_distance": 6.0,
+      "max_distance": 32.0,
+      "sounds": [
+        {
+          "name": "sounds/war_voice/hebrew/target_down",
+          "volume": 1.0
+        }
+      ]
+    },
+    "war.voice.hebrew.clear": {
+      "category": "hostile",
+      "min_distance": 6.0,
+      "max_distance": 32.0,
+      "sounds": [
+        {
+          "name": "sounds/war_voice/hebrew/clear",
+          "volume": 1.0
+        }
+      ]
+    },
+    "war.voice.hebrew.hold": {
+      "category": "hostile",
+      "min_distance": 6.0,
+      "max_distance": 32.0,
+      "sounds": [
+        {
+          "name": "sounds/war_voice/hebrew/hold",
+          "volume": 1.0
+        }
+      ]
+    },
+    "war.voice.hebrew.follow": {
+      "category": "hostile",
+      "min_distance": 6.0,
+      "max_distance": 32.0,
+      "sounds": [
+        {
+          "name": "sounds/war_voice/hebrew/follow",
+          "volume": 1.0
+        }
+      ]
+    },
+    "war.voice.dutch.spotted": {
+      "category": "hostile",
+      "min_distance": 6.0,
+      "max_distance": 32.0,
+      "sounds": [
+        {
+          "name": "sounds/war_voice/dutch/spotted",
+          "volume": 1.0
+        }
+      ]
+    },
+    "war.voice.dutch.contact": {
+      "category": "hostile",
+      "min_distance": 6.0,
+      "max_distance": 32.0,
+      "sounds": [
+        {
+          "name": "sounds/war_voice/dutch/contact",
+          "volume": 1.0
+        }
+      ]
+    },
+    "war.voice.dutch.flanking": {
+      "category": "hostile",
+      "min_distance": 6.0,
+      "max_distance": 32.0,
+      "sounds": [
+        {
+          "name": "sounds/war_voice/dutch/flanking",
+          "volume": 1.0
+        }
+      ]
+    },
+    "war.voice.dutch.charge": {
+      "category": "hostile",
+      "min_distance": 6.0,
+      "max_distance": 32.0,
+      "sounds": [
+        {
+          "name": "sounds/war_voice/dutch/charge",
+          "volume": 1.0
+        }
+      ]
+    },
+    "war.voice.dutch.gogogo": {
+      "category": "hostile",
+      "min_distance": 6.0,
+      "max_distance": 32.0,
+      "sounds": [
+        {
+          "name": "sounds/war_voice/dutch/gogogo",
+          "volume": 1.0
+        }
+      ]
+    },
+    "war.voice.dutch.moving_up": {
+      "category": "hostile",
+      "min_distance": 6.0,
+      "max_distance": 32.0,
+      "sounds": [
+        {
+          "name": "sounds/war_voice/dutch/moving_up",
+          "volume": 1.0
+        }
+      ]
+    },
+    "war.voice.dutch.suppressing": {
+      "category": "hostile",
+      "min_distance": 6.0,
+      "max_distance": 32.0,
+      "sounds": [
+        {
+          "name": "sounds/war_voice/dutch/suppressing",
+          "volume": 1.0
+        }
+      ]
+    },
+    "war.voice.dutch.hit": {
+      "category": "hostile",
+      "min_distance": 6.0,
+      "max_distance": 32.0,
+      "sounds": [
+        {
+          "name": "sounds/war_voice/dutch/hit",
+          "volume": 1.0
+        }
+      ]
+    },
+    "war.voice.dutch.man_down": {
+      "category": "hostile",
+      "min_distance": 6.0,
+      "max_distance": 32.0,
+      "sounds": [
+        {
+          "name": "sounds/war_voice/dutch/man_down",
+          "volume": 1.0
+        }
+      ]
+    },
+    "war.voice.dutch.okay": {
+      "category": "hostile",
+      "min_distance": 6.0,
+      "max_distance": 32.0,
+      "sounds": [
+        {
+          "name": "sounds/war_voice/dutch/okay",
+          "volume": 1.0
+        }
+      ]
+    },
+    "war.voice.dutch.fall_back": {
+      "category": "hostile",
+      "min_distance": 6.0,
+      "max_distance": 32.0,
+      "sounds": [
+        {
+          "name": "sounds/war_voice/dutch/fall_back",
+          "volume": 1.0
+        }
+      ]
+    },
+    "war.voice.dutch.cover_me": {
+      "category": "hostile",
+      "min_distance": 6.0,
+      "max_distance": 32.0,
+      "sounds": [
+        {
+          "name": "sounds/war_voice/dutch/cover_me",
+          "volume": 1.0
+        }
+      ]
+    },
+    "war.voice.dutch.target_down": {
+      "category": "hostile",
+      "min_distance": 6.0,
+      "max_distance": 32.0,
+      "sounds": [
+        {
+          "name": "sounds/war_voice/dutch/target_down",
+          "volume": 1.0
+        }
+      ]
+    },
+    "war.voice.dutch.clear": {
+      "category": "hostile",
+      "min_distance": 6.0,
+      "max_distance": 32.0,
+      "sounds": [
+        {
+          "name": "sounds/war_voice/dutch/clear",
+          "volume": 1.0
+        }
+      ]
+    },
+    "war.voice.dutch.hold": {
+      "category": "hostile",
+      "min_distance": 6.0,
+      "max_distance": 32.0,
+      "sounds": [
+        {
+          "name": "sounds/war_voice/dutch/hold",
+          "volume": 1.0
+        }
+      ]
+    },
+    "war.voice.dutch.follow": {
+      "category": "hostile",
+      "min_distance": 6.0,
+      "max_distance": 32.0,
+      "sounds": [
+        {
+          "name": "sounds/war_voice/dutch/follow",
+          "volume": 1.0
+        }
+      ]
+    },
+    "war.voice.german.spotted": {
+      "category": "hostile",
+      "min_distance": 6.0,
+      "max_distance": 32.0,
+      "sounds": [
+        {
+          "name": "sounds/war_voice/german/spotted",
+          "volume": 1.0
+        }
+      ]
+    },
+    "war.voice.german.contact": {
+      "category": "hostile",
+      "min_distance": 6.0,
+      "max_distance": 32.0,
+      "sounds": [
+        {
+          "name": "sounds/war_voice/german/contact",
+          "volume": 1.0
+        }
+      ]
+    },
+    "war.voice.german.flanking": {
+      "category": "hostile",
+      "min_distance": 6.0,
+      "max_distance": 32.0,
+      "sounds": [
+        {
+          "name": "sounds/war_voice/german/flanking",
+          "volume": 1.0
+        }
+      ]
+    },
+    "war.voice.german.charge": {
+      "category": "hostile",
+      "min_distance": 6.0,
+      "max_distance": 32.0,
+      "sounds": [
+        {
+          "name": "sounds/war_voice/german/charge",
+          "volume": 1.0
+        }
+      ]
+    },
+    "war.voice.german.gogogo": {
+      "category": "hostile",
+      "min_distance": 6.0,
+      "max_distance": 32.0,
+      "sounds": [
+        {
+          "name": "sounds/war_voice/german/gogogo",
+          "volume": 1.0
+        }
+      ]
+    },
+    "war.voice.german.moving_up": {
+      "category": "hostile",
+      "min_distance": 6.0,
+      "max_distance": 32.0,
+      "sounds": [
+        {
+          "name": "sounds/war_voice/german/moving_up",
+          "volume": 1.0
+        }
+      ]
+    },
+    "war.voice.german.suppressing": {
+      "category": "hostile",
+      "min_distance": 6.0,
+      "max_distance": 32.0,
+      "sounds": [
+        {
+          "name": "sounds/war_voice/german/suppressing",
+          "volume": 1.0
+        }
+      ]
+    },
+    "war.voice.german.hit": {
+      "category": "hostile",
+      "min_distance": 6.0,
+      "max_distance": 32.0,
+      "sounds": [
+        {
+          "name": "sounds/war_voice/german/hit",
+          "volume": 1.0
+        }
+      ]
+    },
+    "war.voice.german.man_down": {
+      "category": "hostile",
+      "min_distance": 6.0,
+      "max_distance": 32.0,
+      "sounds": [
+        {
+          "name": "sounds/war_voice/german/man_down",
+          "volume": 1.0
+        }
+      ]
+    },
+    "war.voice.german.okay": {
+      "category": "hostile",
+      "min_distance": 6.0,
+      "max_distance": 32.0,
+      "sounds": [
+        {
+          "name": "sounds/war_voice/german/okay",
+          "volume": 1.0
+        }
+      ]
+    },
+    "war.voice.german.fall_back": {
+      "category": "hostile",
+      "min_distance": 6.0,
+      "max_distance": 32.0,
+      "sounds": [
+        {
+          "name": "sounds/war_voice/german/fall_back",
+          "volume": 1.0
+        }
+      ]
+    },
+    "war.voice.german.cover_me": {
+      "category": "hostile",
+      "min_distance": 6.0,
+      "max_distance": 32.0,
+      "sounds": [
+        {
+          "name": "sounds/war_voice/german/cover_me",
+          "volume": 1.0
+        }
+      ]
+    },
+    "war.voice.german.target_down": {
+      "category": "hostile",
+      "min_distance": 6.0,
+      "max_distance": 32.0,
+      "sounds": [
+        {
+          "name": "sounds/war_voice/german/target_down",
+          "volume": 1.0
+        }
+      ]
+    },
+    "war.voice.german.clear": {
+      "category": "hostile",
+      "min_distance": 6.0,
+      "max_distance": 32.0,
+      "sounds": [
+        {
+          "name": "sounds/war_voice/german/clear",
+          "volume": 1.0
+        }
+      ]
+    },
+    "war.voice.german.hold": {
+      "category": "hostile",
+      "min_distance": 6.0,
+      "max_distance": 32.0,
+      "sounds": [
+        {
+          "name": "sounds/war_voice/german/hold",
+          "volume": 1.0
+        }
+      ]
+    },
+    "war.voice.german.follow": {
+      "category": "hostile",
+      "min_distance": 6.0,
+      "max_distance": 32.0,
+      "sounds": [
+        {
+          "name": "sounds/war_voice/german/follow",
+          "volume": 1.0
+        }
+      ]
+    },
+    "war.voice.mongolian.spotted": {
+      "category": "hostile",
+      "min_distance": 6.0,
+      "max_distance": 32.0,
+      "sounds": [
+        {
+          "name": "sounds/war_voice/mongolian/spotted",
+          "volume": 1.0
+        }
+      ]
+    },
+    "war.voice.mongolian.contact": {
+      "category": "hostile",
+      "min_distance": 6.0,
+      "max_distance": 32.0,
+      "sounds": [
+        {
+          "name": "sounds/war_voice/mongolian/contact",
+          "volume": 1.0
+        },
+        {
+          "name": "sounds/war_voice/mongolian/contact_2",
+          "volume": 1.0
+        }
+      ]
+    },
+    "war.voice.mongolian.flanking": {
+      "category": "hostile",
+      "min_distance": 6.0,
+      "max_distance": 32.0,
+      "sounds": [
+        {
+          "name": "sounds/war_voice/mongolian/flanking",
+          "volume": 1.0
+        }
+      ]
+    },
+    "war.voice.mongolian.charge": {
+      "category": "hostile",
+      "min_distance": 6.0,
+      "max_distance": 32.0,
+      "sounds": [
+        {
+          "name": "sounds/war_voice/mongolian/charge",
+          "volume": 1.0
+        }
+      ]
+    },
+    "war.voice.mongolian.gogogo": {
+      "category": "hostile",
+      "min_distance": 6.0,
+      "max_distance": 32.0,
+      "sounds": [
+        {
+          "name": "sounds/war_voice/mongolian/gogogo",
+          "volume": 1.0
+        }
+      ]
+    },
+    "war.voice.mongolian.moving_up": {
+      "category": "hostile",
+      "min_distance": 6.0,
+      "max_distance": 32.0,
+      "sounds": [
+        {
+          "name": "sounds/war_voice/mongolian/moving_up",
+          "volume": 1.0
+        }
+      ]
+    },
+    "war.voice.mongolian.suppressing": {
+      "category": "hostile",
+      "min_distance": 6.0,
+      "max_distance": 32.0,
+      "sounds": [
+        {
+          "name": "sounds/war_voice/mongolian/suppressing",
+          "volume": 1.0
+        }
+      ]
+    },
+    "war.voice.mongolian.hit": {
+      "category": "hostile",
+      "min_distance": 6.0,
+      "max_distance": 32.0,
+      "sounds": [
+        {
+          "name": "sounds/war_voice/mongolian/hit",
+          "volume": 1.0
+        }
+      ]
+    },
+    "war.voice.mongolian.man_down": {
+      "category": "hostile",
+      "min_distance": 6.0,
+      "max_distance": 32.0,
+      "sounds": [
+        {
+          "name": "sounds/war_voice/mongolian/man_down",
+          "volume": 1.0
+        }
+      ]
+    },
+    "war.voice.mongolian.okay": {
+      "category": "hostile",
+      "min_distance": 6.0,
+      "max_distance": 32.0,
+      "sounds": [
+        {
+          "name": "sounds/war_voice/mongolian/okay",
+          "volume": 1.0
+        }
+      ]
+    },
+    "war.voice.mongolian.fall_back": {
+      "category": "hostile",
+      "min_distance": 6.0,
+      "max_distance": 32.0,
+      "sounds": [
+        {
+          "name": "sounds/war_voice/mongolian/fall_back",
+          "volume": 1.0
+        }
+      ]
+    },
+    "war.voice.mongolian.cover_me": {
+      "category": "hostile",
+      "min_distance": 6.0,
+      "max_distance": 32.0,
+      "sounds": [
+        {
+          "name": "sounds/war_voice/mongolian/cover_me",
+          "volume": 1.0
+        }
+      ]
+    },
+    "war.voice.mongolian.target_down": {
+      "category": "hostile",
+      "min_distance": 6.0,
+      "max_distance": 32.0,
+      "sounds": [
+        {
+          "name": "sounds/war_voice/mongolian/target_down",
+          "volume": 1.0
+        }
+      ]
+    },
+    "war.voice.mongolian.clear": {
+      "category": "hostile",
+      "min_distance": 6.0,
+      "max_distance": 32.0,
+      "sounds": [
+        {
+          "name": "sounds/war_voice/mongolian/clear",
+          "volume": 1.0
+        }
+      ]
+    },
+    "war.voice.mongolian.hold": {
+      "category": "hostile",
+      "min_distance": 6.0,
+      "max_distance": 32.0,
+      "sounds": [
+        {
+          "name": "sounds/war_voice/mongolian/hold",
+          "volume": 1.0
+        }
+      ]
+    },
+    "war.voice.mongolian.follow": {
+      "category": "hostile",
+      "min_distance": 6.0,
+      "max_distance": 32.0,
+      "sounds": [
+        {
+          "name": "sounds/war_voice/mongolian/follow",
+          "volume": 1.0
+        }
+      ]
+    },
+    "war.voice.russian.spotted": {
+      "category": "hostile",
+      "min_distance": 6.0,
+      "max_distance": 32.0,
+      "sounds": [
+        {
+          "name": "sounds/war_voice/russian/spotted",
+          "volume": 1.0
+        }
+      ]
+    },
+    "war.voice.russian.contact": {
+      "category": "hostile",
+      "min_distance": 6.0,
+      "max_distance": 32.0,
+      "sounds": [
+        {
+          "name": "sounds/war_voice/russian/contact",
+          "volume": 1.0
+        }
+      ]
+    },
+    "war.voice.russian.flanking": {
+      "category": "hostile",
+      "min_distance": 6.0,
+      "max_distance": 32.0,
+      "sounds": [
+        {
+          "name": "sounds/war_voice/russian/flanking",
+          "volume": 1.0
+        }
+      ]
+    },
+    "war.voice.russian.charge": {
+      "category": "hostile",
+      "min_distance": 6.0,
+      "max_distance": 32.0,
+      "sounds": [
+        {
+          "name": "sounds/war_voice/russian/charge",
+          "volume": 1.0
+        }
+      ]
+    },
+    "war.voice.russian.gogogo": {
+      "category": "hostile",
+      "min_distance": 6.0,
+      "max_distance": 32.0,
+      "sounds": [
+        {
+          "name": "sounds/war_voice/russian/gogogo",
+          "volume": 1.0
+        }
+      ]
+    },
+    "war.voice.russian.moving_up": {
+      "category": "hostile",
+      "min_distance": 6.0,
+      "max_distance": 32.0,
+      "sounds": [
+        {
+          "name": "sounds/war_voice/russian/moving_up",
+          "volume": 1.0
+        }
+      ]
+    },
+    "war.voice.russian.suppressing": {
+      "category": "hostile",
+      "min_distance": 6.0,
+      "max_distance": 32.0,
+      "sounds": [
+        {
+          "name": "sounds/war_voice/russian/suppressing",
+          "volume": 1.0
+        }
+      ]
+    },
+    "war.voice.russian.hit": {
+      "category": "hostile",
+      "min_distance": 6.0,
+      "max_distance": 32.0,
+      "sounds": [
+        {
+          "name": "sounds/war_voice/russian/hit",
+          "volume": 1.0
+        }
+      ]
+    },
+    "war.voice.russian.man_down": {
+      "category": "hostile",
+      "min_distance": 6.0,
+      "max_distance": 32.0,
+      "sounds": [
+        {
+          "name": "sounds/war_voice/russian/man_down",
+          "volume": 1.0
+        }
+      ]
+    },
+    "war.voice.russian.okay": {
+      "category": "hostile",
+      "min_distance": 6.0,
+      "max_distance": 32.0,
+      "sounds": [
+        {
+          "name": "sounds/war_voice/russian/okay",
+          "volume": 1.0
+        }
+      ]
+    },
+    "war.voice.russian.fall_back": {
+      "category": "hostile",
+      "min_distance": 6.0,
+      "max_distance": 32.0,
+      "sounds": [
+        {
+          "name": "sounds/war_voice/russian/fall_back",
+          "volume": 1.0
+        },
+        {
+          "name": "sounds/war_voice/russian/fall_back_2",
+          "volume": 1.0
+        }
+      ]
+    },
+    "war.voice.russian.cover_me": {
+      "category": "hostile",
+      "min_distance": 6.0,
+      "max_distance": 32.0,
+      "sounds": [
+        {
+          "name": "sounds/war_voice/russian/cover_me",
+          "volume": 1.0
+        }
+      ]
+    },
+    "war.voice.russian.target_down": {
+      "category": "hostile",
+      "min_distance": 6.0,
+      "max_distance": 32.0,
+      "sounds": [
+        {
+          "name": "sounds/war_voice/russian/target_down",
+          "volume": 1.0
+        }
+      ]
+    },
+    "war.voice.russian.clear": {
+      "category": "hostile",
+      "min_distance": 6.0,
+      "max_distance": 32.0,
+      "sounds": [
+        {
+          "name": "sounds/war_voice/russian/clear",
+          "volume": 1.0
+        }
+      ]
+    },
+    "war.voice.russian.hold": {
+      "category": "hostile",
+      "min_distance": 6.0,
+      "max_distance": 32.0,
+      "sounds": [
+        {
+          "name": "sounds/war_voice/russian/hold",
+          "volume": 1.0
+        }
+      ]
+    },
+    "war.voice.russian.follow": {
+      "category": "hostile",
+      "min_distance": 6.0,
+      "max_distance": 32.0,
+      "sounds": [
+        {
+          "name": "sounds/war_voice/russian/follow",
+          "volume": 1.0
+        }
+      ]
     }
   }
 }

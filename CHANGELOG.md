@@ -1,5 +1,10 @@
 # War Engine changelog
 
+## v6.5.1 (5 more callout languages)
+
+- **Hebrew, Dutch, German, Mongolian and Russian** callouts added: 10 languages in all. Lines recorded in two
+  versions are used at random: Hebrew "Man down!", Mongolian "Contact!" and Russian "Fall back!".
+
 ## v6.5 (spoken callouts: test build with 5 languages)
 
 - **Soldiers shout again, in their faction's language.** War Table -> Settings -> Callout language (per faction):

@@ -1,4 +1,4 @@
-// War Engine v6.5: faction NPC war framework
+// War Engine v6.5.1: faction NPC war framework
 import { world, system, Player, ItemStack, EquipmentSlot, GameMode } from "@minecraft/server";
 import { ActionFormData, ModalFormData, FormCancelationReason } from "@minecraft/server-ui";
 import { SKINS } from "./skins.js";
@@ -5436,8 +5436,8 @@ world.afterEvents.entityHurt.subscribe((ev) => {
 // ---- v6.5: battle chatter, spoken. Each faction's soldiers shout in its language (War Table -> Settings -> Callout
 // language); what you read on screen stays English. Recorded lines live in the resource pack (sounds/war_voice/<lang>/),
 // one sound event per line: war.voice.<lang>.<line>. A language with no recordings yet just stays silent.
-const VOICE_KEYS = ["none", "en_us", "en_gb", "greek", "korean", "spanish"];
-const VOICE_NAMES = ["None (silent)", "US English", "British English", "Greek", "Korean", "Spanish"];
+const VOICE_KEYS = ["none", "en_us", "en_gb", "greek", "korean", "spanish", "hebrew", "dutch", "german", "mongolian", "russian"];
+const VOICE_NAMES = ["None (silent)", "US English", "British English", "Greek", "Korean", "Spanish", "Hebrew", "Dutch", "German", "Mongolian", "Russian"];
 function voiceOf(f) { const v = getJSON(world, "war:vlang", {})[f]; return VOICE_KEYS.includes(v) ? v : "en_us"; }
 // the English line (as the code calls it) -> the recorded line. Lines with no recording (Reloading, Grenade, On the gun) are silent
 const CALL_KEY = { "Enemy spotted!": "spotted", "Contact!": "contact", "Flanking!": "flanking", "Charge!": "charge", "Go, go, go!": "gogogo",
