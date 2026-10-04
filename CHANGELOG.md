@@ -1,5 +1,31 @@
 # War Engine changelog
 
+## v6.9.2 (Staircases, no shooting into cover, coalition spawn, grenade facing)
+
+- **Staircases are choke points.**
+  - Defenders holding a floor, with the enemy below, take spots 3-7 blocks from each stairhead on their floor that
+    see a man's head as he comes up. With two staircases they split between them, the one nearest the enemy first
+    ("covering the stairs").
+  - Attackers going up to a floor where the enemy is gather at the foot of the stairs ("stacking up at the stairs"),
+    until 3 are together or 6 s pass, then go up together ("Go, go, go!") instead of one at a time.
+  - A staircase where men were just cut down is remembered as a killing ground for ~2 min. Routes take another way
+    up (the other staircase) if there is one.
+- **Soldiers hear what they can't see.** An enemy soldier within 10 blocks, through walls and floors, is known to the
+  squad roughly where he is (boots on the stairs, a fight in the room below). That's enough to cover the stairs or
+  the door he'll come through. It's never a target to shoot at.
+- **No more shooting into cover.** The trigger is only pulled when a fresh line to the target is open at that
+  instant. Before, it was checked against a shared memory that worked per block and lasted up to a second, so a man
+  who had just stepped behind a wall was shot at through it. Leading a running man is dropped if it would put the
+  shot into the wall. Covering fire needs a sighting from the last 1.5 s (was 3 s) and a fresh open line. Only the
+  spread of a real shot hits walls now, and only those can go through (up to 3 blocks, as before).
+- **A wounded man falling back still fires** at anyone within 20 blocks. Before, he held his fire completely: in a
+  building with nowhere to run, he stood and died without a shot.
+- **Grenades and molotovs:** the thrower turns to face his target before throwing. Before, it could come out of his
+  back, and looked like a throw in the wrong direction.
+- **Coalition spawn:** "How many" is now the total, shared out between the member factions and mixed through one
+  formation (30 for a 3-faction coalition: 10 each, side by side in the ranks). Before, it spawned 30 for each
+  faction.
+
 ## v6.9.1 (Squads on Hold use tactics, more callouts, Demolition rework)
 
 - **Squads on Hold now fight like squads on the move.** Before, flanking, charging, "go go go" and cover-and-move

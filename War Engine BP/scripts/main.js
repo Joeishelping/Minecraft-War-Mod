@@ -1,4 +1,4 @@
-// War Engine v6.9.1: faction NPC war framework
+// War Engine v6.9.2: faction NPC war framework
 import { world, system, Player, ItemStack, EquipmentSlot, GameMode } from "@minecraft/server";
 import { ActionFormData, ModalFormData, FormCancelationReason } from "@minecraft/server-ui";
 import { SKINS } from "./skins.js";
@@ -880,6 +880,7 @@ function molotov(e, d, now) {
   if (dd < MOLO.rMin || dd > MOLO.rMax || Math.abs(t.location.y - e.location.y) > 6) return;
   if (!clearShot(e.dimension, headLoc(e), { x: t.location.x, y: t.location.y + 1.6, z: t.location.z })) return;   // he must see where he throws
   if (nearSnap(t.dimension.id, t.location, MOLO.radius + 3).some((c) => !c.down && (c.type === SOLDIER || c.type === "minecraft:player" || c.type === HOUND) && c.f && isFriendly(d.faction, c.f))) return;   // never on (or near) a friend
+  turnTo(e, t.location, 180);                                    // (v6.9.2: facing the throw)
   sdp(e, "war:molo", n - 1); sdp(e, "war:molot", now + MOLO.cd); squadMolo.set(sq, now + MOLO.squadGap);
   if (!gdp(e, "war:molor")) sdp(e, "war:molor", now);
   callout(e, "Grenade!");
@@ -951,6 +952,7 @@ function grenade(e, d, now) {
   if (!t?.isValid || Math.abs(t.location.y - e.location.y) > 8) return;
   if (!clearShot(e.dimension, headLoc(e), { x: t.location.x, y: t.location.y + 1.6, z: t.location.z })) return;
   if (nearSnap(t.dimension.id, t.location, NADE.safe).some((c) => !c.down && (c.type === SOLDIER || c.type === "minecraft:player" || c.type === HOUND) && c.f && isFriendly(d.faction, c.f))) return;
+  turnTo(e, t.location, 180);                                    // (v6.9.2: he faces where he throws: it went out of his back)
   sdp(e, "war:nade", n - 1); sdp(e, "war:nadet", now + NADE.cd); squadNade.set(sq, now + NADE.squadGap);
   if (!gdp(e, "war:nader")) sdp(e, "war:nader", now);
   callout(e, "Grenade!");
@@ -1904,8 +1906,8 @@ function spawnPoints(player, count, shift = 0) {
   }
   return { base, pts };
 }
-function spawnArmy(player, s, count, shift = 0) {
-  const { base, pts } = spawnPoints(player, count, shift);
+function spawnArmy(player, s, count, shift = 0, given) {
+  const { base, pts } = given ?? spawnPoints(player, count, shift);
   const slot = ANCHORED.includes(s.func) ? makeWaypoint(player.dimension, base) : undefined;
   let n = 0;
   for (const p of pts) {
@@ -1938,7 +1940,8 @@ async function eggUse(player, div) {
   const wl = WL.map((w) => (w[0] === "sword" && div === "cavalier" ? "Spear" : w[1]));
   const wIdx = Math.max(0, WL.findIndex((w) => w[0] === (def.weapon ?? (def.ranged ? "crossbow" : "sword"))));
   const funcs = FUNCS[div];
-  // v6.6: a whole coalition at once (2+ member factions): "How many" of this unit for EACH faction, side by side
+  // v6.6: a whole coalition at once (2+ member factions). v6.9.2: "How many" is the TOTAL, shared out between the member
+  // factions and mixed through one formation (30 for a 3-faction coalition: 10 each, side by side in the ranks)
   const coals = getCoals().filter((c) => (c.members ?? []).length >= 2);
   const facOpts = [...factionList(), ...coals.map((c) => `§l⚑ Coalition: ${c.name}§r (${c.members.length} factions)`)];
   const f = new ModalFormData().title(`Spawn: ${DIV[div].name}`)
@@ -1946,7 +1949,7 @@ async function eggUse(player, div) {
     .dropdown("Squad", squadList(def.faction, "No squad"), { defaultValueIndex: def.squad })
     .dropdown("Function", funcs.map((x) => x[1]), { defaultValueIndex: Math.min(def.func, funcs.length - 1) })
     .dropdown(div === "grenadier" ? "Kit" : "Weapon", DIV[div].weapon ? wl : div === "grenadier" ? DEMO.map((k) => k[1]) : ["None (heals)"], { defaultValueIndex: DIV[div].weapon ? wIdx : div === "grenadier" ? Math.max(0, DEMO.findIndex((k) => k[0] === def.weapon)) : 0 })
-    .slider("How many", 1, 30, { valueStep: 1, defaultValue: def.count })
+    .slider("How many (a coalition: in total, mixed)", 1, 30, { valueStep: 1, defaultValue: def.count })
     .slider("Patrol / sentry radius", 4, 150, { valueStep: 2, defaultValue: def.radius });
   const r = await show(f, player);
   if (!r || r.canceled || !r.formValues) return;
@@ -1955,10 +1958,15 @@ async function eggUse(player, div) {
   const cfg = { faction: coal ? (def.faction || 1) : pick + 1, coal: coal ? pick - NF : undefined, squad: Number(v[1]), func: Number(v[2]), weapon: DIV[div].weapon ? WL[Number(v[3])][0] : div === "grenadier" ? DEMO[Number(v[3])][0] : "sword", count: Number(v[4]), radius: Number(v[5]) };
   setJSON(player, key, cfg);
   if (coal) {
-    const mem = coal.members, width = Math.min(6, cfg.count) * 1.5 + 3;
+    const mem = coal.members.slice(0, Math.max(1, cfg.count));         // (fewer men than factions: the first few get one each)
+    const all = spawnPoints(player, cfg.count);
     let total = 0;
-    mem.forEach((fac, k) => { total += spawnArmy(player, { faction: fac, squad: cfg.squad, weapon: cfg.weapon, ranged: isRangedW(cfg.weapon), div, radius: cfg.radius, func: funcs[cfg.func][0] }, cfg.count, (k - (mem.length - 1) / 2) * width); });
-    player.onScreenDisplay.setActionBar(`§aSpawned ${total} ${DIV[div].name}s for §l${coal.name}§r§a: ${cfg.count} each for ${mem.map((m) => factionLabel(m)).join("§a, ")}`);
+    const counts = mem.map((fac, k) => {
+      const pts = all.pts.filter((_, i) => i % mem.length === k);       // every Nth place in the ranks: mixed, not in blocks
+      const n = pts.length ? spawnArmy(player, { faction: fac, squad: cfg.squad, weapon: cfg.weapon, ranged: isRangedW(cfg.weapon), div, radius: cfg.radius, func: funcs[cfg.func][0] }, pts.length, 0, { base: all.base, pts }) : 0;
+      total += n; return n;
+    });
+    player.onScreenDisplay.setActionBar(`§aSpawned ${total} ${DIV[div].name}s for §l${coal.name}§r§a, mixed: ${mem.map((m, k) => `${counts[k]} ${factionLabel(m)}`).join("§a, ")}`);
     return;
   }
   const n = spawnArmy(player, { faction: cfg.faction, squad: cfg.squad, weapon: cfg.weapon, ranged: isRangedW(cfg.weapon), div, radius: cfg.radius, func: funcs[cfg.func][0] }, cfg.count);
@@ -3096,10 +3104,21 @@ function headLoc(o) {
   const l = o.location, ps = poseOf.get(o.id) ?? 0;
   return { x: l.x, y: l.y + (ps === 2 ? 0.45 : ps === 1 ? 1.1 : 1.62), z: l.z };
 }
+// v6.9.2: the trigger is only pulled on a line that's open RIGHT NOW (one fresh ray, not the shared line-of-sight memory,
+// which works per block and lasts up to a second). A man stepping behind cover is not shot at through it: the leading
+// aim is dropped if it would put the shot into the wall, and with neither line open he holds his fire. What still hits a
+// wall is the spread of a real shot, and only that can go through (wallbang).
+function openNow(dim, a, b) {
+  const dx = b.x - a.x, dy = b.y - a.y, dz = b.z - a.z, L = Math.hypot(dx, dy, dz);
+  if (L < 0.6) return true;
+  try { return !dim.getBlockFromRay(a, { x: dx / L, y: dy / L, z: dz / L }, { maxDistance: L - 0.4, includeLiquidBlocks: false, includePassableBlocks: false }); } catch { return true; }
+}
 function fireGun(e, spec, t, aim) {
   const h = headLoc(e), c0 = aim ?? chest(t);
   let c = c0;
   try { const v = t.getVelocity(); const tt = Math.hypot(c0.x - h.x, c0.y - h.y, c0.z - h.z) / spec.speed; c = { x: c0.x + v.x * tt, y: c0.y, z: c0.z + v.z * tt }; } catch {}  // lead the target
+  const mz = { x: h.x, y: h.y - 0.2, z: h.z };
+  if (!openNow(e.dimension, mz, c)) { if (c !== c0 && openNow(e.dimension, mz, c0)) c = c0; else return false; }
   let dx = c.x - h.x, dy = c.y - h.y, dz = c.z - h.z;
   const l = Math.hypot(dx, dy, dz) || 1;
   if (spec.bullet === "ww:nbazooka_projectile") dy += (l * 0.03 * l) / (spec.speed * 2); // lift for the rocket's drop
@@ -3113,6 +3132,7 @@ function fireGun(e, spec, t, aim) {
     if (pc) { pc.owner = e; pc.shoot({ x: dir.x * spec.speed, y: dir.y * spec.speed, z: dir.z * spec.speed }); }
   } catch {}
   wallbang(e, spec, from, dir, l + 2);
+  return true;
 }
 // v6.9: through the wall, by accident. Nobody aims at a wall: but a shot that goes wide into cover, a burst at a window
 // that clips the frame, a man who ducks behind a fence as the trigger is pulled: about 3 in 10 of those go through, if
@@ -3160,7 +3180,10 @@ function gunTick(e, now) {
   const onNest = ridingNest(e);
   const spec = onNest ? NEST_SPEC : GUN_SPEC[d.weapon];
   if (pows.has(e.id)) return;
-  if (!spec || d.surr || d.retreat || d.div === "medic" || (!onNest && !P(e, "war:gun"))) { if (P(e, "war:aiming")) setP(e, "war:aiming", false); return; }
+  // (v6.9.2: falling back he still fires at anyone within 20: a wounded man in a building with nowhere to run used to
+  //  stand there and die without a shot)
+  const backOff = d.retreat && !(perc.get(e.id)?.threat?.isValid && dist(perc.get(e.id).threat.location, e.location) < 20);
+  if (!spec || d.surr || backOff || d.div === "medic" || (!onNest && !P(e, "war:gun"))) { if (P(e, "war:aiming")) setP(e, "war:aiming", false); return; }
   let st = gunState.get(e.id);
   if (!st) { st = { target: undefined, ammo: spec.mag, next: 0, seen: -999, check: 0, step: 0, back: 0 }; gunState.set(e.id, st); }
   if (now >= st.check) {
@@ -3195,7 +3218,7 @@ function gunTick(e, now) {
     const p = st.supp.p, hl = headLoc(e);
     // v6.9: only while there's still a line from where he stands NOW to that window / doorway. He kept walking (into a
     // building, behind a wall) and kept firing at the old spot: into the ceiling, into the wall in front of him.
-    if (!clearShot(e.dimension, hl, p) && !clearShot(e.dimension, hl, { x: p.x, y: p.y + 0.4, z: p.z })) { st.supp = undefined; st.next = now + 4; return; }
+    if (!openNow(e.dimension, hl, p) && !openNow(e.dimension, hl, { x: p.x, y: p.y + 0.4, z: p.z })) { st.supp = undefined; st.next = now + 4; return; }   // (v6.9.2: a fresh ray, not the memory)
     if (!friendlyInLine(e, d, hl, p, st.supp.ent) && turnTo(e, p, 20) <= 25) {
       fireAtPoint(e, spec, { x: p.x, y: p.y - 1, z: p.z });
       st.lastShot = now; st.ammo--;
@@ -3219,8 +3242,9 @@ function gunTick(e, now) {
   const aim = aimAt(e, t);
   if (!aim) { st.next = now + 6; st.target = undefined; return; } // the shot would hit the terrain: don't waste it
   const shaky = ((suppB.get(e.id) ?? 0) > 8 ? 1.8 : 1) * woundK(e);  // pinned down / badly wounded: shaky aim
-  if (st.wild > 0) { st.wild--; fireGun(e, { ...spec, spread: spec.spread * 3 * shaky }, t, aim); }
-  else fireGun(e, shaky === 1 ? spec : { ...spec, spread: spec.spread * shaky }, t, aim);
+  const fired = st.wild > 0 ? fireGun(e, { ...spec, spread: spec.spread * 3 * shaky }, t, aim) : fireGun(e, shaky === 1 ? spec : { ...spec, spread: spec.spread * shaky }, t, aim);
+  if (!fired) { st.next = now + 4; aimMemo.delete(`${e.id}>${t.id}`); return; }   // (v6.9.2: no open line this instant: hold fire)
+  if (st.wild > 0) st.wild--;
   firedOn(t, e, now);
   if (t.typeId === "minecraft:player") shotAtPlayer.set(t.id, now);
   if (d.weapon === "mg" && st.ammo === spec.mag) callout(e, "Suppressing!");
@@ -4711,6 +4735,7 @@ function stepCost(a, b, diag, job) {
   }
   if (job && inDead(job, b)) base += 40 * step;                 // a known dead end: only if there's truly nothing else
   if (step === 1 && TROUBLE.size && job?.dim) base += troubleAt(job.dim.id, b.x, b.z) * 2.5;   // v6.4: remembered trouble: round it if there's a way
+  if (step === 1 && KILLZONE.size && job?.dim) base += killAt(job.dim.id, b.x, b.z) * 6;      // v6.9.2: stairs where men were just cut down: the other way up
   if (job?.danger && step === 1) base += exposedCost(job, b);   // v5.7: in a fight, ground the enemy can see costs extra
   if (b.w) base *= 10;                                          // swimming: only when it saves a lot
   else if (b.shore) base += 0.6;                                // keep off the shoreline
@@ -5102,6 +5127,13 @@ system.runInterval(() => {
         if (!s) continue;
         const ids = new Set([...s.seen.keys()]); if (s.threat?.isValid) ids.add(s.threat.id);
         for (const id of ids) { const o = world.getEntity(id); if (o?.isValid && !isMob(o)) S.known.set(id, { ent: o, x: o.location.x, y: o.location.y, z: o.location.z, t: now }); }
+      }
+      // v6.9.2: heard, not seen: boots on the stairs, a fight in the room below. An enemy soldier within 10 blocks (walls
+      // and floors between) is known to the squad roughly where he is: enough to cover the stairs or the door he'll come
+      // through, never a target to shoot at.
+      for (const e of ours) for (const c of nearSnap(e.dimension.id, e.location, 10)) {
+        if (c.down || c.type !== SOLDIER || !c.f || !isHostile(d0.faction, c.f) || S.known.has(c.id) || !c.e.isValid) continue;
+        S.known.set(c.id, { ent: c.e, x: c.x, y: c.y, z: c.z, t: now - 20, heard: true });
       }
       for (const [id, kk] of [...S.known]) if (!kk.ent.isValid || now - kk.t > 300 || downed.has(id) || pows.has(id)) S.known.delete(id);
       const known = [...S.known.values()];
@@ -5869,6 +5901,7 @@ function goDown(e, killer) {
   } catch {}
   downed.set(e.id, now + 600);
   downPos.set(e.id, { ...e.location });
+  noteKillzone(e);
   sdp(e, "war:downed", now + 600);
   try { e.addEffect("slowness", 640, { amplifier: 6, showParticles: false }); e.addEffect("weakness", 640, { amplifier: 4, showParticles: false }); } catch {}
   setGroups(e, { w: "w_none", t: "t_off", g: "g_none", s: "s_1", d: "d_off", r: "r_off" });
@@ -6423,6 +6456,7 @@ function followPersonal(e, now) {
   // a fight on the way: errands are dropped (the brain fights); moving up to the enemy, he stops to take a clear shot
   const t = perc.get(e.id)?.threat;
   if (t?.isValid && ["patrol", "reinforce", "regroup"].includes(pr.kind)) return drop();
+  if ((pr.kind === "advance" || pr.kind === "engage") && stackAtStairs(e, pr, i, now)) { pr.hold = now + 25; pr.progT = now; note(e, "stacking up at the stairs"); return { g: "g_none", t: "t_mid", urgent: false }; }   // (v6.9.2)
   if (t?.isValid && (pr.kind === "advance" || pr.kind === "engage")) {
     if (shotAt(e, sd(e), t, now) && !tightAt(e.dimension, pr.pts, i, e.location)) { pr.hold = now + 30; pr.progT = now; note(e, "firing on the way"); return { g: "g_none", t: "t_mid", urgent: false }; }   // (never stops on the stairs: the men behind need them)
   }
@@ -6477,6 +6511,8 @@ function buildingMove(e, d, now, S, t, B, underFire, exposure, moving, anchor) {
   const defending = ["hold", "post", "sentry", "stand"].includes(d.func) && (!anchor || isIndoorsAt(e.dimension, anchor.location) || flat(anchor.location, e.location) < 12);
   if (inside && defending && S?.known?.size) {
     // the building is theirs: everyone on alert, facing the way in, firing from doorways and windows
+    if (t?.isValid && canHit(e, t)) { turnTo(e, t.location, 25); return undefined; }   // a shot: take it
+    if (GUNS.includes(d.weapon)) { const sw = stairWatch(e, d, S, now, B); if (sw) return sw; }   // (v6.9.2: the enemy's below: cover the stairheads)
     if (t?.isValid) { turnTo(e, t.location, 25); if (!canHit(e, t) && openWindow(e, t, now)) return { g: "g_none", t: "t_mid", urgent: false }; }
     note(e, "defending the building");
     return undefined;                                                   // (the brain / gunfire do the fighting from here)
@@ -6498,6 +6534,103 @@ function buildingMove(e, d, now, S, t, B, underFire, exposure, moving, anchor) {
   return undefined;
 }
 
+// ================================================================ v6.9.2: staircases are choke points
+// The top of a staircase (or ladder) is where anyone coming up has to show himself, one at a time. Defenders holding a
+// floor with the enemy below take spots that watch each stairhead on their floor (split between the stairheads, the one
+// nearest the enemy first). Attackers going up gather at the foot of the stairs ("stacking up"), then go up together
+// ("Go, go, go!") instead of one by one into the guns. A staircase where men were cut down is remembered for a while
+// as a killing ground: routes prefer another way up (the other staircase) if there is one.
+const MOUTHS = new Map(); // area key -> { t, list: [{ x, y, z }] }
+const stairish = (b) => !!b && (b.typeId.includes("stairs") || isClimb(b));
+function stairMouths(dim, at, R = 18) {
+  const fy = Math.floor(at.y + 0.01), k = `${dim.id}|${Math.floor(at.x / 8)}|${fy}|${Math.floor(at.z / 8)}`, now = tick();
+  const c = MOUTHS.get(k);
+  if (c && now - c.t < 400) return c.list;
+  const raw = [], bx = Math.floor(at.x), bz = Math.floor(at.z);
+  try {
+    for (let dx = -R; dx <= R; dx++) for (let dz = -R; dz <= R; dz++) {
+      const x = bx + dx, z = bz + dz;
+      if (!standAt(dim, x, fy, z, now) || stairish(tBlock(dim, x + 0.5, fy - 1, z + 0.5))) continue;   // a floor cell (not a step itself)
+      for (const [ox, oz] of [[1, 0], [-1, 0], [0, 1], [0, -1]]) {
+        const s1 = tBlock(dim, x + ox + 0.5, fy - 1, z + oz + 0.5), s2 = tBlock(dim, x + ox + 0.5, fy - 2, z + oz + 0.5);
+        if (stairish(s1) || (stairish(s2) && passable(s1))) { raw.push({ x: x + 0.5, y: fy, z: z + 0.5 }); break; }   // steps leading down from here
+      }
+    }
+  } catch {}
+  const list = [];
+  for (const p of raw) { const m = list.find((q) => Math.hypot(q.x - p.x, q.z - p.z) < 3.5); if (m) { m.n++; m.x += (p.x - m.x) / m.n; m.z += (p.z - m.z) / m.n; } else list.push({ ...p, n: 1 }); }
+  MOUTHS.set(k, { t: now, list });
+  if (MOUTHS.size > 300) MOUTHS.clear();
+  return list;
+}
+// the killing ground memory (short: ~2 min), per 2x2 cell, with the floor
+const KILLZONE = new Map(); // "dim|cx|cz" -> { n, t }
+function noteKillzone(e) {
+  try {
+    const l = e.location, dim = e.dimension;
+    const nearMouth = onStairs(dim, l) || stairMouths(dim, l, 6).some((m) => Math.hypot(m.x - l.x, m.z - l.z) < 2.5 && Math.abs(m.y - l.y) < 1.5);
+    if (!nearMouth) return;
+    const kk = troubleKey(dim.id, l.x, l.z), r = KILLZONE.get(kk) ?? { n: 0, t: 0 };
+    r.n = Math.min(6, r.n + 2); r.t = tick(); KILLZONE.set(kk, r);
+  } catch {}
+}
+const killAt = (dimId, x, z) => { const r = KILLZONE.get(troubleKey(dimId, x, z)); return r && tick() - r.t < 2400 ? r.n : 0; };
+system.runInterval(() => { const now = tick(); for (const [k, r] of KILLZONE) if (now - r.t > 2400) KILLZONE.delete(k); }, 200);
+// defenders: a spot 3-7 blocks from a stairhead, on the same floor, that sees a man's head coming up it
+function stairWatch(e, d, S, now, B) {
+  const dim = e.dimension, l = e.location;
+  const below = [...S.known.values()].filter((q) => q.y < l.y - 2.5 && Math.hypot(q.x - l.x, q.z - l.z) < 40);
+  if (!below.length) { B.stair = undefined; return undefined; }
+  if (B.stair && now - B.stair.t < 200 && marker(B.stair.slot)) {
+    const sp = B.stair.spot;
+    if (flat(sp, l) < 1.3 && Math.abs(sp.y - l.y) < 1) { turnTo(e, B.stair.mouth, 25); note(e, "covering the stairs"); return { g: "g_none", t: "t_mid", urgent: false }; }
+    note(e, "taking the stairs"); return { g: "g_wp", slot: B.stair.slot, t: "t_mid", urgent: true };
+  }
+  const mouths = stairMouths(dim, l).filter((m) => Math.abs(m.y - Math.floor(l.y + 0.01)) < 1 && flat(m, l) < 20);
+  if (!mouths.length) return undefined;
+  const ec = below.reduce((a, q) => ({ x: a.x + q.x / below.length, z: a.z + q.z / below.length }), { x: 0, z: 0 });
+  mouths.sort((a, b) => Math.hypot(a.x - ec.x, a.z - ec.z) - Math.hypot(b.x - ec.x, b.z - ec.z));
+  // my share: the squad's defenders on this floor in id order, dealt round the stairheads (nearest the enemy first)
+  const mates = nearbyCombatants(dim.id, l, 24).filter((o) => o.typeId === SOLDIER && !downed.has(o.id) && sd(o).squad === d.squad && Number(P(o, "war:faction")) === d.faction && Math.abs(o.location.y - l.y) < 2 && GUNS.includes(sd(o).weapon)).map((o) => o.id).sort();
+  const i = Math.max(0, mates.indexOf(e.id)), mouth = mouths[i % mouths.length];
+  const head = { x: mouth.x, y: mouth.y + 0.6, z: mouth.z };                // a man's head as he comes up the last step
+  let best, bs = -1e9, rays = 0;
+  for (let r = 3; r <= 7 && rays < 14; r++) for (let k = 0; k < 8 && rays < 14; k++) {
+    const a = (k / 8) * Math.PI * 2 + i * 0.7;
+    const q = walkableNear(dim, mouth.x + Math.cos(a) * r, mouth.z + Math.sin(a) * r, mouth.y);
+    if (!q || Math.abs(q.y - mouth.y) > 0 || onWayThrough(dim, q) || claimedByOther(q, e.id, now) || mouths.some((m) => flat(m, q) < 2)) continue;
+    rays++;
+    if (!clearShot(dim, { x: q.x, y: q.y + 1.6, z: q.z }, head)) continue;
+    const sc = -Math.abs(r - 5) - flat(q, l) * 0.15;
+    if (sc > bs) { bs = sc; best = q; }
+  }
+  if (!best) return undefined;
+  claimSpot(e, best, now);
+  const slot = myMarker(e, best);
+  if (!slot) return undefined;
+  B.stair = { mouth, spot: best, slot, t: now };
+  if (Math.random() < 0.4) callout(e, "Hold position!");
+  note(e, "taking the stairs");
+  return { g: "g_wp", slot, t: "t_mid", urgent: true };
+}
+// attackers: about to climb to a floor where the enemy is: wait at the foot for the others, then all go
+const stackUp = new Map(); // "squad|stair cell" -> { t0, go }
+function stackAtStairs(e, pr, i, now) {
+  const d = sd(e), S = squads.get(squadKey(e, d)), l = e.location;
+  if (!S?.known?.size || (S.n ?? 0) < 2) return false;
+  let climb = -1;
+  for (let k = i; k < Math.min(pr.pts.length, i + 4); k++) if (pr.pts[k].y > l.y + 0.4 && onStairs(e.dimension, pr.pts[k])) { climb = k; break; }
+  if (climb < 0 || flat(pr.pts[climb], l) > 3) return false;
+  const up = [...S.known.values()].some((q) => q.y >= l.y + 2.5 && Math.hypot(q.x - l.x, q.z - l.z) < 30);
+  if (!up) return false;
+  const p = pr.pts[climb], key = `${squadKey(e, d)}|${Math.floor(p.x)}|${Math.floor(p.y)}|${Math.floor(p.z)}`;
+  let st = stackUp.get(key);
+  if (!st || now - st.t0 > 900) { st = { t0: now, go: 0 }; stackUp.set(key, st); if (stackUp.size > 200) stackUp.clear(); }
+  if (st.go && now - st.go < 200) return false;                              // the stack is going: up he goes
+  const here = nearbyCombatants(e.dimension.id, l, 5).filter((o) => o.typeId === SOLDIER && !downed.has(o.id) && Number(P(o, "war:faction")) === d.faction && sd(o).squad === d.squad).length;   // (him included)
+  if (here >= Math.min(3, S.n) || now - st.t0 > 120) { st.go = now; callout(e, "Go, go, go!"); radio(e, "going up the stairs", true); return false; }
+  return true;
+}
 // ---- general's view: the camera hangs above a ground cursor and looks straight down, so the middle of your
 // screen (your crosshair) IS the cursor. Look further up to push it out (up to ~160 blocks), down to pull it in;
 // turn to swing it around. You stay where you are. Any baton order (or backing out) ends it; so does dying.
@@ -7128,6 +7261,11 @@ system.runInterval(() => {
       const tight = !pts.guess && (glideBan.get(e.id) ?? 0) <= now && (remote || ahead < 0 || tightAt(e.dimension, pts, i, e.location));
       if (tight) {
         const g = gliders.get(e.id);
+        if (!remote && stackAtStairs(e, { pts }, i, now)) {           // (v6.9.2: the enemy's up there: gather at the foot, then all go)
+          gliders.set(e.id, { pts, k: g && g.pts === pts ? g.k : glideStart(pts, i, e.location), t: now, paused: true, wait: 0, blocked: 0 });
+          myMarker(e, e.location); note(e, "stacking up at the stairs");
+          continue;
+        }
         const queued = queuedBehind(e, pts, i);
         const wait = queued ? (g?.wait ?? 0) + 4 : 0;
         const k = g && g.pts === pts ? g.k : glideStart(pts, i, e.location);
@@ -7637,7 +7775,7 @@ function suppressPoint(e, d, S, now) {
   const h = headLoc(e);
   let best, bd = 1e9;
   for (const q of S.known.values()) {
-    if (now - q.t > 60) continue;
+    if (now - q.t > 30) continue;
     const dd = Math.hypot(q.x - h.x, q.z - h.z);
     if (dd >= bd || dd > engageRange(e, d, q.ent, now)) continue;
     let p = { x: q.x, y: q.y + 1.2, z: q.z };

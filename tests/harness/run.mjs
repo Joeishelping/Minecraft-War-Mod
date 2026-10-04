@@ -16,7 +16,7 @@ const runDir = path.join(here, `run_${process.pid}`);
 fs.mkdirSync(runDir, { recursive: true });
 fs.cpSync(scriptsDir, runDir, { recursive: true });
 // expose the add-on's internals to the scenarios (appended to the copy only)
-const HOOK = ["bangCount", "wallbang", "WALLBANG", "perchSpot", "safeSpot", "dangerNear", "voiceMenu", "callout", "warTable", "eggUse", "getRel", "relAt", "fires", "coalitions", "held", "holding", "stagger", "putDown", "allOf", "edgeFearT", "cleanupMenu", "purgeState", "gliders", "glideBan", "driveOn", "formMode", "tightAt", "combatLock", "routeProgress", "getLearned", "learned", "generals", "planRoute", "BW", "BW_F", "HEAD_K", "medicMove", "shakenMove", "waterExit", "followPersonal", "spreadMove", "combatMove", "engagement", "reinforceMove", "patrolSweep", "marker", "think", "routeOf", "lookahead", "queuedBehind", "climbing", "laneOf", "trackIdx", "giveOrder", "startMarch", "giveFunction", "setupSoldier", "sd", "perc", "squads", "getMarches", "personal", "downed", "goDown", "marker", "gunState", "brain", "notes", "setRelPair", "travel", "isDowned"];
+const HOOK = ["shotAt", "canHit", "aimAt", "closeEnemy", "friendlyInLine", "bangCount", "wallbang", "WALLBANG", "perchSpot", "safeSpot", "dangerNear", "voiceMenu", "callout", "warTable", "eggUse", "getRel", "relAt", "fires", "coalitions", "held", "holding", "stagger", "putDown", "allOf", "edgeFearT", "cleanupMenu", "purgeState", "gliders", "glideBan", "driveOn", "formMode", "tightAt", "combatLock", "routeProgress", "getLearned", "learned", "generals", "planRoute", "BW", "BW_F", "HEAD_K", "medicMove", "shakenMove", "waterExit", "followPersonal", "spreadMove", "combatMove", "engagement", "reinforceMove", "patrolSweep", "marker", "think", "routeOf", "lookahead", "queuedBehind", "climbing", "laneOf", "trackIdx", "giveOrder", "startMarch", "giveFunction", "setupSoldier", "sd", "perc", "squads", "getMarches", "personal", "downed", "goDown", "marker", "gunState", "brain", "notes", "setRelPair", "travel", "isDowned"];
 if (opt.thinkdbg) { const f = path.join(runDir, "main.js"); fs.writeFileSync(f, fs.readFileSync(f, "utf8").replace("    // how far each stationary order may leave its spot to fight", "    if (globalThis.__thinkDbg) globalThis.__thinkDbg(e, engaged, cu, d);\n    // how far each stationary order may leave its spot to fight")); }
 fs.appendFileSync(path.join(runDir, "main.js"), `\nglobalThis.__war = {};\n${HOOK.map((n) => `try { globalThis.__war.${n} = ${n}; } catch {}`).join("\n")}\n`);
 loadDefs(path.join(root, "War Engine BP"));
@@ -771,6 +771,29 @@ const S = {
     const keys = {}; for (const v of SIM.voices) { const k = v.split(" ")[1].split(".").pop(); keys[k] = (keys[k] ?? 0) + 1; }
     report({ ticks: SIM.tick - t0, upA: A.filter((e) => e.isValid && !W.isDowned(e)).length, upB: B.filter((e) => e.isValid && !W.isDowned(e)).length, plan, counter, back, callsFight, lines: keys, notes: M.notes });
   },
+  // v6.9.2: a building's upper floor held against attackers coming up the stairs. Defenders (hold, floor 1 at y 6)
+  //   should cover the stairhead; attackers should stack up at the foot of the stairs and go up together.
+  async stairFight() {
+    const B0 = building(0, 0, { windows: opt.windows !== "0" });
+    if (opt.two) { for (let i = 0; i < 5; i++) setBlock(9, i, 9 - i, "oak_stairs"); fill(9, 5, 5, 9, 5, 9, "air"); }   // a second staircase
+    spawnPlayer({ x: 6, y: 0, z: -12 });
+    W.setRelPair(1, 2, "1", false);
+    const def = []; for (let i = 0; i < Number(opt.def ?? 4); i++) def.push(soldier(2, { x: 2 + i * 2 + 0.5, y: 6, z: 9.5 }, "rifle", 1, "hold"));
+    const att = []; for (let i = 0; i < Number(opt.att ?? 6); i++) att.push(soldier(1, { x: 2 + (i % 3) * 2 + 0.5, y: 0, z: -8 - Math.floor(i / 3) * 2 + 0.5 }, ["rifle", "smg", "semi"][i % 3]));
+    step(20); SIM.voices = [];
+
+    await order(1, { x: 6, y: 6, z: 7 }, "hold");
+    const t0 = SIM.tick, dn = {}, an = {};
+    for (let t = 0; t < Number(opt.ticks ?? 2400); t += 10) {
+      step(10);
+      for (const [L, N] of [[def, dn], [att, an]]) for (const e of L) { if (!e.isValid || W.isDowned(e)) continue; const n = W.notes.get(e.id); if (n && SIM.tick - n.t < 20) N[n.text.replace(/\d+/g, "#")] = (N[n.text.replace(/\d+/g, "#")] ?? 0) + 1; }
+      if (opt.gdbg && SIM.tick % 5 === 0) { const e = def[Number(opt.gdbg)]; if (e.isValid && !W.isDowned(e)) { const d = W.sd(e), t = W.perc.get(e.id)?.threat, gs = W.gunState.get(e.id); console.error("G", SIM.tick, "threat", t ? `${t._loc.x.toFixed(1)},${t._loc.y.toFixed(1)},${t._loc.z.toFixed(1)}` : "-", "can", t ? W.canHit(e, t) : "-", "shotAt", t ? !!W.shotAt(e, d, t, SIM.tick) : "-", "close", !!W.closeEnemy(e, d, 2.5), "gs", gs ? `tgt=${gs.target ? 1 : 0} next=${gs.next - SIM.tick} ammo=${gs.ammo}` : "-", "gun", e.props.get("war:gun"), "w", d.weapon, [...e.groups].filter((g) => /w_|t_/.test(g)).join(","), "note", W.notes.get(e.id)?.text); } }
+      if (opt.trace && SIM.tick % Number(opt.trace) === 0) console.error("T", SIM.tick, def.map((e) => `${e._loc.x.toFixed(0)},${e._loc.y.toFixed(0)},${e._loc.z.toFixed(0)}${W.isDowned(e) ? "D" : ""}:${(W.notes.get(e.id)?.text ?? "").slice(0, 16)}`).join(" | "), "||", att.map((e) => `${e._loc.x.toFixed(0)},${e._loc.y.toFixed(0)},${e._loc.z.toFixed(0)}${W.isDowned(e) ? "D" : ""}:${(W.notes.get(e.id)?.text ?? "").slice(0, 16)}`).join(" "));
+      if (!def.some((e) => e.isValid && !W.isDowned(e)) || !att.some((e) => e.isValid && !W.isDowned(e))) break;
+    }
+    const keys = {}; for (const v of SIM.voices) { const k = v.split(" ")[1].split(".").pop(); keys[k] = (keys[k] ?? 0) + 1; }
+    report({ ticks: SIM.tick - t0, defUp: def.filter((e) => e.isValid && !W.isDowned(e)).length, attUp: att.filter((e) => e.isValid && !W.isDowned(e)).length, defNotes: dn, attNotes: an, lines: keys, attShots: shotStats(1, t0), defShots: shotStats(2, t0) });
+  },
   // v6.6: weapons. mode=molotov: 6 molotov soldiers vs 6 swordsmen; mode=spear: 6 spears vs 6 swords (melee duel)
   async weapons() {
     SIM.bounds = { x0: -40, x1: 40, z0: -40, z1: 60, y0: -8, y1: 30 };
@@ -788,6 +811,7 @@ const S = {
     }
     for (let i = 0; i < 6; i++) B.push(soldier(2, { x: -5 + i * 2 + 0.5, y: 0, z: (["molotov", "grenade", "at", "legacy"].includes(mode) ? 16 : 10) + 0.5 }, opt.foe ?? "sword", 1, "hold"));
     step(40);
+    if (opt.nlog) globalThis.__nadeLog = (e, t, g) => console.error("NADE", SIM.tick, "from", e._loc.x.toFixed(1), e._loc.z.toFixed(1), "tgt", t._loc.x.toFixed(1), t._loc.z.toFixed(1), "land", g.x.toFixed(1), g.z.toFixed(1), "f", t.props.get("war:faction"));
     await W.giveOrder(player, { faction: 2, order: 0, squad: 0, count: 0, radius: 200, stance: "aggressive", ao: 100, free: true, target: 5, cx: 0, cz: 0, cy: 0, then: "hold" });
     let maxFires = 0, t0 = SIM.tick, booms = 0; const ex0 = MC.world.getDimension("overworld").createExplosion; MC.world.getDimension("overworld").createExplosion = function (...a) { booms++; if (opt.boomlog) console.error("BOOM", SIM.tick, JSON.stringify(a[0]), JSON.stringify({ ...a[2], source: !!a[2]?.source })); return ex0.apply(this, a); };
     for (let t = 0; t < Number(opt.ticks ?? 1600); t += 10) {
