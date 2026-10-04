@@ -118,7 +118,7 @@ SIM.shots.push = (x) => { try { const o = x.owner; let bd = 1e9; for (const e of
   let seeAny = false; const f0 = x.from;
   for (const e of alive()) { if (seeAny || e === o || W.isDowned(e) || e.props.get("war:faction") === o.props.get("war:faction")) continue; if (Math.hypot(e._loc.x - f0.x, e._loc.z - f0.z) > 80) continue;
     for (const hy of [0.6, 1.2, 1.7]) { const t = { x: e._loc.x, y: e._loc.y + hy, z: e._loc.z }, dx = t.x - f0.x, dy = t.y - f0.y, dz = t.z - f0.z, L = Math.hypot(dx, dy, dz) || 1; if (!overworld.getBlockFromRay(f0, { x: dx / L, y: dy / L, z: dz / L }, { maxDistance: L - 0.3 })) { seeAny = true; break; } } }
-  x.blind = !seeAny; if (x.blind && opt.blindlog) { const gs = W.gunState.get(o.id), tg = gs?.target; console.error("BLIND", SIM.tick, "wb", !!x.wb, "from", f0.x.toFixed(1), f0.y.toFixed(1), f0.z.toFixed(1), "tgt", tg ? `${tg._loc.x.toFixed(1)},${tg._loc.y.toFixed(1)},${tg._loc.z.toFixed(1)} down=${W.isDowned(tg)} fac=${tg.props?.get("war:faction")} type=${tg.typeId}` : "-", "supp", !!gs?.supp, "shooter", o._loc.x.toFixed(1), o._loc.y.toFixed(1), o._loc.z.toFixed(1)); } } catch {} return origPush(x); };
+  x.blind = !seeAny; { const tg = W.gunState.get(o.id)?.target ?? W.gunState.get(o.id)?.supp?.ent; if (tg?._loc) x.tgtD = Math.hypot(tg._loc.x - f0.x, tg._loc.y + 1.2 - f0.y, tg._loc.z - f0.z); } if (x.blind && opt.blindlog) { const gs = W.gunState.get(o.id), tg = gs?.target; console.error("BLIND", SIM.tick, "wb", !!x.wb, "from", f0.x.toFixed(1), f0.y.toFixed(1), f0.z.toFixed(1), "tgt", tg ? `${tg._loc.x.toFixed(1)},${tg._loc.y.toFixed(1)},${tg._loc.z.toFixed(1)} down=${W.isDowned(tg)} fac=${tg.props?.get("war:faction")} type=${tg.typeId}` : "-", "supp", !!gs?.supp, "shooter", o._loc.x.toFixed(1), o._loc.y.toFixed(1), o._loc.z.toFixed(1)); } } catch {} return origPush(x); };
 // v6.0: teleports of more than 2.5 blocks (rescues / anything that jumps a soldier)
 let bigTp = 0;
 { const tp0 = MC.Entity.prototype.teleport; MC.Entity.prototype.teleport = function (loc, o) { if (this.typeId === SOLDIER && this._loc && Math.hypot(loc.x - this._loc.x, loc.y - this._loc.y, loc.z - this._loc.z) > 2.5) { bigTp++; if (opt.tplog) console.error("TP", SIM.tick, JSON.stringify(this._loc), "->", JSON.stringify(loc), W.notes?.get?.(this.id)?.text, opt.tplog === "2" ? new Error().stack.split("\n").slice(2, 5).map((s) => s.trim().replace(/\(.*main.js:/, "(")).join(" < ") : ""); } return tp0.call(this, loc, o); }; }
@@ -858,7 +858,7 @@ const S = {
     const GT = {}; if (opt.gt) globalThis.__gt = (e, n) => { if (def.includes(e) && SIM.tick > 300) GT[n] = (GT[n] ?? 0) + 1; };
     if (opt.mode === "in") await order(1, { x: 15, y: 6, z: 14 }, "hold"); else await order(1, { x: 15, y: 0, z: -14 }, "hold");
     const t0 = SIM.tick, dn = {}, an = {}; let firstDef = -1, firstAtt = -1, defDown = 0, bunch = 0, bunchN = 0;
-    const stairUse = { west: new Set(), east: new Set() };
+    const stairUse = { west: new Set(), east: new Set() }; let attUpMax = 0, firstAttUp = -1, firstBreach = -1, defGroundAtBreach = -1, defGround400 = -1;
     for (let t = 0; t < Number(opt.ticks ?? 3600); t += 10) {
       step(10);
       for (const [L, N] of [[def, dn], [att, an]]) for (const e of L) { if (!e.isValid || W.isDowned(e)) continue; const n = W.notes.get(e.id); if (n && SIM.tick - n.t < 20) N[n.text.replace(/\d+/g, "#")] = (N[n.text.replace(/\d+/g, "#")] ?? 0) + 1; }
@@ -869,12 +869,17 @@ const S = {
       if (firstDef < 0 && shotStats(2, t0).shots) firstDef = SIM.tick - t0;
       if (firstAtt < 0 && shotStats(1, t0).shots) firstAtt = SIM.tick - t0;
       if (opt.trace && SIM.tick % Number(opt.trace) === 0) console.error("T", SIM.tick, def.map((e) => `${e._loc.x.toFixed(0)},${e._loc.y.toFixed(0)},${e._loc.z.toFixed(0)}${W.isDowned(e) ? "D" : ""}:${(W.notes.get(e.id)?.text ?? "").slice(0, 14)}`).join(" | "), "||", att.map((e) => `${e._loc.x.toFixed(0)},${e._loc.y.toFixed(0)},${e._loc.z.toFixed(0)}${W.isDowned(e) ? "D" : ""}:${(W.notes.get(e.id)?.text ?? "").slice(0, 12)}`).join(" "));
+      { const inB = (e) => e._loc.x > 0.5 && e._loc.x < 31 && e._loc.z > 0.5 && e._loc.z < 19;
+        const aUp = att.filter((e) => e.isValid && !W.isDowned(e) && inB(e) && e._loc.y > 5.5).length; attUpMax = Math.max(attUpMax, aUp); if (aUp && firstAttUp < 0) firstAttUp = SIM.tick - t0;
+        if (firstBreach < 0 && att.some((e) => e.isValid && !W.isDowned(e) && inB(e))) { firstBreach = SIM.tick - t0; defGroundAtBreach = def.filter((e) => e.isValid && !W.isDowned(e) && inB(e) && e._loc.y < 3).length; }
+        if (firstBreach < 0 && SIM.tick - t0 >= 400 && defGround400 < 0) defGround400 = def.filter((e) => e.isValid && !W.isDowned(e) && inB(e) && e._loc.y < 3).length; }
       if (!def.some((e) => e.isValid && !W.isDowned(e)) || !att.some((e) => e.isValid && !W.isDowned(e))) break;
     }
     const top = (N) => Object.fromEntries(Object.entries(N).sort((a, b) => b[1] - a[1]).slice(0, 8));
     const blind = (f) => { const a = SIM.shots.filter((x) => x.t >= t0 && x.owner?.props?.get("war:faction") === f); return a.length ? +(a.filter((x) => x.blind).length / a.length).toFixed(2) : 0; };
     const blk = (f) => { const a = SIM.shots.filter((x) => x.t >= t0 && x.owner?.props?.get("war:faction") === f); return a.length ? +(a.filter((x) => x.block).length / a.length).toFixed(2) : 0; };
-    report({ GT: opt.gt ? GT : undefined, wallShare: { def: blk(2), att: blk(1) }, blindShare: { def: blind(2), att: blind(1) }, blindWhy: (() => { const a = SIM.shots.filter((x) => x.t >= t0 && x.blind); return { n: a.length, wb: a.filter((x) => x.wb).length, supp: a.filter((x) => x.supp).length, at: a.filter((x) => (x.typeId ?? "").includes("bazooka")).length }; })(), mode: opt.mode ?? "out", ticks: SIM.tick - t0, defUp: def.filter((e) => e.isValid && !W.isDowned(e)).length, attUp: att.filter((e) => e.isValid && !W.isDowned(e)).length, firstDef, firstAtt, defShots: shotStats(2, t0).shots, attShots: shotStats(1, t0).shots, defsDownstairs: defDown, defBunch: +(bunch / Math.max(1, bunchN)).toFixed(2), stairs: { west: stairUse.west.size, east: stairUse.east.size }, defNotes: top(dn), attNotes: top(an) });
+    const shortB = (f) => { const a = SIM.shots.filter((x) => x.t >= t0 && x.owner?.props?.get("war:faction") === f); return a.length ? +(a.filter((x) => x.block && (x.tgtD === undefined || x.blockD < x.tgtD - 0.8)).length / a.length).toFixed(2) : 0; };
+    report({ GT: opt.gt ? GT : undefined, wallShare: { def: blk(2), att: blk(1) }, coverHit: { def: shortB(2), att: shortB(1) }, hitShare: { def: +(shotStats(2, t0).hit / Math.max(1, shotStats(2, t0).shots)).toFixed(2), att: +(shotStats(1, t0).hit / Math.max(1, shotStats(1, t0).shots)).toFixed(2) }, blindShare: { def: blind(2), att: blind(1) }, blindWhy: (() => { const a = SIM.shots.filter((x) => x.t >= t0 && x.blind); return { n: a.length, wb: a.filter((x) => x.wb).length, supp: a.filter((x) => x.supp).length, at: a.filter((x) => (x.typeId ?? "").includes("bazooka")).length }; })(), mode: opt.mode ?? "out", attUpMax, firstAttUp, firstBreach, defGroundAtBreach, defGround400, ticks: SIM.tick - t0, defUp: def.filter((e) => e.isValid && !W.isDowned(e)).length, attUp: att.filter((e) => e.isValid && !W.isDowned(e)).length, firstDef, firstAtt, defShots: shotStats(2, t0).shots, attShots: shotStats(1, t0).shots, defsDownstairs: defDown, defBunch: +(bunch / Math.max(1, bunchN)).toFixed(2), stairs: { west: stairUse.west.size, east: stairUse.east.size }, defNotes: top(dn), attNotes: top(an) });
   },
   // v7.0: patrol / roam inside the two-storey hall (no enemy): how much of the building do they cover, which floors
   async roamTest() {
@@ -892,12 +897,12 @@ const S = {
     player._loc = { x: 15, y: 6, z: 12 };
     globalThis.__aim = { x: 15, y: 6, z: 12 };
     const o = opt.mode === "roam" ? 7 : 2;
-    W.generals.set(player.id, { cursor: { x: 15.5, y: 6, z: 11.5 } });
+    W.generals.set(player.id, { cursor: opt.at === "down" ? { x: 15.5, y: 0, z: 6.5 } : { x: 15.5, y: 6, z: 11.5 } });
     await W.giveOrder(player, { faction: 1, order: o, squad: 0, count: 0, radius: 200, stance: "aggressive", ao: 100, free: true });
     W.generals.delete(player.id);
-    const cells = new Set(), floors = new Set(), outside = new Set();
-    for (let t = 0; t < Number(opt.ticks ?? 2400); t += 10) { step(10); for (const e of men) { cells.add(`${Math.floor(e._loc.y / 3)}|${Math.floor(e._loc.x / 3)}|${Math.floor(e._loc.z / 3)}`); floors.add(e._loc.y > 4 ? "up" : "down"); if (e._loc.z < 0 || e._loc.z > 19 || e._loc.x < 0 || e._loc.x > 31) outside.add(e.id); } }
-    report({ mode: opt.mode ?? "patrol", cells: cells.size, floors: [...floors], wentOutside: outside.size, notes: Object.fromEntries([...new Set(men.map((e) => W.notes.get(e.id)?.text))].map((k) => [k, 1])) });
+    const cells = new Set(), floors = new Set(), outside = new Set(); let downAt = -1;
+    for (let t = 0; t < Number(opt.ticks ?? 2400); t += 10) { step(10); if (downAt < 0 && men.filter((e) => e._loc.y < 3).length >= 3) downAt = t; for (const e of men) { cells.add(`${Math.floor(e._loc.y / 3)}|${Math.floor(e._loc.x / 3)}|${Math.floor(e._loc.z / 3)}`); floors.add(e._loc.y > 4 ? "up" : "down"); if (e._loc.z < 0 || e._loc.z > 19 || e._loc.x < 0 || e._loc.x > 31) outside.add(e.id); } }
+    report({ mode: opt.mode ?? "patrol", at: opt.at ?? "up", downAt, cells: cells.size, floors: [...floors], wentOutside: outside.size, notes: Object.fromEntries([...new Set(men.map((e) => W.notes.get(e.id)?.text))].map((k) => [k, 1])) });
   },
   // v7.0: menus A-Z: answers are given by the position shown, and must come back as the original choice
   async abcTest() {
@@ -1133,6 +1138,38 @@ const S = {
   },
 
   // open-field battle, N v N: script cost per tick (the lag)
+  // v7.2: long trips that cross stairs. mode=down: top floor of a building -> 160 blocks away; up: 160 blocks away -> top floor;
+  // terrace: a 6-high ridge across the map, crossed only by a 1-wide stone staircase. n = squad size, mobs=1 adds zombies on the way
+  async trip() {
+    const N = Number(opt.n ?? 8), mode = opt.mode ?? "down";
+    SIM.bounds = { x0: -60, x1: 60, z0: -200, z1: 40, y0: -8, y1: 40 };
+    spawnPlayer({ x: 6, y: 0, z: -60 });
+    let start, dest, okFn;
+    if (mode === "terrace") {
+      fill(-60, 0, -80, 60, 5, -70, "stone"); for (let i = 0; i < 6; i++) { setBlock(0, i, -69 - i, "stone_brick_stairs"); setBlock(1, i, -69 - i, "air"); } fill(0, 0, -80, 0, 5, -75, "stone");
+      for (let i = 0; i < 6; i++) fill(0, i + 1, -69 - i, 0, 7, -69 - i, "air");
+      start = (i) => ({ x: (i % 6) * 2 - 5 + 0.5, y: 0, z: -20 - Math.floor(i / 6) * 2 + 0.5 }); dest = { x: 0, y: 6, z: -170 }; okFn = (e) => Math.hypot(e._loc.x - dest.x, e._loc.z - dest.z) < 14;
+      // the top of the ridge continues as a plateau to the destination
+      fill(-60, 0, -200, 60, 5, -81, "stone");
+    } else {
+      building(0, 0, { windows: false });
+      if (mode === "down") { start = (i) => ({ x: 2 + (i % 9) + 0.5, y: 11, z: 2 + Math.floor(i / 9) * 2 + 0.5 }); dest = { x: 6, y: 0, z: -160 }; okFn = (e) => Math.hypot(e._loc.x - dest.x, e._loc.z - dest.z) < 14 && e._loc.y < 1.5; }
+      else { start = (i) => ({ x: (i % 8) * 2 - 2 + 0.5, y: 0, z: -150 - Math.floor(i / 8) * 2 + 0.5 }); dest = { x: 7, y: 11, z: 6 }; okFn = (e) => e._loc.y > 10.5; }
+    }
+    const team = []; for (let i = 0; i < N; i++) team.push(soldier(1, start(i), ["rifle", "smg", "semi", "mg"][i % 4]));
+    if (opt.mobs) for (let i = 0; i < 6; i++) overworld.spawnEntity("minecraft:zombie", { x: -6 + i * 3 + 0.5, y: mode === "terrace" ? 6 : 0, z: mode === "terrace" ? -120 : -80 + 0.5 });
+    step(20);
+    await order(1, dest);
+    const t0 = SIM.tick, need = Math.max(1, Math.ceil(N * 0.85)); let arrived = -1, firstMove = -1, pauses = 0; const st = new Map();
+    for (let t = 0; t < Number(opt.ticks ?? 4800) && arrived < 0; t += 10) {
+      step(10); sample(1);
+      for (const e of team) { if (!e.isValid) continue; const lp = st.get(e.id); if (lp && Math.hypot(lp.x - e._loc.x, lp.z - e._loc.z) < 0.3 && !okFn(e)) pauses++; st.set(e.id, { ...e._loc }); }
+      if (firstMove < 0 && team.some((e, k) => Math.hypot(e._loc.x - start(k).x, e._loc.z - start(k).z) > 3)) firstMove = SIM.tick - t0;
+      if (opt.trace && SIM.tick % Number(opt.trace) === 0) console.error(SIM.tick, team.slice(0, 10).map((e) => `${e._loc.x.toFixed(0)},${e._loc.y.toFixed(0)},${e._loc.z.toFixed(0)}:${(W.notes.get(e.id)?.text ?? "").slice(0, 16)}`).join(" | "));
+      if (team.filter((e) => e.isValid && okFn(e)).length >= need) arrived = SIM.tick - t0;
+    }
+    report({ mode, n: N, arrivedTicks: arrived, there: team.filter((e) => e.isValid && okFn(e)).length, firstMove, stillPerMan: +(pauses / N).toFixed(1), final: team.slice(0, 12).map((e) => `${Math.round(e._loc.x)},${Math.round(e._loc.y)},${Math.round(e._loc.z)}`), notes: Object.fromEntries(Object.entries(M.notes).sort((a, b) => b[1] - a[1]).slice(0, 8)), ...callsPerTick(SIM.tick) });
+  },
   async big() {
     const N = Number(opt.n ?? 100);
     SIM.bounds = { x0: -300, x1: 300, z0: -300, z1: 300, y0: -10, y1: 60 };

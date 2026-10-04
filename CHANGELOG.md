@@ -1,5 +1,43 @@
 # War Engine changelog
 
+## v7.2 (Every man marches on his own, a round needs a clear flight, a house is held like a house)
+
+- **Squads no longer stall on long orders.** In earlier versions nobody in a march walked his own route. A shared
+  "guide" moved on only as fast as the slower 60% of the squad, and everyone walked to a spot around it. A few men
+  snagged on a staircase, a mob in the way or a jam in a doorway, and the whole squad stood still. That is why one
+  soldier could make 200 blocks when 30, 60 or 120 couldn't. Any fight, even with a zombie, also froze the guide for
+  up to 20 s. Now:
+  - Each man follows the squad's route by his own progress.
+  - Side by side in the open, single file on stairs and in doorways.
+  - Nobody waits for anyone behind him. Only a man far out in front eases off until the squad closes up.
+  - Each man has his own watchdog. After 3 s without headway he is carried over the bit he's stuck on; after 6 s he
+    works out a fresh route of his own; after 15 s he is put back on the route a few blocks ahead.
+  - In the simulator, a 90-man squad that moved about 5 blocks in 20 s now crosses the field. 8- and 30-man squads
+    going in and out of buildings and up stepped slopes stand still about half as long.
+- **Mobs never stop an order.** On the move, soldiers shoot a zombie or skeleton as they go instead of stopping,
+  repositioning or chasing it. Only real enemy soldiers and players halt a march (for up to ~20 s).
+- **No more shooting into walls.** Every round now needs a clear flight. The spread of each shot is drawn first and
+  that exact line is checked all the way to the man. If it would hit the wall, window frame or parapet in front of
+  him, the soldier waits for a better sight picture; after three bad draws he doesn't fire at all. A man showing only
+  a sliver behind cover is not a shot. What still hits a wall is a miss that flew past the man into whatever is
+  behind him. In the siege test, shots that struck cover in front of the target went from up to 31% to about 0–2%.
+  Shooting through walls (wallbang) is gone.
+- **A building is held like a building.** Squads no longer pick one plan at random (everyone to the windows, or
+  everyone out of the door). They split the jobs:
+  - **Holding a house, before anyone shows up:** a few men inside the ground floor covering the ways in, a man on
+    each stairhead, the rest spread over the upper windows.
+  - **Under attack:** the same jobs. Once the enemy breaks in, the door men (and anyone at a window with no shot)
+    fight them on that floor, while the stairheads stay held.
+  - **Attacking a building:** a support group shoots at the windows from outside, and an assault group goes in,
+    clears the ground floor and goes up every staircase where the enemy is.
+  - The shares change a little every time, and with the odds and how long it's been quiet.
+  - In the building-assault test, attackers made it upstairs in 2 of 3 fights (none in v7.1).
+- **Patrols and roaming cover every floor.**
+  - A patrol in a building walks all of it, up and down the stairs.
+  - Roam picks spots around the spot you ordered, not around wherever each man stands, so "roam downstairs" brings
+    them downstairs.
+  - Nobody heads for a spot another man is already going to.
+
 ## v7.1 (They see what you see, stairs are stairs, a quiet radio)
 
 - **If you can't see him, they can't shoot him.** They still hear and sense where the enemy is, and use that to move,

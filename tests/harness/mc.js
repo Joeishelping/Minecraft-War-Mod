@@ -433,7 +433,7 @@ function bulletTick(b) {
       if (Math.hypot(dx, dz) < 2.5 && dy > -0.5 && dy < 2.5 && b.owner && hostileTo(b.owner, o)) b.shotLog.nearEnemy = true;
       if (Math.hypot(dx, dz) < 0.35 && dy > 0 && dy < 1.9) { b.shotLog.hit = true; SIM.hits++; damage(o, BULLET_DMG[b.typeId] ?? 5, b.owner, "projectile"); if (SIM.harsh && !o.isPlayer) { const L = Math.hypot(b.vel.x, b.vel.z) || 1; o.vel.x += (b.vel.x / L) * 0.35; o.vel.z += (b.vel.z / L) * 0.35; o.vel.y = Math.max(o.vel.y, 0.2); } b.remove(); return; }
     }
-    if (rayStops(l.x, l.y, l.z)) { b.shotLog.block = true; b.remove(); return; }
+    if (rayStops(l.x, l.y, l.z)) { b.shotLog.block = true; b.shotLog.blockD = Math.hypot(l.x - b.shotLog.from.x, l.y - b.shotLog.from.y, l.z - b.shotLog.from.z); b.remove(); return; }
   }
   if (SIM.tick - b.born > 60) b.remove();
 }

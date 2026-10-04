@@ -1,12 +1,12 @@
 {
   "format_version": 2,
   "header": {
-    "name": "War Engine RP v7.1",
+    "name": "War Engine RP v7.2",
     "description": "Faction NPC war framework",
     "uuid": "55a51bdd-64f6-4305-b2b3-e50c47ade70a",
     "version": [
       7,
-      1,
+      2,
       0
     ],
     "min_engine_version": [
@@ -21,7 +21,7 @@
       "uuid": "c781fe28-a743-4ee7-ac85-86b9403ffc74",
       "version": [
         7,
-        1,
+        2,
         0
       ]
     }
@@ -31,7 +31,7 @@
       "uuid": "67b58306-3e4b-4c5d-9066-5f8fc72ff122",
       "version": [
         7,
-        1,
+        2,
         0
       ]
     }

@@ -2921,6 +2921,8 @@ async function loadoutMenu(player) {
 // ================================================================ Shared awareness scan
 // One scan per dimension every half second, shared by every soldier (keeps big armies cheap).
 let combatants = new Map(); // dim id -> [{ e, x, y, z }]
+const entMemo = new Map(); // id -> entity (or null), for this tick only (v7.2: one lookup per id per tick, not one per squad mate)
+system.runInterval(() => entMemo.clear(), 1);
 function refreshCombatants() {
   const next = new Map();
   for (const did of DIMS) {
@@ -3190,16 +3192,26 @@ function fireGun(e, spec, t, aim) {
   if (spec.bullet === "ww:nbazooka_projectile") dy += (l * 0.03 * l) / (spec.speed * 2); // lift for the rocket's drop
   const n = Math.hypot(dx, dy, dz) || 1;
   const r = () => (Math.random() + Math.random() - 1) * spec.spread * 1.6;
-  const dir = { x: dx / n + r(), y: dy / n + r(), z: dz / n + r() };
-  const from = { x: h.x + dir.x * 0.9, y: h.y - 0.2 + dir.y * 0.9, z: h.z + dir.z * 0.9 };
-  if (!openNow(e.dimension, mz, from) || !openNow(e.dimension, from, c)) return false;   // (v7.1: the muzzle itself must be clear and see him: not round a door frame or a corner)
+  // v7.2: the round itself must have a clear flight. The spread is drawn first and the actual line of THIS round is
+  // checked up to the man: if it would go into the wall, the window frame or the parapet in front of him, another
+  // draw (as a marksman waits for the sight picture); three bad draws and he doesn't fire at all (he looks for a
+  // better spot instead). A man showing only a sliver behind cover is not "a shot". What still lands in a wall is a
+  // miss that flew PAST him, into whatever is behind.
+  let dir, from;
+  for (let k = 0; k < 3 && !dir; k++) {
+    const dv = { x: dx / n + r(), y: dy / n + r(), z: dz / n + r() };
+    const fv = { x: h.x + dv.x * 0.9, y: h.y - 0.2 + dv.y * 0.9, z: h.z + dv.z * 0.9 };
+    const dl = Math.hypot(dv.x, dv.y, dv.z) || 1, reach = Math.max(0.5, l - 1.3);
+    if (openNow(e.dimension, mz, fv) && openNow(e.dimension, fv, { x: fv.x + (dv.x / dl) * reach, y: fv.y + (dv.y / dl) * reach, z: fv.z + (dv.z / dl) * reach })) { dir = dv; from = fv; }
+  }
+  if (!dir) { const g = gunState.get(e.id); if (g) g.coverMiss = (g.coverMiss ?? 0) + 1; return false; }
+  { const g = gunState.get(e.id); if (g) g.coverMiss = 0; }
   try {
     const b = e.dimension.spawnEntity(spec.bullet, from);
     const pc = b.getComponent("minecraft:projectile");
     if (pc) { pc.owner = e; pc.shoot({ x: dir.x * spec.speed, y: dir.y * spec.speed, z: dir.z * spec.speed }); }
   } catch {}
-  wallbang(e, spec, from, dir, l + 2);
-  noteShot(e);
+  noteShot(e);                                                       // (v7.2: no more wallbang: a round only leaves the gun on a clear line)
   return true;
 }
 // v6.9: through the wall, by accident. Nobody aims at a wall: but a shot that goes wide into cover, a burst at a window
@@ -3300,7 +3312,7 @@ function gunTick(e, now) {
     const p = openNow(e.dimension, hl, vc) ? vc : openNow(e.dimension, hl, vh) ? vh : undefined;
     if (!p) { st.supp = undefined; st.next = now + 4; return; }
     if (!friendlyInLine(e, d, hl, p, st.supp.ent) && turnTo(e, p, 20) <= 25) {
-      fireAtPoint(e, spec, { x: p.x, y: p.y - 1, z: p.z });
+      if (!fireAtPoint(e, spec, { x: p.x, y: p.y - 1, z: p.z })) { st.next = now + 4; return; }
       st.lastShot = now; st.ammo--;
       if (st.ammo > 0) st.next = now + Math.max(2, spec.gap); else { st.ammo = spec.mag; st.next = now + spec.reload + Math.floor(Math.random() * 8); }
     } else st.next = now + 4;
@@ -3753,6 +3765,7 @@ function engagement(e, d, now, orderGoal, melee) {
   let leash = ANCHOR_LEASH(d, melee);
   if (freeOf(e) && d.func === "hold") leash = aoOf(e);                        // the whole area of operations is theirs
   const gun = GUNS.includes(d.weapon);
+  const moving0 = ["charge", "follow", "patrol"].includes(d.func);
   const t = s.threat;
   if (t && t.isValid) {
     if (stance === "holdfire" && !isProvoker(d.faction, t, now)) return undefined; // hold fire until someone of ours is attacked
@@ -3770,6 +3783,7 @@ function engagement(e, d, now, orderGoal, melee) {
     }
     if (stance === "defensive") { note(e, "defending"); return { g: "g_none", t: melee ? "t_short" : "t_mid", urgent: false }; }
     if (isMob(t) && dd > 10) return undefined;                  // shoot an attacking mob if it's there, never chase it
+    if (isMob(t) && gun && (moving0 || marchOfE(e))) return undefined;   // (v7.2: on the move a mob never stops the order: he shoots it as he goes)
     if (gun) {
       // v5.4: stop to shoot only within the gun's useful range and with a clear shot; no clear shot -> go and get one
       // (a spot nearby that sees him, his floor if he's above or below, or along a real route toward him)
@@ -4146,7 +4160,10 @@ function planLeg(id, m, from, wide) {
       while (n > 2 && pts[n - 1].y <= top - 2 && !pts[n - 1].climb) n--;
       if (n < pts.length) pts = pts.slice(0, n);
     }
-    if (pts) { mm.path = pts; mm.idx = 0; mm.bestIdx = 0; }
+    if (pts && mm.keep !== undefined && mm.path && !mm.path.guess) {   // v7.2: the next leg joins on: men still behind keep their way
+      const lo = Math.max(0, Math.min(mm.keep, ...mm.members.map((mid) => rTrack.get(mid)?.pts === mm.path ? rTrack.get(mid).i : mm.keep)) - 4);
+      mm.path = mm.path.slice(lo, mm.keep + 1).concat(pts); mm.idx = 0; mm.bestIdx = mm.keep - lo; mm.keep = undefined;
+    } else if (pts) { mm.path = pts; mm.idx = 0; mm.bestIdx = 0; mm.keep = undefined; }
     else if (!lastLeg) {                                        // this leg point can't be reached: it was a bad corridor
       markDeadEnd(mm, target);
       mm.path = undefined;                                      // the march loop will plan again (a new corridor)
@@ -4263,58 +4280,45 @@ system.runInterval(() => {
       placeFormation(m, dim0, m.earlyAt, members.filter((e) => formMode.has(e.id)), "line");
       continue;
     }
+    if (m.final && m.path && m.pos && !m.stuck) for (const e of all) {                    // v7.2: stragglers of an arrived march: on along the route, then their spot
+      const cu = gdp(e, "war:catchup");
+      if (cu === undefined) continue;
+      if (!marchActive(e) || (flat(e.location, m.pos) < 12 && Math.abs(e.location.y - m.pos.y) < 2.5)) { sdp(e, "war:catchup", undefined); driveOn.delete(e.id); }
+    }
     if (m.final || m.planning || !m.path) continue;
     const dim = world.getDimension(m.dim);
     let cx = 0, cy = 0, cz = 0;
     for (const e of members) { cx += e.location.x; cy += e.location.y; cz += e.location.z; }
     const c = { x: cx / members.length, y: cy / members.length, z: cz / members.length };
-    // (v6.0: really fighting: following something else than his march marker. Walking to his catch-up/formation marker
-    // also parks the order goal, and counting that as fighting kept the march's stall detector from ever firing)
-    const fighting = members.some((e) => gdp(e, "war:ordergoal") !== undefined && Number(gdp(e, "war:goal") ?? 0) !== Number(gdp(e, "war:catchup") ?? -1));
-    // v6.0: someone's locked in a fight: the squad holds together here (v6.2: at most ~20 s, then the march carries on)
-    let contact = members.some((e) => combatLock.has(e.id));
-    if (contact) { m.contactT = m.contactT ?? now; if (now - m.contactT > 400) contact = false; } else if (m.contactT !== undefined && now - m.contactT > 500) m.contactT = undefined;
-    // the front of the group sets the pace (60th percentile of the members who are up and moving)
+    // v7.2: EVERY MAN MARCHES ON HIS OWN. Up to v7.1 a shared guide (the formation lanes) moved on only as fast as the
+    // slower ~60% of the squad, and everyone walked to a spot around it: three men snagged on a staircase, a mob in the
+    // way or a jam in a doorway and the whole squad stood there ("one man makes 200 blocks, a squad doesn't"). Now each
+    // man follows the squad's route by his OWN progress (the route driver: his own marker a few blocks ahead of him,
+    // carried through stairs and doors, single file where it's tight, side by side in the open). Nobody waits for
+    // anybody behind him; only a man far out in front eases off so the squad doesn't string out over 100 blocks.
     const progOf = new Map(members.map((e) => [e.id, routeProgress(m, e.location, e.id)]));
     const prog = [...progOf.values()].sort((a, b) => b - a);
-    const lead = prog[Math.floor((prog.length - 1) * 0.4)];
-    let j = lead, len = 0;                                       // ~6 blocks of route ahead of the lead, gates or not
-    while (j < m.path.length - 1 && len < 6) { const a = m.path[j], b = m.path[j + 1]; len += Math.hypot(b.x - a.x, b.z - a.z) + Math.abs(b.y - a.y); j++; }
-    if (j >= m.path.length - 4) j = m.path.length - 1;               // v6.0: the last few points: straight to the end of the stretch
-    // v6.0: under fire the march bounds: ~3 s forward, ~3 s down and firing, instead of walking steadily into the guns
-    const underFire = members.some((e) => now - (hurtBy.get(e.id)?.t ?? -999) < 60 || (shotsAtMe.get(e.id) ?? []).some((t) => now - t < 40));
-    if (underFire) m.fireT = now;
-    // v6.2: stopping (to bound, or to hold for a fight) only while someone is actually firing back: shot at from a window
-    // they can't answer (only a head showing, too far), standing still in the open just got them killed: keep closing in
-    const replying = members.some((e) => now - (gunState.get(e.id)?.lastShot ?? -999) < 80);
-    if (underFire && !replying && contact) contact = false;
-    const bounding = replying && now - (m.fireT ?? -999) < 200 && Math.floor(now / 60) % 2 === 1 && Math.hypot(m.dest.x - c.x, m.dest.z - c.z) < 80;   // (v6.2: near the objective only, not on a long road)
-    if (!contact && !bounding) m.idx = Math.min(m.path.length - 1, Math.max(m.idx ?? 0, j));
+    const lead = prog[0], tail = prog[Math.floor((prog.length - 1) * 0.7)];
+    // real contact (an enemy soldier or player, never a mob): the squad stops and fights for up to ~20 s, then moves on
+    let contact = members.some((e) => combatLock.has(e.id));
+    if (contact) { m.contactT = m.contactT ?? now; if (now - m.contactT > 400) contact = false; } else if (m.contactT !== undefined && now - m.contactT > 500) m.contactT = undefined;
+    m.hold = contact;
+    m.idx = m.path.length - 1;
+    m.paceIdx = tail + 24;                                        // (route points: ~24 blocks of route ahead of the tail at most)
     if (lead > (m.bestIdx ?? 0)) { m.wides = 0; m.edgeMsg = m.frontier ? m.edgeMsg : false; }
-    if (lead > (m.bestIdx ?? 0) || fighting || contact || bounding) { m.bestIdx = Math.max(m.bestIdx ?? 0, lead); m.progT = now; }
-    // who follows the route himself: anyone in a tight stretch, and anyone well behind the guide. v5.9: once he
-    // drives he keeps driving until he's been clear and caught up for 1.5 s (no flip-flopping between the two); everyone
-    // else walks to his OWN formation spot (v5.4-5.8: up to four men shared one lane marker and jostled for it)
+    if (lead > (m.bestIdx ?? 0) || contact) { m.bestIdx = Math.max(m.bestIdx ?? 0, lead); m.progT = now; }
     for (const e of all) {
       if (!marchActive(e)) { formMode.delete(e.id); driveOn.delete(e.id); if (gdp(e, "war:catchup") !== undefined) sdp(e, "war:catchup", undefined); continue; }
+      formMode.delete(e.id);
+      if (!driveOn.has(e.id)) driveOn.set(e.id, { off: 0 });
       const pi = progOf.get(e.id) ?? 0;
-      // (a straggler ~20 blocks back, a tight stretch, or v6.0: his formation place isn't a plain straight walk from where
-      // he is: a trench, a drop, a wall between: Minecraft's walking would drop him in or get him stuck)
-      const fm = formMode.has(e.id) ? marker(Number(gdp(e, "war:fmk") ?? 0)) : undefined;
-      const raw = m.idx - pi >= 10 || tightAt(dim, m.path, pi, e.location) || (fm && !straightReach(dim, e.location, fm.location));
-      let dv = driveOn.get(e.id);
-      if (raw) { dv = { off: 0 }; driveOn.set(e.id, dv); }
-      else if (dv && (++dv.off >= 3 && m.idx - pi <= 6)) { driveOn.delete(e.id); dv = undefined; }
-      if (dv) {
-        formMode.delete(e.id);
-        const slot = myMarker(e, m.path[Math.min(m.path.length - 1, lookahead(m.path, pi, 4))]);   // the route driver moves it from here
-        if (slot) setCatchup(e, slot);
-      } else formMode.add(e.id);                                  // (his formation spot is placed below)
+      const slot = myMarker(e, m.path[Math.min(m.path.length - 1, lookahead(m.path, pi, 4))]);   // the route driver moves it on from here
+      if (slot) setCatchup(e, slot);
     }
     const last = m.path[m.path.length - 1];
     // (v6.0: the squad stops ~3 blocks short of its markers: "at the end" when the front is within a few points of it;
     // waiting for the exact last point froze long marches at the end of a leg)
-    const atEnd = m.idx >= m.path.length - 1 && (flat(last, c) < 8 || (prog[0] >= m.path.length - 4 && !m.path.guess));   // (v6.2: a guessed straight line is never "arrived": it said "in position" 100 blocks short)
+    const atEnd = !m.path.guess && (flat(last, c) < 8 || prog[0] >= m.path.length - 4);   // (v6.2: a guessed straight line is never "arrived")   // (v6.2: a guessed straight line is never "arrived": it said "in position" 100 blocks short)
     if (atEnd) {
       const lt = m.legT ?? { x: m.dest.x, z: m.dest.z, final: true };
       const atDest = Math.hypot(m.dest.x - last.x, m.dest.z - last.z) <= 6 && (!Number.isFinite(m.dest.y) || Math.abs(m.dest.y - last.y) <= 2) && !last.climb;
@@ -4324,10 +4328,12 @@ system.runInterval(() => {
         placeLanes(m, dim, m.pos, m.heading, "line");
         factionMsg(m.fac, `§a${squadLabel(m)} in position at (${Math.round(last.x)}, ${Math.round(last.z)})`);
         if (all[0]) callout(all[Math.floor(Math.random() * all.length)], "Hold position!");
-        for (const e of all) sdp(e, "war:catchup", undefined);   // stragglers now just join the formation
+        for (const e of all) if (flat(e.location, last) < 12 && Math.abs(e.location.y - last.y) < 2.5) sdp(e, "war:catchup", undefined);   // (v7.2: men still on the way keep following the route to it)
       } else if (!lt.final && Math.hypot(lt.x - last.x, lt.z - last.z) <= 8) {
         m.legs?.shift();                                         // leg done: plan the next one
-        requestPlan(id, m, c);
+        const fe = members.reduce((b, e) => ((progOf.get(e.id) ?? 0) > (progOf.get(b.id) ?? 0) ? e : b), members[0]);
+        m.keep = Math.min(m.path.length - 1, progOf.get(fe.id) ?? 0);   // (v7.2: from the front man, and the route behind him is kept for the rest)
+        requestPlan(id, m, fe.location);
       } else if (m.frontier) {
         // reached the edge of the loaded land: plan the next stretch. v6.2: if that ends at the same edge again, the land
         // beyond isn't loaded: say so once and only look again every 10 s (it used to re-plan every half second)
@@ -4370,13 +4376,10 @@ system.runInterval(() => {
       markDeadEnd(m, leadE.location, tightSpot);                 // stalled in a building / at a door: only that spot, not the whole building
       requestPlan(id, m, leadE.location, true); changed = true; continue;
     }
-    const p = m.path[m.idx], prev = m.path[Math.max(0, m.idx - 1)];
-    m.heading = Math.atan2(p.z - prev.z, p.x - prev.x) || m.heading;
-    const narrow = p.w || prev.w;
-    const shape = narrow ? "column" : chooseShape(dim, p, m.heading, members, now);
-    placeLanes(m, dim, p, m.heading, shape);
-    m.pos = { x: p.x, y: p.y, z: p.z };
-    placeFormation(m, dim, p, members.filter((e) => formMode.has(e.id)), m.shape ?? shape);
+    { const p = m.path[Math.min(m.path.length - 1, lead)], prev = m.path[Math.max(0, Math.min(m.path.length - 1, lead) - 2)];
+      m.heading = Math.atan2(p.z - prev.z, p.x - prev.x) || m.heading;
+      if (now % 40 < 10) placeLanes(m, dim, p, m.heading, "line");      // (the lanes are only the squad's banner now: where the front is)
+      m.pos = { x: p.x, y: p.y, z: p.z }; }
     changed = true;
   }
   if (changed) saveMarches();
@@ -5070,14 +5073,23 @@ function patrolSweep(e, d, now) {
   if (sw && !personal.has(e.id) && flat(sw.at, e.location) > 4 && now - sw.t > 400) sw = undefined;   // (no way there: another)
   if (!sw || !marker(sw.slot) || flat(sw.at, e.location) < 4 || now - sw.t > 900) {
     let spot;
+    // v7.2: every floor. A patrol in a building walks all of it (up and down the stairs), a roam the whole area at any
+    // height; both from the ORDERED spot (not from where each man happens to be: "roam downstairs" brought nobody down),
+    // never to a spot another man is already heading for, and not back to where he's just been.
     const inB = isIndoorsAt(e.dimension, a.location);
-    for (let k = 0; k < 12 && !spot; k++) {
-      const ang = Math.random() * Math.PI * 2, rr = (inB && !roam ? Math.min(r, 6 + k * 2) : r) * (0.35 + Math.random() * 0.6);   // (in a building: its rooms first, wider each try)
-      const refY = roam ? a.location.y + Math.round((Math.random() * 2 - 1) * 10) : a.location.y;
-      const base = roam && Math.random() < 0.5 ? e.location : a.location;     // (roaming: from where he is, too)
-      spot = walkableNear(e.dimension, base.x + Math.cos(ang) * rr * (roam && base === e.location ? 0.5 : 1), base.z + Math.sin(ang) * rr * (roam && base === e.location ? 0.5 : 1), refY);
-      if (spot && !roam && Math.abs(spot.y - a.location.y) > 1) spot = undefined;    // a patrol keeps to its level
+    const levels = [a.location.y];
+    if (inB) { for (const q of buildingCells(e.dimension, a.location, Math.min(24, r + 6))) if (!levels.some((y) => Math.abs(y - q.y) < 2)) levels.push(q.y); }
+    const others = [];
+    for (const [id, w] of sweep) if (id !== e.id && now - w.t < 900) others.push(w.at);
+    for (let k = 0; k < 14 && !spot; k++) {
+      const ang = Math.random() * Math.PI * 2, rr = (inB ? Math.min(r, 6 + k * 2) : r) * (0.35 + Math.random() * 0.6);
+      const refY = roam && !inB ? a.location.y + Math.round((Math.random() * 2 - 1) * 10) : levels[Math.floor(Math.random() * levels.length)];
+      spot = walkableNear(e.dimension, a.location.x + Math.cos(ang) * rr, a.location.z + Math.sin(ang) * rr, refY);
+      if (spot && !roam && !inB && Math.abs(spot.y - a.location.y) > 1) spot = undefined;      // (outdoors a patrol keeps to its level)
+      if (spot && inB && !isIndoorsAt(e.dimension, spot) && !roam) spot = undefined;          // (a building patrol stays in the building)
       if (spot && troubleAt(e.dimension.id, spot.x, spot.z) >= 3) spot = undefined;
+      if (spot && others.some((o) => flat(o, spot) < 4 && Math.abs(o.y - spot.y) < 2)) spot = undefined;
+      if (spot && sw?.at && flat(sw.at, spot) < 5 && Math.abs(sw.at.y - spot.y) < 2 && k < 10) spot = undefined;
     }
     if (!spot) return undefined;
     const slot = makeWaypoint(e.dimension, spot);
@@ -5220,7 +5232,7 @@ system.runInterval(() => {
         const s = perc.get(e.id);
         if (!s) continue;
         const ids = new Set([...s.seen.keys()]); if (s.threat?.isValid) ids.add(s.threat.id);
-        for (const id of ids) { const o = world.getEntity(id); if (o?.isValid && !isMob(o)) S.known.set(id, { ent: o, x: o.location.x, y: o.location.y, z: o.location.z, t: now }); }
+        for (const id of ids) { let o = entMemo.get(id); if (o === undefined) { o = world.getEntity(id) ?? null; entMemo.set(id, o); } if (o?.isValid && !isMob(o)) S.known.set(id, { ent: o, x: o.location.x, y: o.location.y, z: o.location.z, t: now }); }
       }
       // v6.9.2: heard, not seen: boots on the stairs, a fight in the room below. An enemy soldier within 10 blocks (walls
       // and floors between) is known to the squad roughly where he is: enough to cover the stairs or the door he'll come
@@ -5356,8 +5368,13 @@ function fireAtPoint(e, spec, p) {
   let dx = p.x - h.x, dy = p.y + 1 - h.y, dz = p.z - h.z;
   const n = Math.hypot(dx, dy, dz) || 1;
   const r = () => (Math.random() + Math.random() - 1) * spec.spread * 3;
-  const dir = { x: dx / n + r(), y: dy / n + r(), z: dz / n + r() };
-  const from = { x: h.x + dir.x * 0.9, y: h.y - 0.2 + dir.y * 0.9, z: h.z + dir.z * 0.9 };
+  let dir, from;                                                     // (v7.2: as an aimed shot: only a round with a clear flight to him)
+  for (let k = 0; k < 3 && !dir; k++) {
+    const dv = { x: dx / n + r(), y: dy / n + r(), z: dz / n + r() }, dl = Math.hypot(dv.x, dv.y, dv.z) || 1, reach = Math.max(0.5, n - 1.3);
+    const fv = { x: h.x + dv.x * 0.9, y: h.y - 0.2 + dv.y * 0.9, z: h.z + dv.z * 0.9 };
+    if (openNow(e.dimension, h, fv) && openNow(e.dimension, fv, { x: fv.x + (dv.x / dl) * reach, y: fv.y + (dv.y / dl) * reach, z: fv.z + (dv.z / dl) * reach })) { dir = dv; from = fv; }
+  }
+  if (!dir) return false;
   try {
     const b = e.dimension.spawnEntity(spec.bullet, from);
     const pc = b.getComponent("minecraft:projectile");
@@ -5365,6 +5382,7 @@ function fireAtPoint(e, spec, p) {
   } catch {}
   noteShot(e);                                                       // (v7.1: no wallbang from covering fire: only real aimed shots)
   for (const o of nearbyCombatants(e.dimension.id, p, 4)) if (o.typeId === SOLDIER) suppB.set(o.id, Math.min(30, (suppB.get(o.id) ?? 0) + 1));
+  return true;
 }
 function nearestKnownB(S, e) { let b, bd = 1e9; for (const q of S.known.values()) { const dd = Math.hypot(q.x - e.location.x, q.z - e.location.z); if (dd < bd) { bd = dd; b = q; } } return b ? { q: b, dd: bd } : undefined; }
 function spotNear(e, test, anchor, leash, maxR = 4) {
@@ -5501,6 +5519,10 @@ function brainMove(e, d, now, melee, anchor, leash) {
   const stance = String(gdp(e, "war:stance") ?? "aggressive");
   if (stance === "holdfire") return undefined;
   const S = squads.get(squadKey(e, d));
+  if (S?.bplan?.kind === "garrison" && !S.known.size && !melee) {           // v7.2: holding a house, nobody about yet: everyone to his post in it
+    let Bg = brain.get(e.id); if (!Bg) { Bg = { act: "", decT: -999 }; brain.set(e.id, Bg); }
+    return buildingRole(e, d, now, S, Bg, undefined);
+  }
   if (!S || !S.known.size) { brain.delete(e.id); return undefined; }
   if (["charge", "follow", "patrol"].includes(d.func)) {
     const n0 = nearestKnownB(S, e);
@@ -6677,34 +6699,138 @@ function buildingMove(e, d, now, S, t, B, underFire, exposure, moving, anchor) {
 //   inside, enemy outside or below: man the windows / secure the building (spread over every floor) / sortie
 //   inside, enemy on another floor: storm it (split between the staircases) / secure / windows
 //   outside, enemy inside: contain (take spots that see the windows and doors) / assault (in, through every way in)
-const BPLANS = { windows: "manning the windows", secure: "securing the building", sortie: "going out after them", contain: "covering the building", assault: "storming the building" };
+const BPLANS = { windows: "manning the windows", secure: "securing the building", sortie: "going out after them", contain: "covering the building", assault: "storming the building", garrison: "holding the building", defend: "defending the building", attack: "attacking the building" };
+// v7.2: doctrine, not a coin toss. Up to v7.1 a squad picked ONE plan at random (all to the windows, or all out the
+// door...). Now a squad in a building always splits the jobs, the way a real section holds a house:
+//   garrison (told to hold it, nobody seen yet) / defend (enemy outside or below): a few men inside the ground floor
+//     covering the ways in BEFORE anyone breaks in, a man on each stairhead, the rest at the upper windows (the
+//     dominating position). Once the enemy is inside, the door men fight them there and the stairs stay held.
+//   attack (we're outside, they're in): a support group shooting at the windows from outside, and an assault group
+//     that goes in, clears the ground floor and goes up every staircase where the enemy is.
+// The shares change a little every plan (and with the odds and how long it's been quiet), so no two fights are the same.
 function buildingPlan(k, S, ours, known, now) {
   const dim = ours[0].dimension, oc = S.ourC;
-  if (!known.length || !oc) { S.bplan = undefined; return; }
+  if (!oc) { S.bplan = undefined; return; }
+  S.roster = ours.filter((e) => GUNS.includes(sd(e).weapon) && !downed.has(e.id)).map((e) => e.id).sort();
   const inside = ours.filter((e) => isIndoors(e)).length / ours.length;
+  const holding = ours.filter((e) => ANCHORED.includes(sd(e).func)).length * 2 >= ours.length;
+  const B0 = S.bplan;
+  if (!known.length) {                                                         // nobody about: set up the house before they come
+    if (inside >= 0.5 && holding && ours.length >= 2) { if (B0?.kind !== "garrison") S.bplan = { kind: "garrison", t: now, until: now + 2400, said: false, door: 0.25 + Math.random() * 0.1, attack: 0 }; return; }
+    S.bplan = undefined; return;
+  }
   const kIn = known.filter((q) => isIndoorsAt(dim, q)).length / known.length;
   if (ours.some((e) => now - (gunState.get(e.id)?.lastShot ?? -999) < 80)) S.fightT = now;
   const quiet = now - (S.fightT ?? S.contactT ?? now);
   const stance = String(gdp(ours[0], "war:stance") ?? "aggressive"), bold = stance === "aggressive" && freeOf(ours[0]);
-  const B0 = S.bplan;
-  if (B0 && now < B0.until && !((B0.kind === "sortie" || B0.kind === "assault") && S.ratio < 0.55)) return;
+  if (B0 && B0.kind !== "garrison" && now < B0.until && !((B0.kind === "sortie" || B0.kind === "assault") && S.ratio < 0.55)) return;
   const opts = [];
   const otherFloor = known.filter((q) => Math.abs(q.y - oc.y) > 2.5 && isIndoorsAt(dim, q)).length;
   if (inside >= 0.5) {
-    const outOrBelow = known.filter((q) => q.y < oc.y - 2.5 || !isIndoorsAt(dim, q)).length;
-    if (outOrBelow) opts.push(["windows", 1.0 + (quiet > 200 ? 0.3 : 0)]);
-    opts.push(["secure", 0.7 + (S.n >= 5 ? 0.3 : 0) + (S.ratio < 0.9 ? 0.4 : 0)]);
-    if (bold && (S.ratio >= 1.25 || (S.ratio >= 1.0 && quiet > 600))) opts.push(["sortie", 0.3 + (S.ratio >= 1.5 ? 0.7 : 0) + (quiet > 600 ? 0.4 : 0)]);   // (out the door into their guns: only with the upper hand, or a long stalemate)
-    if (bold && otherFloor && S.ratio >= 0.8) opts.push(["assault", 0.6 + (S.ratio >= 1.2 ? 0.7 : 0) + (quiet > 300 ? 0.4 : 0)]);
+    opts.push(["defend", 2.0]);
+    if (bold && (S.ratio >= 1.4 || (S.ratio >= 1.0 && quiet > 900))) opts.push(["sortie", 0.2 + (S.ratio >= 1.8 ? 0.6 : 0) + (quiet > 900 ? 0.4 : 0)]);   // (out the door into their guns: only with the upper hand)
+    if (bold && otherFloor && S.ratio >= 0.8) opts.push(["assault", 0.6 + (S.ratio >= 1.2 ? 0.7 : 0) + (quiet > 300 ? 0.5 : 0)]);
   } else if (kIn >= 0.5) {
-    opts.push(["contain", 0.8 + (S.ratio < 1 ? 0.6 : 0)]);
-    if (bold) opts.push(["assault", 0.5 + (S.ratio >= 1.1 ? 0.8 : 0) + (quiet > 300 ? 0.6 : 0)]);
+    opts.push(["attack", 2.0]);
+    if (!bold || S.ratio < 0.6) opts.push(["contain", 1.5]);
   }
   if (!opts.length) { S.bplan = undefined; return; }
   const sum = opts.reduce((t, o) => t + o[1], 0);
   let r = Math.random() * sum, pick = opts[0][0];
   for (const o of opts) { r -= o[1]; if (r <= 0) { pick = o[0]; break; } }
-  S.bplan = { kind: pick, t: now, until: now + 500 + Math.floor(Math.random() * 400), said: pick === B0?.kind };
+  const attack = Math.min(0.9, 0.5 + Math.random() * 0.25 + (quiet > 600 ? 0.2 : 0) + (S.ratio >= 1.5 ? 0.1 : 0));
+  S.bplan = { kind: pick, t: now, until: now + 500 + Math.floor(Math.random() * 400), said: pick === B0?.kind, door: 0.2 + Math.random() * 0.15, attack };
+}
+// the ways into this building on its ground floor: inside cells with open ground outside right next to them
+const ENTR = new Map();
+function entrances(dim, at) {
+  const k = `${dim.id}|${Math.floor(at.x / 16)}|${Math.floor(at.z / 16)}`, now = tick(), c = ENTR.get(k);
+  if (c && now - c.t < 600) return c.list;
+  const cells = buildingCells(dim, at, 24);
+  const list = [];
+  if (cells.length) {
+    const gy = Math.min(...cells.map((q) => q.y)), bx = Math.floor(at.x), bz = Math.floor(at.z);
+    for (let dx = -24; dx <= 24; dx++) for (let dz = -24; dz <= 24; dz++) {          // (a scan of the ground floor: sampling missed doorways)
+      const x = bx + dx, z = bz + dz;
+      if (!standAt(dim, x, gy, z, now)) continue;
+      let out = false;
+      for (const [ox, oz] of [[1, 0], [-1, 0], [0, 1], [0, -1]]) if (standAt(dim, x + ox, gy, z + oz, now)) { const o = { x: x + ox + 0.5, y: gy, z: z + oz + 0.5 }; if (!isIndoorsAt(dim, o)) { out = true; break; } }
+      if (!out) continue;
+      const q = { x: x + 0.5, y: gy, z: z + 0.5 };
+      if (!isIndoorsAt(dim, q) || list.some((m) => flat(m, q) < 3)) continue;
+      list.push(q);
+    }
+  }
+  ENTR.set(k, { t: now, list });
+  if (ENTR.size > 200) ENTR.clear();
+  return list;
+}
+// a spot inside, 3-7 blocks back from a way in, that sees anyone coming through it (each door man his own way in)
+function doorWatchSpot(e, S, idx, now) {
+  const dim = e.dimension, ents = entrances(dim, e.location);
+  if (!ents.length) return undefined;
+  const ec = S.enemyC;
+  if (ec) ents.sort((a, b) => flat(a, ec) - flat(b, ec));
+  const en = ents[idx % ents.length], eye = { x: en.x, y: en.y + 1.2, z: en.z };
+  let best, bs = -1e9, rays = 0;
+  for (let dx = -8; dx <= 8; dx++) for (let dz = -8; dz <= 8; dz++) {
+    const r = Math.hypot(dx, dz); if (r < 3 || r > 8) continue;
+    const q = { x: Math.floor(en.x) + dx + 0.5, y: en.y, z: Math.floor(en.z) + dz + 0.5 };
+    if (!standAt(dim, Math.floor(q.x), q.y, Math.floor(q.z), now) || !isIndoorsAt(dim, q)) continue;
+    if (claimedByOther(q, e.id, now) || onWayThrough(dim, q) || failedNear(e, q, now)) continue;
+    if (++rays > 30) break;
+    if (!clearShot(dim, { x: q.x, y: q.y + 1.6, z: q.z }, eye)) continue;
+    const sc = -Math.abs(r - 5) - flat(q, e.location) * 0.05 + Math.random() * 0.5;
+    if (sc > bs) { bs = sc; best = q; }
+  }
+  return best ? { spot: best, face: eye } : undefined;
+}
+// a spot 3-7 blocks from a stairhead on its floor that sees a man's head coming up (the stairheads above the ground floor)
+function stairGuardSpot(e, S, idx, now) {
+  const dim = e.dimension, cells = buildingCells(dim, e.location, 24);
+  if (!cells.length) return undefined;
+  const gy = Math.min(...cells.map((q) => q.y));
+  const floors = [...new Set(cells.filter((q) => q.y > gy + 2).map((q) => q.y))];
+  const mouths = [];
+  for (const fy of floors) for (const m of stairMouths(dim, { x: e.location.x, y: fy, z: e.location.z }, 20)) if (Math.abs(m.y - fy) < 1 && !mouths.some((o) => flat(o, m) < 3 && Math.abs(o.y - m.y) < 1)) mouths.push(m);
+  if (!mouths.length) return undefined;
+  mouths.sort((a, b) => a.y - b.y || a.x - b.x || a.z - b.z);                 // the lowest stairheads first (the first floor up)
+  const mouth = mouths[idx % mouths.length], head = { x: mouth.x, y: mouth.y + 0.6, z: mouth.z };
+  let best, bs = -1e9, rays = 0;
+  for (let r = 3; r <= 7 && rays < 16; r++) for (let k = 0; k < 8 && rays < 16; k++) {
+    const a = (k / 8) * Math.PI * 2 + idx * 0.7;
+    const q = walkableNear(dim, mouth.x + Math.cos(a) * r, mouth.z + Math.sin(a) * r, mouth.y);
+    if (!q || Math.abs(q.y - mouth.y) > 0 || onWayThrough(dim, q) || claimedByOther(q, e.id, now) || mouths.some((m) => flat(m, q) < 2 && Math.abs(m.y - q.y) < 1) || !isIndoorsAt(dim, q)) continue;
+    rays++;
+    if (!clearShot(dim, { x: q.x, y: q.y + 1.6, z: q.z }, head)) continue;
+    const sc = -Math.abs(r - 5) + Math.random() * 0.5;
+    if (sc > bs) { bs = sc; best = q; }
+  }
+  return best ? { spot: best, face: head, n: mouths.length } : undefined;
+}
+// the upper windows: a spot on a floor above the ground with a shot at the enemy (or, before anyone's seen, spread
+// over the upper floors)
+function overwatchSpot(e, S, now) {
+  const a = S.known?.size ? shotSpot(e, S, now) : undefined;
+  if (a) return a;
+  const dim = e.dimension, cells = buildingCells(dim, e.location, 24);
+  if (!cells.length) return undefined;
+  const gy = Math.min(...cells.map((q) => q.y));
+  const up = cells.filter((q) => q.y > gy + 2);
+  const pool = up.length ? up : cells;
+  const taken = [];
+  for (const [id, B] of brain) if (id !== e.id && B.role?.spot && now - B.role.t < 600) taken.push(B.role.spot);
+  let best, bs = -1e9;
+  for (let i = 0; i < Math.min(40, pool.length); i++) {
+    const q = pool[Math.floor(Math.random() * pool.length)];
+    if (claimedByOther(q, e.id, now) || onWayThrough(dim, q)) continue;
+    let near = 99; for (const t of taken) if (Math.abs(t.y - q.y) < 2.5) near = Math.min(near, Math.hypot(t.x - q.x, t.z - q.z));
+    let view = 0;                                                              // a window: open air within 2 blocks that isn't under a roof
+    for (const [dx, dz] of [[2, 0], [-2, 0], [0, 2], [0, -2]]) { const o = { x: q.x + dx, y: q.y, z: q.z + dz }; try { const b = tBlock(dim, o.x, o.y + 1, o.z); if (b && (b.isAir || passable(b)) && !isIndoorsAt(dim, o)) view = 3; } catch {} }
+    const sc = Math.min(near, 6) + view - flat(q, e.location) * 0.05;
+    if (sc > bs) { bs = sc; best = q; }
+  }
+  return best ? { spot: best, face: S.enemyC } : undefined;
 }
 // v7.1: a plan is only reported once the men are actually carrying it out (half of them have their part and are on it);
 // one nobody can carry out (no spot with a shot, no way up) is dropped within 10 s for another
@@ -6792,6 +6918,7 @@ function assaultSpot(e, d, S, now) {
   const q = known.sort((a, b) => dist(a, l) - dist(b, l))[0];
   return { spot: { x: q.x, y: q.y, z: q.z }, face: q, kind: "advance" };
 }
+const JOB_NOTE = { door: "covering the way in", stairs: "holding the stairhead", overwatch: "at the upper windows", assault: "storming the building", support: "covering the assault" };
 function buildingRole(e, d, now, S, B, t) {
   const P0 = S?.bplan;
   if (!P0 || !GUNS.includes(d.weapon) || d.func === "post" || d.retreat) return undefined;
@@ -6800,25 +6927,39 @@ function buildingRole(e, d, now, S, B, t) {
   if (!R || R.planT !== P0.t || (R.fail ?? 0) >= 2) {
     let a;
     const odd = (e.id.charCodeAt(e.id.length - 1) & 1) === 1;
-    if (P0.kind === "windows") a = shotSpot(e, S, now);
+    const ros = S.roster ?? [], rk = Math.max(0, ros.indexOf(e.id)), n = ros.length;
+    let job;
+    if (P0.kind === "garrison" || P0.kind === "defend") {
+      const nDoor = n >= 3 ? Math.max(1, Math.round(n * (P0.door ?? 0.3))) : 0, nStair = n >= 4 ? Math.min(2, Math.max(1, Math.round(n * 0.15))) : 0;
+      if (rk < nDoor) { a = doorWatchSpot(e, S, rk, now); job = "door"; }
+      else if (rk < nDoor + nStair) { a = stairGuardSpot(e, S, rk - nDoor, now); job = "stairs"; }
+      if (!a) { a = overwatchSpot(e, S, now); job = "overwatch"; }
+    } else if (P0.kind === "attack") {
+      const nAssault = Math.max(1, Math.round(n * (P0.attack ?? 0.6)));
+      if (rk >= n - nAssault || isIndoors(e)) { a = assaultSpot(e, d, S, now); job = "assault"; }
+      else { a = shotSpot(e, S, now); job = "support"; if (!a) { a = assaultSpot(e, d, S, now); job = "assault"; } }
+    }
+    else if (P0.kind === "windows") a = shotSpot(e, S, now);
     else if (P0.kind === "secure") a = secureSpot(e, S, now);
     else if (P0.kind === "contain") a = shotSpot(e, S, now) ?? secureSpot(e, S, now);
     else if (P0.kind === "sortie") a = odd || S.ratio >= 1.6 ? assaultSpot(e, d, S, now) : shotSpot(e, S, now);   // half go, half cover them from the windows
     else if (P0.kind === "assault") a = assaultSpot(e, d, S, now);
     if (!a) { const crowd = nearbyCombatants(e.dimension.id, e.location, 1.8).filter((o) => o.typeId === SOLDIER && o.id !== e.id && !downed.has(o.id)).length; if (crowd >= 1 && isIndoors(e)) a = secureSpot(e, S, now); }   // (nothing for him to do and on top of a mate: spread out)
-    R = { planT: P0.t, t: now, spot: a?.spot, face: a?.face, kind: a?.kind ?? "engage", fail: 0 };
+    R = { planT: P0.t, t: now, spot: a?.spot, face: a?.face, kind: a?.kind ?? "engage", fail: 0, job };
     B.role = R;
     if (R.spot) claimSpot(e, R.spot, now);
   }
   if (!R.spot) return undefined;
   const l = e.location;
+  // (v7.2: the enemy's got in on his floor: the door men and anyone without a shot go and fight them there)
+  if (S.known.size && (R.job === "door" || R.job === "overwatch") && [...S.known.values()].some((q) => Math.abs(q.y - l.y) < 2.5 && dist(q, l) < 25 && isIndoorsAt(e.dimension, q))) return undefined;
   if (flat(R.spot, l) < 1.4 && Math.abs(R.spot.y - l.y) < 1.2) {
     if (R.kind === "advance") { B.role = { ...R, spot: undefined }; return undefined; }   // got there: the fight takes over
     if (R.face) turnTo(e, R.face, 20);
-    note(e, BPLANS[P0.kind]); return { g: "g_none", t: "t_mid", urgent: false };
+    note(e, R.job ? JOB_NOTE[R.job] : BPLANS[P0.kind]); return { g: "g_none", t: "t_mid", urgent: false };
   }
   if (now - R.t > 500) { R.fail++; R.t = now; failSpots.set(e.id, [...(failSpots.get(e.id) ?? []), { x: R.spot.x, z: R.spot.z, t: now }].slice(-6)); B.role = undefined; return undefined; }
-  note(e, BPLANS[P0.kind]);
+  note(e, R.job ? JOB_NOTE[R.job] : BPLANS[P0.kind]);
   const cur = travelTo.get(e.id);
   if (!personal.has(e.id) || !cur || flat(cur, R.spot) > 1.5 || Math.abs(cur.y - R.spot.y) > 1.5) { travelTo.set(e.id, { ...R.spot }); planPersonalTo(e, R.kind, R.spot, now); }
   return followPersonal(e, now) ?? { g: "g_none", t: "t_mid", urgent: false };
@@ -7218,7 +7359,7 @@ system.runInterval(() => {
             if (Math.max(Math.abs(dx), Math.abs(dz)) !== r) continue;
             if (standAt(e.dimension, bx + dx, by + dy, bz + dz, now)) out = { x: bx + dx + 0.5, y: by + dy, z: bz + dz + 0.5 };
           }
-          if (out) { try { e.teleport(out); afterRescue(e, "freed from a wall", now); } catch {} }
+          if (out) { try { e.teleport(out); afterRescue(e, now, "freed from a wall"); } catch {} }
           else rescueTo(e, "freed from a wall", now);
           continue;
         }
@@ -7458,6 +7599,54 @@ function stepAlong(e, pts, i, firm = false) {
   }
   push(e, { x: dx * 0.25 * s, y: 0.05, z: dz * 0.25 * s }, firm ? 3 : 2);   // (firm: every 4 ticks, so a file of men keeps moving on the stairs)             // stairs / slabs: walked up (mobs step half blocks), never jumped
 }
+// v7.2: his own place across the route in the open (0, right, left, further right, further left...), so a squad on
+// the move is a loose group side by side and not a file of men treading on each other's heels. Only where that spot is
+// plain open ground on his level that he can walk straight to; anywhere else he keeps to the route itself.
+function sideBySide(e, m, pts, k, tgt) {
+  const n = m.members.indexOf(e.id); if (n <= 0) return undefined;
+  const lane = [0, 1, -1, 2, -2, 3, -3][n % 7]; if (!lane) return undefined;
+  const a = pts[Math.max(0, k - 2)], b = pts[k], L = Math.hypot(b.x - a.x, b.z - a.z);
+  if (L < 0.5) return undefined;
+  const sp = 2.2 * spacingSetting() / 1.5, x = b.x + (-(b.z - a.z) / L) * lane * sp, z = b.z + ((b.x - a.x) / L) * lane * sp;
+  try {
+    const w = walkableNear(e.dimension, x, z, b.y);
+    if (!w || Math.abs(w.y - b.y) > 0.6 || dangerNear(e.dimension, w) || !straightReach(e.dimension, e.location, w) || !straightReach(e.dimension, w, tgt)) { return undefined; }
+    return w;
+  } catch { return undefined; }
+}
+// v7.2: his own watchdog on a march (nobody else's progress counts): no headway along the route for 3 s while he's
+// meant to be walking it -> 1) the script carries him over the bit he's stuck on (stairs, a door, a mob in the way);
+// 6 s -> 2) a fresh short route of his own from where he stands to a bit further along; 15 s -> 3) put on the route a
+// few blocks ahead of where he was (the last resort: nothing else got him on, and nobody waits for him).
+const marchWatch = new Map(); // id -> { i, t, n, path }
+const forceGlide = new Map(); // id -> tick until which his route is walked by the script even in the open
+function marchStuck(e, m, pts, i, now) {
+  let w = marchWatch.get(e.id);
+  if (!w || w.path !== pts || i > w.i || flat(e.location, w.at) > 2.5) { marchWatch.set(e.id, { i: Math.max(i, w?.path === pts ? w.i : 0), t: now, n: 0, path: pts, at: { ...e.location } }); return false; }
+  if (i >= pts.length - 3 || gliders.get(e.id)?.paused || combatLock.has(e.id) || perc.get(e.id)?.threat && !isMob(perc.get(e.id).threat)) { w.t = now; return false; }
+  const idle = now - w.t;
+  if (w.n === 0 && idle >= 60) { w.n = 1; glideBan.delete(e.id); forceGlide.set(e.id, now + 120); note(e, "getting past"); return false; }
+  if (w.n === 1 && idle >= 120) {
+    w.n = 2; forceGlide.delete(e.id);
+    const tgt = pts[Math.min(pts.length - 1, i + 10)];
+    planPersonalTo(e, "settle", { x: tgt.x, y: tgt.y, z: tgt.z }, now); note(e, "finding a way");
+    return true;
+  }
+  if (w.n === 2 && idle >= 300 && setting("rescue", true) && !personal.has(e.id)) {
+    w.n = 3;
+    const free = (q) => !nearSnap(e.dimension.id, q, 1.2).some((c) => c.id !== e.id && c.type === SOLDIER && Math.abs(c.y - q.y) < 1.5) && !dangerNear(e.dimension, q);
+    for (let k = i + 3; k < Math.min(pts.length, i + 14); k++) {
+      const q = pts[k]; if (q.climb || q.w || q.open) continue;
+      const fq = { x: Math.floor(q.x) + 0.5, y: Math.floor(q.y + 0.01), z: Math.floor(q.z) + 0.5 };
+      if (!standAt(e.dimension, Math.floor(fq.x), fq.y, Math.floor(fq.z), now) || !glideFree(e.dimension, fq.x, fq.y, fq.z) || !free(fq)) continue;
+      try { e.teleport(fq); } catch { break; }
+      afterRescue(e, now, "caught up along the route"); marchWatch.delete(e.id);
+      return true;
+    }
+    w.t = now; w.n = 0;                                            // nowhere free just now: start over
+  }
+  return false;
+}
 // ---- the route driver (v5.4): four times a second, every soldier on a route of his own (a personal route, or a march
 // stretch he follows himself) gets his marker moved along it, a few blocks ahead of him and never past a stair, ladder
 // or door until he reaches it; at those he is stepped through point by point. Single file: a soldier right behind a
@@ -7574,7 +7763,7 @@ system.runInterval(() => {
   for (const e of allOf(SOLDIER)) {
     try {
       if (climbing.has(e.id) || isRiding(e) || downed.has(e.id) || pows.has(e.id)) continue;
-      let pts, i, own = false;
+      let pts, i, own = false, mm;
       const pr = personal.get(e.id);
       if (pr) {
         if (!pr.pts || pr.planning || (pr.hold ?? 0) > now) continue;
@@ -7585,10 +7774,17 @@ system.runInterval(() => {
         if (og !== undefined && goal !== cu) continue;                         // fighting: the brain moves him
         const mid = laneOf.get(Number(og ?? goal)) ?? laneOf.get(Number(gdp(e, "war:chargegoal") ?? 0));
         const m = mid ? getMarches()[mid] : undefined;
-        if (!m?.path || m.final) { settle(e, og === undefined ? goal : Number(og), m); continue; }
-        pts = m.path; i = routeProgress(m, e.location, e.id);
+        if (!m?.path || (m.final && !(cu && goal === cu))) { settle(e, og === undefined ? goal : Number(og), m); continue; }
+        pts = m.path; i = routeProgress(m, e.location, e.id); mm = m;
         trackRemote(e, now, wantsWalk(e, goal));
         own = (!!cu && goal === cu && !formMode.has(e.id)) || isRemote(e);   // (v6.2: out of range: always carried)
+        if (own && !isRemote(e)) {
+          // v7.2: the squad's in a real fight: hold here (the brain moves the men who see the enemy)
+          if (m.hold && !m.final) { gliders.delete(e.id); myMarker(e, e.location); note(e, "holding (contact)"); marchWatch.delete(e.id); continue; }
+          // far out in front of the squad: ease off till it closes up (never on a stair or in a doorway)
+          if (!m.final && i > (m.paceIdx ?? Infinity) && !tightAt(e.dimension, pts, i, e.location)) { gliders.delete(e.id); myMarker(e, e.location); note(e, "waiting for the squad"); marchWatch.delete(e.id); continue; }
+          if (marchStuck(e, m, pts, i, now)) continue;
+        }
         if (!own) {                                                           // on the formation lanes: only help at a gate / when the lane is too close to walk to
           const mk = marker(goal);
           const close = !mk || dist(mk.location, e.location) <= 3.3;
@@ -7599,7 +7795,6 @@ system.runInterval(() => {
       // v5.5: a tight stretch (indoors, stairs, a ladder, door or drop near): he is CARRIED along his route by the glider,
       // in single file, at walking pace (Minecraft's own walking stays idle: it was what got lost on stairs and in
       // doorways). Open ground: the marker runs ahead and Minecraft walks him at full pace.
-      stepping.add(e.id);
       // v6.0: on open ground Minecraft walks him in a straight line to his marker, so the marker only goes as far ahead
       // as a straight walk is safe (no trench, gap or drop on the way); not even the next point: he's carried
       let ahead = -1;
@@ -7609,7 +7804,8 @@ system.runInterval(() => {
       // (v6.2: also mid-glide: queued for the last point, he'd wait his turn there forever behind whoever stands on it)
       const endK = `${Math.floor(pts[pts.length - 1].x)},${Math.floor(pts[pts.length - 1].z)}`;
       if (remote && (i >= pts.length - 2 || remoteSettled.get(e.id)?.endsWith(`|${endK}`))) { gliders.delete(e.id); remoteSpread(e, now, endK); continue; }   // the end of the known route: his own spot (and he stays on it)
-      const tight = !pts.guess && (glideBan.get(e.id) ?? 0) <= now && (remote || ahead < 0 || tightAt(e.dimension, pts, i, e.location));
+      const tight = !pts.guess && (glideBan.get(e.id) ?? 0) <= now && (remote || ahead < 0 || (forceGlide.get(e.id) ?? 0) > now || tightAt(e.dimension, pts, i, e.location));
+      if (tight || ahead < 0 || onPassage(e)) stepping.add(e.id);         // (v7.2: the edge guard watches only men where there's an edge to mind)
       if (tight) {
         const g = gliders.get(e.id);
         if (!remote && stackAtStairs(e, { pts }, i, now)) {           // (v6.9.2: the enemy's up there: gather at the foot, then all go)
@@ -7626,7 +7822,8 @@ system.runInterval(() => {
         continue;
       }
       gliders.delete(e.id);
-      const tgt = pts[ahead >= 0 ? ahead : driveAhead(pts, i, 7)];
+      let tgt = pts[ahead >= 0 ? ahead : driveAhead(pts, i, 7)];
+      if (mm && !mm.final && ahead >= 0) tgt = sideBySide(e, mm, pts, ahead, tgt) ?? tgt;   // (v7.2: in the open, side by side, not nose to tail)
       myMarker(e, tgt);
       if (dist(tgt, e.location) <= 3.3) stepAlong(e, pts, i);
     } catch (err) { oops("route driver", err); }
