@@ -1,5 +1,36 @@
 # War Engine changelog
 
+## v7.1 (They see what you see, stairs are stairs, a quiet radio)
+
+- **If you can't see him, they can't shoot him.** They still hear and sense where the enemy is, and use that to move,
+  but they only fire at a man in view at that instant. Found and fixed every way they fired at nothing:
+  - Covering fire went at where a man was a moment ago, or where he was only heard: bullets into walls, ceilings and
+    corners (and, with the occasional bullet going through, hits on men nobody could see). It now only goes at a man
+    in view: his chest, or his head in a window.
+  - They kept firing at a man for up to a quarter of a second after he went down, the rounds going over him into
+    the wall behind. Now they stop the instant he drops.
+  - Leading a running man: the shot only goes if he's in view now, not just where he's heading.
+  - The muzzle itself must be clear and see him (not round a door frame or a corner).
+  - Grenades and molotovs are only thrown at what the thrower can see at that moment.
+  - In the test fights, shots fired with no line to any enemy went from as many as 1 in 5 to almost none.
+  - Through-the-wall hits are rarer (1 in 10 of the aimed shots that go into a wall) and never come from covering
+    fire.
+- **Stairs are never avoided.** Routes go round places where soldiers have got stuck or been cut down. That memory
+  piled up on staircases (where men get stuck and die most) until every route avoided the stairs, and nobody went up
+  or down. Stairs and ladders are now exempt from it, and the old memory is wiped once. Tested on straight,
+  switchback, open-sided (along an atrium), slab and stone staircases, up and down.
+- **They go to the enemy.** When a squad knows where the enemy is (seen or heard), nobody in it has fired for 15 s,
+  and they're free to use judgment, each man closes in along a real route (doors, stairs, round the building). The
+  route stops him the moment he has a shot. Not a man holding a roof or wall over them, not one watching a
+  stairhead, not a squad badly outnumbered.
+- **The radio:**
+  - Settings, General, "Radio messages": Off / Important only (the default: contact, area clear, in position, a man
+    surrendered) / Everything.
+  - The same message from a squad never twice in 30 s, and no more than one message every 3 s to you.
+- **No more claims they're not carrying out.** A building plan ("securing the building", "storming the building"...)
+  is only reported once half the squad is actually on it. A plan nobody can carry out is dropped within 10 s for
+  another.
+
 ## v7.0 (The building brain: real fights in and around buildings)
 
 - **Squads read the situation and pick a plan.** Every squad in a fight in or around a building works out who's

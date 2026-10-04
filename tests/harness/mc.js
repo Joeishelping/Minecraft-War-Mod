@@ -422,7 +422,7 @@ const BULLET_DMG = { "ww:nrifle_projectile": 7, "ww:nsemi_projectile": 6, "ww:ns
 function bulletTick(b) {
   if (!b.fired) { if (SIM.tick - b.born > 2) b.remove(); return; }
   if (b.harmless) { if (SIM.tick - b.born > 40) b.remove(); return; }
-  if (!b.shotLog) { b.shotLog = { from: { ...b._loc }, owner: b.owner, t: SIM.tick, nearEnemy: false, hit: false }; SIM.shots.push(b.shotLog); }
+  if (!b.shotLog) { b.shotLog = { from: { ...b._loc }, owner: b.owner, t: SIM.tick, nearEnemy: false, hit: false, wb: !!b.__wb, typeId: b.typeId }; SIM.shots.push(b.shotLog); }
   const steps = Math.ceil(Math.hypot(b.vel.x, b.vel.y, b.vel.z) / 0.25);
   for (let i = 0; i < steps; i++) {
     const l = b._loc; l.x += b.vel.x / steps; l.y += b.vel.y / steps; l.z += b.vel.z / steps;

@@ -1,4 +1,4 @@
-// War Engine v7.0: faction NPC war framework
+// War Engine v7.1: faction NPC war framework
 import { world, system, Player, ItemStack, EquipmentSlot, GameMode } from "@minecraft/server";
 import { ActionFormData, ModalFormData, FormCancelationReason } from "@minecraft/server-ui";
 import { SKINS } from "./skins.js";
@@ -917,7 +917,7 @@ function molotov(e, d, now) {
   if (!t?.isValid) return;
   const dd = dist(t.location, e.location);
   if (dd < MOLO.rMin || dd > MOLO.rMax || Math.abs(t.location.y - e.location.y) > 6) return;
-  if (!clearShot(e.dimension, headLoc(e), { x: t.location.x, y: t.location.y + 1.6, z: t.location.z })) return;   // he must see where he throws
+  if (!openNow(e.dimension, headLoc(e), { x: t.location.x, y: t.location.y + 1.6, z: t.location.z })) return;   // he must see where he throws (v7.1: a fresh look)
   if (nearSnap(t.dimension.id, t.location, MOLO.radius + 3).some((c) => !c.down && (c.type === SOLDIER || c.type === "minecraft:player" || c.type === HOUND) && c.f && isFriendly(d.faction, c.f))) return;   // never on (or near) a friend
   turnTo(e, t.location, 180);                                    // (v6.9.2: facing the throw)
   sdp(e, "war:molo", n - 1); sdp(e, "war:molot", now + MOLO.cd); squadMolo.set(sq, now + MOLO.squadGap);
@@ -989,7 +989,7 @@ function grenade(e, d, now) {
     if (sc > bs) { bs = sc; t = c.e; }
   }
   if (!t?.isValid || Math.abs(t.location.y - e.location.y) > 8) return;
-  if (!clearShot(e.dimension, headLoc(e), { x: t.location.x, y: t.location.y + 1.6, z: t.location.z })) return;
+  if (!openNow(e.dimension, headLoc(e), { x: t.location.x, y: t.location.y + 1.6, z: t.location.z })) return;
   if (nearSnap(t.dimension.id, t.location, NADE.safe).some((c) => !c.down && (c.type === SOLDIER || c.type === "minecraft:player" || c.type === HOUND) && c.f && isFriendly(d.faction, c.f))) return;
   turnTo(e, t.location, 180);                                    // (v6.9.2: he faces where he throws: it went out of his back)
   sdp(e, "war:nade", n - 1); sdp(e, "war:nadet", now + NADE.cd); squadNade.set(sq, now + NADE.squadGap);
@@ -2465,7 +2465,8 @@ async function warTable(player, pre) {
       .toggle("On the march, finish an enemy off before carrying on", { defaultValue: !!setting("commit", true) })
       .toggle("Armbands showing each soldier's type", { defaultValue: !!setting("bands", true) })
       .toggle("§cReset what every faction has learned", { defaultValue: false })
-      .toggle("Menus in A-Z order", { defaultValue: !!setting("abc", true) });
+      .toggle("Menus in A-Z order", { defaultValue: !!setting("abc", true) })
+      .dropdown("Radio messages", ["Off", "Important only", "Everything"], { defaultValueIndex: Number(setting("radio", 1)) });
     const sr = await show(sf, player);
     if (!sr || sr.canceled || !sr.formValues) return;
     sdp(world, "war:set_capture", sr.formValues[0] === 0 ? "neutral" : "surrender");
@@ -2484,6 +2485,7 @@ async function warTable(player, pre) {
     for (const e of allOf(SOLDIER)) { try { setP(e, "war:role", roleFor(e)); } catch {} }
     if (sr.formValues[13]) { learned = {}; saveLearned(); player.sendMessage("§eEvery faction's learned tactics were reset to the defaults."); }
     sdp(world, "war:set_abc", !!sr.formValues[14]);
+    sdp(world, "war:set_radio", Number(sr.formValues[15] ?? 1));
     player.sendMessage("§aSettings saved.");
     return warTable(player, 5);
     player.sendMessage("§aSettings saved.");
@@ -3181,7 +3183,8 @@ function fireGun(e, spec, t, aim) {
   let c = c0;
   try { const v = t.getVelocity(); const tt = Math.hypot(c0.x - h.x, c0.y - h.y, c0.z - h.z) / spec.speed; c = { x: c0.x + v.x * tt, y: c0.y, z: c0.z + v.z * tt }; } catch {}  // lead the target
   const mz = { x: h.x, y: h.y - 0.2, z: h.z };
-  if (!openNow(e.dimension, mz, c)) { if (c !== c0 && openNow(e.dimension, mz, c0)) c = c0; else return false; }
+  if (!openNow(e.dimension, mz, c0)) return false;                       // (v7.1: he must see him NOW, not just where he's heading)
+  if (c !== c0 && !openNow(e.dimension, mz, c)) c = c0;
   let dx = c.x - h.x, dy = c.y - h.y, dz = c.z - h.z;
   const l = Math.hypot(dx, dy, dz) || 1;
   if (spec.bullet === "ww:nbazooka_projectile") dy += (l * 0.03 * l) / (spec.speed * 2); // lift for the rocket's drop
@@ -3189,6 +3192,7 @@ function fireGun(e, spec, t, aim) {
   const r = () => (Math.random() + Math.random() - 1) * spec.spread * 1.6;
   const dir = { x: dx / n + r(), y: dy / n + r(), z: dz / n + r() };
   const from = { x: h.x + dir.x * 0.9, y: h.y - 0.2 + dir.y * 0.9, z: h.z + dir.z * 0.9 };
+  if (!openNow(e.dimension, mz, from) || !openNow(e.dimension, from, c)) return false;   // (v7.1: the muzzle itself must be clear and see him: not round a door frame or a corner)
   try {
     const b = e.dimension.spawnEntity(spec.bullet, from);
     const pc = b.getComponent("minecraft:projectile");
@@ -3203,7 +3207,7 @@ function fireGun(e, spec, t, aim) {
 // the wall is no more than 3 blocks thick and isn't made of something no bullet gets through (obsidian, bedrock, iron,
 // netherite...). The bullet comes out the far side and flies on. (The one that hit the wall still hits it.)
 const BULLETPROOF = ["obsidian", "bedrock", "barrier", "reinforced_deepslate", "netherite_block", "ancient_debris", "iron_block", "iron_door", "iron_trapdoor", "iron_bars", "anvil", "enchanting_table", "end_portal_frame", "respawn_anchor", "ender_chest", "structure_block", "command_block", "jigsaw", "end_gateway", "end_portal", "border_block"];
-const WALLBANG = { chance: 0.3, thick: 3, perTick: 8 };
+const WALLBANG = { chance: 0.1, thick: 3, perTick: 8 };   // (v7.1: rare: 1 in 10 of the shots that go into a wall)
 let bangsThisTick = 0, bangTick = -1;
 function wallbang(e, spec, from, dir, maxL) {
   try {
@@ -3288,10 +3292,13 @@ function gunTick(e, now) {
   const aiming = now - st.seen < 40 || (st.supp?.until ?? 0) > now;
   if (!!P(e, "war:aiming") !== aiming) setP(e, "war:aiming", aiming);
   if (!st.target && st.supp && now < st.supp.until && now >= st.next && st.supp.ent?.isValid && !downed.has(st.supp.ent.id)) {   // v5.4: suppressing a window / doorway
-    const p = st.supp.p, hl = headLoc(e);
-    // v6.9: only while there's still a line from where he stands NOW to that window / doorway. He kept walking (into a
-    // building, behind a wall) and kept firing at the old spot: into the ceiling, into the wall in front of him.
-    if (!openNow(e.dimension, hl, p) && !openNow(e.dimension, hl, { x: p.x, y: p.y + 0.4, z: p.z })) { st.supp = undefined; st.next = now + 4; return; }   // (v6.9.2: a fresh ray, not the memory)
+    const hl = headLoc(e), en = st.supp.ent;
+    // v7.1: he fires only at what he can SEE, right now: the man himself (his chest, or his head in a window). Not
+    // where he was a moment ago, not where he was heard: that was all the "shooting at walls" (and, with the wall
+    // let through, shooting people through walls they never saw). If you can't see him, they can't see him.
+    const vc = chest(en), vh = headOf(en);
+    const p = openNow(e.dimension, hl, vc) ? vc : openNow(e.dimension, hl, vh) ? vh : undefined;
+    if (!p) { st.supp = undefined; st.next = now + 4; return; }
     if (!friendlyInLine(e, d, hl, p, st.supp.ent) && turnTo(e, p, 20) <= 25) {
       fireAtPoint(e, spec, { x: p.x, y: p.y - 1, z: p.z });
       st.lastShot = now; st.ammo--;
@@ -3301,7 +3308,7 @@ function gunTick(e, now) {
   }
   if (!st.target || now < st.next) return;
   const t = st.target;
-  if (!t.isValid) { st.target = undefined; return; }
+  if (!t.isValid || downed.has(t.id) || pows.has(t.id)) { st.target = undefined; st.check = now; return; }   // (v7.1: down or surrendered: no more rounds into him, or past him into the wall)
   if (!shotAt(e, d, t, now)) return;                                    // beyond the gun's useful range, or a head too far to hit: close in first (v5.4)
   if (closeEnemy(e, d, 2.5)) return;                                    // hand-to-hand right now
   if (d.weapon === "at" && !VEHICLES.includes(t.typeId) && dist(t.location, e.location) < 6) { st.next = now + 6; return; }   // (v6.9.1: no rocket at a man this close: the blast would take him too)
@@ -4808,8 +4815,13 @@ function stepCost(a, b, diag, job) {
     }
   }
   if (job && inDead(job, b)) base += 40 * step;                 // a known dead end: only if there's truly nothing else
-  if (step === 1 && TROUBLE.size && job?.dim) base += troubleAt(job.dim.id, b.x, b.z) * 2.5;   // v6.4: remembered trouble: round it if there's a way
-  if (step === 1 && KILLZONE.size && job?.dim) base += killAt(job.dim.id, b.x, b.z) * 6;      // v6.9.2: stairs where men were just cut down: the other way up
+  // v6.4: remembered trouble: round it if there's a way. v7.1: never on a staircase or ladder: men get stuck on stairs
+  // (and fall on them) far more than anywhere else, and the memory piled up there until every route avoided the stairs
+  // and nobody went up or down at all. A stairhead men were cut down on still costs a little (the other way up first).
+  if (step === 1 && job?.dim && (TROUBLE.size || KILLZONE.size)) {
+    const tr = TROUBLE.size ? troubleAt(job.dim.id, b.x, b.z) : 0, kz = KILLZONE.size ? killAt(job.dim.id, b.x, b.z) : 0;
+    if (tr || kz) { const st = b.climb || onStairs(job.dim, { x: b.x + 0.5, y: b.y, z: b.z + 0.5 }); base += st ? Math.min(3, kz) : tr * 2.5 + Math.min(12, kz * 3); }
+  }
   if (job?.danger && step === 1) base += exposedCost(job, b);   // v5.7: in a fight, ground the enemy can see costs extra
   if (b.w) base *= 10;                                          // swimming: only when it saves a lot
   else if (b.shore) base += 0.6;                                // keep off the shoreline
@@ -5306,7 +5318,7 @@ system.runInterval(() => {
         }
         if (S.plan === "assault" && S.ratio < 0.5) S.plan = "contact";
       }
-      try { buildingPlan(k, S, ours, known, now); } catch (err) { oops("building plan", err); }   // v7.0
+      try { buildingPlan(k, S, ours, known, now); planCheck(S, ours, now); } catch (err) { oops("building plan", err); }   // v7.0 (v7.1: checked)
       // key terrain: the highest nearby ground that sees the enemy
       if (!S.keyPt || now % 200 < 20) {
         let best, bh = -1e9;
@@ -5351,8 +5363,7 @@ function fireAtPoint(e, spec, p) {
     const pc = b.getComponent("minecraft:projectile");
     if (pc) { pc.owner = e; pc.shoot({ x: dir.x * spec.speed, y: dir.y * spec.speed, z: dir.z * spec.speed }); }
   } catch {}
-  wallbang(e, spec, from, dir, n + 2);
-  noteShot(e);
+  noteShot(e);                                                       // (v7.1: no wallbang from covering fire: only real aimed shots)
   for (const o of nearbyCombatants(e.dimension.id, p, 4)) if (o.typeId === SOLDIER) suppB.set(o.id, Math.min(30, (suppB.get(o.id) ?? 0) + 1));
 }
 function nearestKnownB(S, e) { let b, bd = 1e9; for (const q of S.known.values()) { const dd = Math.hypot(q.x - e.location.x, q.z - e.location.z); if (dd < bd) { bd = dd; b = q; } } return b ? { q: b, dd: bd } : undefined; }
@@ -6152,12 +6163,23 @@ function medicMove(e, d, now) {
 
 // ---- radio reports to the commander (chat), a few per minute per squad at most
 const lastRadio = new Map();
+// v7.1: the radio is the commander's, and it's kept short. Settings -> General: Off / Important only (default: contact,
+// area clear, in position, a man surrendered) / Everything. The same message from the same squad never twice in 30 s,
+// and no more than one message every 3 s to a commander.
+const IMPORTANT = /^(contact|area clear|in position|one of ours)/;
+const radioSaid = new Map(), radioCmdrT = new Map();
 function radio(e, text, force = false) {
   try {
+    const lvl = Number(setting("radio", 1));
+    if (lvl <= 0 || (lvl === 1 && !IMPORTANT.test(text))) return;
     const d = sd(e), cmdr = findPlayer(gdp(e, "war:cmdr"));
     if (!cmdr) return;
     const k = squadKey(e, d), now = tick();
     if (!force && now - (lastRadio.get(k) ?? -9999) < 200) return;
+    const tk = `${k}|${text.replace(/\d+/g, "#")}`;
+    if (now - (radioSaid.get(tk) ?? -9999) < 600 || now - (radioCmdrT.get(cmdr.id) ?? -9999) < 60) return;
+    radioSaid.set(tk, now); radioCmdrT.set(cmdr.id, now);
+    if (radioSaid.size > 500) radioSaid.clear();
     lastRadio.set(k, now);
     const name = d.squad ? squadName(d.faction, d.squad) : factionLabel(d.faction, true);
     cmdr.sendMessage(`§7[Radio] §e${name}§7: ${text}`);
@@ -6617,6 +6639,7 @@ function buildingMove(e, d, now, S, t, B, underFire, exposure, moving, anchor) {
   if (pr) return followPersonal(e, now);
   { const br = buildingRole(e, d, now, S, B, t); if (br) return br; }        // v7.0: his part of the squad's plan
   { const ss = seekShot(e, d, now, S, B, t); if (ss) return ss; }           // v7.0: no line on them: go and get one
+  { const ci = closeIn(e, d, now, S, B, t, anchor); if (ci) return ci; }   // v7.1: they know where he is and nobody's firing: go to him
   if (d.func === "post" || isRiding(e)) return undefined;
   const inside = isIndoors(e);
   const supp = (suppB.get(e.id) ?? 0) > 8;
@@ -6681,11 +6704,20 @@ function buildingPlan(k, S, ours, known, now) {
   const sum = opts.reduce((t, o) => t + o[1], 0);
   let r = Math.random() * sum, pick = opts[0][0];
   for (const o of opts) { r -= o[1]; if (r <= 0) { pick = o[0]; break; } }
-  S.bplan = { kind: pick, t: now, until: now + 500 + Math.floor(Math.random() * 400) };
-  if (pick !== B0?.kind) {
-    radio(ours[0], BPLANS[pick], true);
-    callout(ours[Math.floor(Math.random() * ours.length)], pick === "sortie" || pick === "assault" ? "Moving up!" : "Hold position!");
+  S.bplan = { kind: pick, t: now, until: now + 500 + Math.floor(Math.random() * 400), said: pick === B0?.kind };
+}
+// v7.1: a plan is only reported once the men are actually carrying it out (half of them have their part and are on it);
+// one nobody can carry out (no spot with a shot, no way up) is dropped within 10 s for another
+function planCheck(S, ours, now) {
+  const P0 = S.bplan; if (!P0) return;
+  let doing = 0;
+  for (const e of ours) { const R = brain.get(e.id)?.role; if (R?.planT === P0.t && R.spot) doing++; }
+  if (!P0.said && doing >= Math.max(1, Math.ceil(ours.length / 2))) {
+    P0.said = true;
+    radio(ours[0], BPLANS[P0.kind], true);
+    callout(ours[Math.floor(Math.random() * ours.length)], P0.kind === "sortie" || P0.kind === "assault" ? "Moving up!" : "Hold position!");
   }
+  if (now - P0.t > 200 && doing < Math.max(1, Math.ceil(ours.length / 3))) P0.until = now;   // not working: think again
 }
 // every place a man can stand inside this building (every floor), sampled; remembered for a while
 const BCELLS = new Map();
@@ -6790,6 +6822,24 @@ function buildingRole(e, d, now, S, B, t) {
   const cur = travelTo.get(e.id);
   if (!personal.has(e.id) || !cur || flat(cur, R.spot) > 1.5 || Math.abs(cur.y - R.spot.y) > 1.5) { travelTo.set(e.id, { ...R.spot }); planPersonalTo(e, R.kind, R.spot, now); }
   return followPersonal(e, now) ?? { g: "g_none", t: "t_mid", urgent: false };
+}
+// v7.1: the stalemate breaker. The squad knows where the enemy is (seen or heard), nobody in it has fired for 15 s, and
+// he's free to use judgment: he goes to the nearest of them along a real route (doors, stairs, round the building),
+// and the route stops him the moment he has a shot. Not a man holding a roof or wall over them, not one watching a
+// stairhead, not a squad badly outnumbered.
+function closeIn(e, d, now, S, B, t, anchor) {
+  if (!GUNS.includes(d.weapon) || d.func === "post" || !freeOf(e) || String(gdp(e, "war:stance") ?? "aggressive") !== "aggressive" || !S?.known?.size) return undefined;
+  if (t?.isValid && canHit(e, t)) { B.closeT = undefined; return undefined; }
+  if (now - (S.fightT ?? S.contactT ?? now) < 300 || (S.ratio ?? 1) < 0.7) return undefined;
+  if (B.stair && now - B.stair.t < 400) return undefined;
+  const l = e.location;
+  let q, bd = 1e9;
+  for (const k of S.known.values()) { if (!k.ent?.isValid || downed.has(k.ent.id)) continue; const dd = dist(k, l); if (dd < bd) { bd = dd; q = k; } }
+  if (!q || bd > Math.min(aoOf(e), 90)) return undefined;
+  if (anchor && !isIndoorsAt(e.dimension, anchor.location) && q.y < anchor.location.y - 2.5 && Math.abs(l.y - anchor.location.y) < 1.5) return undefined;   // the high ground: keep it
+  if (!personal.has(e.id) || now - (B.closeT ?? -999) > 200) { B.closeT = now; planPersonalTo(e, "advance", { x: q.x, y: q.y, z: q.z }, now); }
+  note(e, "closing in");
+  return followPersonal(e, now);
 }
 // anyone in or at a building with the enemy near and nothing to shoot at for a while: go and find a line (out from under
 // the balcony, to the rail, to the next window), instead of standing there firing into the ceiling
@@ -7759,6 +7809,7 @@ let troubleDirty = false;
 const troubleKey = (dimId, x, z) => `${dimId}|${Math.floor(x) >> 1}|${Math.floor(z) >> 1}`;
 function noteTrouble(dim, l, w = 1) {
   try {
+    if (dim.getBlock && onStairs(dim, l)) return;                     // (v7.1: stairs are never "trouble": everyone needs them)
     const k = troubleKey(dim.id ?? dim, l.x, l.z), r = TROUBLE.get(k) ?? { n: 0, t: 0 };
     r.n = Math.min(8, r.n + w); r.t = tick(); TROUBLE.set(k, r); troubleDirty = true;
     if (TROUBLE.size > 400) { let ok, ot = Infinity; for (const [kk, v] of TROUBLE) if (v.t < ot) { ot = v.t; ok = kk; } TROUBLE.delete(ok); }
@@ -7768,6 +7819,7 @@ const troubleAt = (dimId, x, z) => TROUBLE.size ? (TROUBLE.get(troubleKey(dimId,
 system.runInterval(() => {
   const now = tick();
   if (now === 40 || (TROUBLE.size === 0 && now % 600 === 40)) {            // load once (after the world is up)
+    try { if (world.getDynamicProperty("war:troublever") !== 71) { world.setDynamicProperty("war:trouble", undefined); world.setDynamicProperty("war:troublever", 71); } } catch {}   // v7.1: the old memory (piled up on stairs) is wiped once
     try { const raw = world.getDynamicProperty("war:trouble"); if (typeof raw === "string" && !TROUBLE.size) for (const [k, n] of Object.entries(JSON.parse(raw))) TROUBLE.set(k, { n: Number(n) || 0, t: now }); } catch {}
   }
   if (now % 6000 === 0) for (const [k, v] of [...TROUBLE]) if (now - v.t > 6000) { v.n -= 1; v.t = now; troubleDirty = true; if (v.n <= 0) TROUBLE.delete(k); }   // fades: -1 every 5 min untouched
@@ -8076,7 +8128,7 @@ function suppressPoint(e, d, S, now) {
   const h = headLoc(e);
   let best, bd = 1e9;
   for (const q of S.known.values()) {
-    if (now - q.t > 30) continue;
+    if (now - q.t > 30 || q.heard || !q.ent?.isValid) continue;           // (v7.1: seen, not heard)
     const dd = Math.hypot(q.x - h.x, q.z - h.z);
     if (dd >= bd || dd > engageRange(e, d, q.ent, now)) continue;
     let p = { x: q.x, y: q.y + 1.2, z: q.z };

@@ -113,7 +113,12 @@ function shotStats(fac, from = 0) {
 }
 // note the distance from shooter to nearest enemy at each shot
 const origPush = SIM.shots.push.bind(SIM.shots);
-SIM.shots.push = (x) => { try { const o = x.owner; let bd = 1e9; for (const e of alive()) if (e !== o && !W.isDowned(e) && e.props.get("war:faction") !== o.props.get("war:faction")) bd = Math.min(bd, Math.hypot(e._loc.x - o._loc.x, e._loc.z - o._loc.z)); x.dist = bd; const gs = W.gunState.get(o.id); x.supp = !!(gs && !gs.target && gs.supp && gs.supp.until > SIM.tick); } catch {} return origPush(x); };
+SIM.shots.push = (x) => { try { const o = x.owner; let bd = 1e9; for (const e of alive()) if (e !== o && !W.isDowned(e) && e.props.get("war:faction") !== o.props.get("war:faction")) bd = Math.min(bd, Math.hypot(e._loc.x - o._loc.x, e._loc.z - o._loc.z)); x.dist = bd; const gs = W.gunState.get(o.id); x.supp = !!(gs && !gs.target && gs.supp && gs.supp.until > SIM.tick);
+  // v7.1: blind = at the moment of the shot, no straight line from the muzzle to any part of any enemy within 80
+  let seeAny = false; const f0 = x.from;
+  for (const e of alive()) { if (seeAny || e === o || W.isDowned(e) || e.props.get("war:faction") === o.props.get("war:faction")) continue; if (Math.hypot(e._loc.x - f0.x, e._loc.z - f0.z) > 80) continue;
+    for (const hy of [0.6, 1.2, 1.7]) { const t = { x: e._loc.x, y: e._loc.y + hy, z: e._loc.z }, dx = t.x - f0.x, dy = t.y - f0.y, dz = t.z - f0.z, L = Math.hypot(dx, dy, dz) || 1; if (!overworld.getBlockFromRay(f0, { x: dx / L, y: dy / L, z: dz / L }, { maxDistance: L - 0.3 })) { seeAny = true; break; } } }
+  x.blind = !seeAny; if (x.blind && opt.blindlog) { const gs = W.gunState.get(o.id), tg = gs?.target; console.error("BLIND", SIM.tick, "wb", !!x.wb, "from", f0.x.toFixed(1), f0.y.toFixed(1), f0.z.toFixed(1), "tgt", tg ? `${tg._loc.x.toFixed(1)},${tg._loc.y.toFixed(1)},${tg._loc.z.toFixed(1)} down=${W.isDowned(tg)} fac=${tg.props?.get("war:faction")} type=${tg.typeId}` : "-", "supp", !!gs?.supp, "shooter", o._loc.x.toFixed(1), o._loc.y.toFixed(1), o._loc.z.toFixed(1)); } } catch {} return origPush(x); };
 // v6.0: teleports of more than 2.5 blocks (rescues / anything that jumps a soldier)
 let bigTp = 0;
 { const tp0 = MC.Entity.prototype.teleport; MC.Entity.prototype.teleport = function (loc, o) { if (this.typeId === SOLDIER && this._loc && Math.hypot(loc.x - this._loc.x, loc.y - this._loc.y, loc.z - this._loc.z) > 2.5) { bigTp++; if (opt.tplog) console.error("TP", SIM.tick, JSON.stringify(this._loc), "->", JSON.stringify(loc), W.notes?.get?.(this.id)?.text, opt.tplog === "2" ? new Error().stack.split("\n").slice(2, 5).map((s) => s.trim().replace(/\(.*main.js:/, "(")).join(" < ") : ""); } return tp0.call(this, loc, o); }; }
@@ -867,7 +872,9 @@ const S = {
       if (!def.some((e) => e.isValid && !W.isDowned(e)) || !att.some((e) => e.isValid && !W.isDowned(e))) break;
     }
     const top = (N) => Object.fromEntries(Object.entries(N).sort((a, b) => b[1] - a[1]).slice(0, 8));
-    report({ GT: opt.gt ? GT : undefined, mode: opt.mode ?? "out", ticks: SIM.tick - t0, defUp: def.filter((e) => e.isValid && !W.isDowned(e)).length, attUp: att.filter((e) => e.isValid && !W.isDowned(e)).length, firstDef, firstAtt, defShots: shotStats(2, t0).shots, attShots: shotStats(1, t0).shots, defsDownstairs: defDown, defBunch: +(bunch / Math.max(1, bunchN)).toFixed(2), stairs: { west: stairUse.west.size, east: stairUse.east.size }, defNotes: top(dn), attNotes: top(an) });
+    const blind = (f) => { const a = SIM.shots.filter((x) => x.t >= t0 && x.owner?.props?.get("war:faction") === f); return a.length ? +(a.filter((x) => x.blind).length / a.length).toFixed(2) : 0; };
+    const blk = (f) => { const a = SIM.shots.filter((x) => x.t >= t0 && x.owner?.props?.get("war:faction") === f); return a.length ? +(a.filter((x) => x.block).length / a.length).toFixed(2) : 0; };
+    report({ GT: opt.gt ? GT : undefined, wallShare: { def: blk(2), att: blk(1) }, blindShare: { def: blind(2), att: blind(1) }, blindWhy: (() => { const a = SIM.shots.filter((x) => x.t >= t0 && x.blind); return { n: a.length, wb: a.filter((x) => x.wb).length, supp: a.filter((x) => x.supp).length, at: a.filter((x) => (x.typeId ?? "").includes("bazooka")).length }; })(), mode: opt.mode ?? "out", ticks: SIM.tick - t0, defUp: def.filter((e) => e.isValid && !W.isDowned(e)).length, attUp: att.filter((e) => e.isValid && !W.isDowned(e)).length, firstDef, firstAtt, defShots: shotStats(2, t0).shots, attShots: shotStats(1, t0).shots, defsDownstairs: defDown, defBunch: +(bunch / Math.max(1, bunchN)).toFixed(2), stairs: { west: stairUse.west.size, east: stairUse.east.size }, defNotes: top(dn), attNotes: top(an) });
   },
   // v7.0: patrol / roam inside the two-storey hall (no enemy): how much of the building do they cover, which floors
   async roamTest() {
@@ -903,6 +910,28 @@ const S = {
     globalThis.__formAnswers = [{ selection: 1 }];                   // shown: My faction, Alpha, Gamma, Zeta, « Back -> Alpha (orig 3)
     const r2 = await W.show(af, player);
     report({ dropdown: r1.formValues, button: r2.selection, perm: W.sortPerm(["§9Blue (Wehrmacht)", "§cRed", "§aGreen (Allies)", "None"]) });
+  },
+  // v7.1: staircase lab. A soldier on the ground floor of a 2-storey house must get upstairs (and one upstairs must get
+  //   down). kind=straight (enclosed, ceiling hole), switch (U-turn with a landing), open (along an open atrium edge),
+  //   slab (slabs and full blocks alternating), stone (stone-brick stairs), narrowhead (low ceiling over the stairs)
+  async stairsLab() {
+    SIM.bounds = { x0: -20, x1: 40, z0: -20, z1: 40, y0: -8, y1: 30 };
+    fill(-20, -4, -20, 40, -1, 40, "grass_block");
+    fill(0, 0, 0, 16, 11, 14, "stone_bricks"); fill(1, 0, 1, 15, 10, 13, "air"); fill(1, 5, 1, 15, 5, 13, "oak_planks");
+    setBlock(8, 0, 0, "air"); setBlock(8, 1, 0, "air");
+    const k = opt.kind ?? "straight", ST = k === "stone" ? "stone_brick_stairs" : "oak_stairs";
+    if (k === "straight" || k === "stone" || k === "narrowhead") { for (let i = 0; i < 5; i++) setBlock(3 + i, i, 3, ST); fill(3, 5, 3, 8, 5, 3, "air"); if (k === "narrowhead") fill(2, 6, 2, 9, 6, 4, "oak_planks"), fill(9, 6, 3, 9, 7, 3, "air"); }
+    if (k === "switch") { for (let i = 0; i < 3; i++) setBlock(3 + i, i, 2, "oak_stairs"); fill(6, 0, 2, 7, 2, 3, "stone_bricks"); for (let i = 0; i < 2; i++) setBlock(5 - i, 3 + i, 3, "oak_stairs"); fill(3, 5, 2, 7, 5, 3, "air"); }
+    if (k === "open") { fill(4, 5, 4, 12, 5, 9, "air"); for (let i = 0; i < 5; i++) setBlock(4 + i, i, 3, "oak_stairs"); fill(4, 5, 3, 8, 5, 3, "air"); }
+    if (k === "slab") { for (let i = 0; i < 5; i++) { setBlock(3 + 2 * i, i, 3, "oak_slab"); setBlock(4 + 2 * i, i, 3, "oak_planks"); } fill(3, 5, 3, 13, 5, 3, "air"); }
+    spawnPlayer({ x: 8, y: 0, z: -10 });
+    const up = soldier(1, { x: 12.5, y: 0, z: 10.5 }, "rifle", 1, "hold"), down = soldier(2, { x: 12.5, y: 6, z: 10.5 }, "rifle", 2, "hold");
+    step(20);
+    await order(1, { x: 3, y: 6, z: 11 }, "hold");
+    await W.giveOrder(player, { faction: 2, order: 0, squad: 0, count: 0, radius: 200, stance: "aggressive", ao: 100, free: true, target: 5, cx: 12, cz: -8, cy: 0, then: "hold" });
+    let upT = -1, downT = -1;
+    for (let t = 0; t < 1200; t += 10) { step(10); if (upT < 0 && up._loc.y > 5.5) upT = t; if (downT < 0 && down._loc.y < 0.5 && down._loc.z < 0) downT = t; if (upT >= 0 && downT >= 0) break; }
+    report({ kind: k, upT, downT, upAt: `${up._loc.x.toFixed(1)},${up._loc.y.toFixed(1)},${up._loc.z.toFixed(1)}`, downAt: `${down._loc.x.toFixed(1)},${down._loc.y.toFixed(1)},${down._loc.z.toFixed(1)}`, upNote: W.notes.get(up.id)?.text, downNote: W.notes.get(down.id)?.text });
   },
   // v6.6: weapons. mode=molotov: 6 molotov soldiers vs 6 swordsmen; mode=spear: 6 spears vs 6 swords (melee duel)
   async weapons() {
