@@ -1,4 +1,4 @@
-// War Engine v6.9.2: faction NPC war framework
+// War Engine v6.9.3: faction NPC war framework
 import { world, system, Player, ItemStack, EquipmentSlot, GameMode } from "@minecraft/server";
 import { ActionFormData, ModalFormData, FormCancelationReason } from "@minecraft/server-ui";
 import { SKINS } from "./skins.js";
@@ -1195,7 +1195,8 @@ world.beforeEvents.entityHurt.subscribe((ev) => {
     if (v?.typeId === SOLDIER && !downed.has(v.id)) {
       const cause = String(ev.damageSource.cause ?? "");
       const h = v.getComponent("minecraft:health");
-      if (h && ev.damage >= h.currentValue && cause !== "void" && !dying.has(v.id)) {
+      const noDown = ["cavalier", "houndmaster"].includes(String(gdp(v, "war:div") ?? ""));   // (v6.9.3: riders and dog handlers just die)
+      if (h && ev.damage >= h.currentValue && cause !== "void" && !dying.has(v.id) && !noDown) {
         ev.cancel = true;                                            // falls wounded instead of dying
         let killer; try { killer = ev.damageSource?.damagingEntity; } catch {}
         system.run(() => { try { if (v.isValid) { const hh = v.getComponent("minecraft:health"); if (hh) hh.setCurrentValue(1); goDown(v, killer); } } catch {} });
@@ -1992,13 +1993,17 @@ async function batonUseInner(player) {
     const facOpts = [];
     if (playerFaction(player)) { facOpts.push(playerFaction(player)); ff.button(`My faction: ${factionLabel(playerFaction(player))}`); }
     facOpts.push(0); ff.button("All factions");
+    // v6.9.3: whole coalitions, ordered as one army (every member faction's soldiers within range)
+    const coalsO = getCoals().map((c, i) => ({ c, i })).filter((x) => (x.c.members ?? []).length >= 1);
+    for (const x of coalsO) { facOpts.push({ coal: x.i }); ff.button(`§l⚑ ${x.c.name}§r\n${x.c.members.map((m) => factionLabel(m)).join(" ")}`); }
     for (let i = 1; i <= NF; i++) if (i !== playerFaction(player)) { facOpts.push(i); ff.button(factionLabel(i)); }
     const fr = await show(ff, player);
     if (!fr || fr.canceled || fr.selection === undefined) return;
-    const fac = facOpts[fr.selection];
-    const of = new ModalFormData().title(`Orders: ${factionLabel(fac, true)}`)
+    const pickF = facOpts[fr.selection], coalPick = typeof pickF === "object" ? pickF.coal : undefined;
+    const fac = coalPick !== undefined ? 0 : pickF;
+    const of = new ModalFormData().title(`Orders: ${coalPick !== undefined ? getCoals()[coalPick].name : factionLabel(fac, true)}`)
       .dropdown("Order", ORDERS.map((o) => o[1]), { defaultValueIndex: def.order })
-      .dropdown("Squad (Garrison only obeys when its squad is picked)", squadList(fac, "All squads"), { defaultValueIndex: fac === def.faction ? def.squad : 0 })
+      .dropdown("Squad (Garrison only obeys when its squad is picked)", coalPick !== undefined ? ["All squads", ...[1, 2, 3, 4, 5, 6, 7, 8, 9].map((n) => `Squad ${n} (in every member faction)`)] : squadList(fac, "All squads"), { defaultValueIndex: fac === def.faction && def.coal === coalPick ? def.squad : 0 })
       .slider("How many (0 = all)", 0, 100, { valueStep: 5, defaultValue: def.count })
       .slider("Soldiers within (blocks)", 16, 200, { valueStep: 8, defaultValue: def.radius })
       .dropdown("Stance", ["Aggressive (chase what they see)", "Defensive (hold and shoot what comes)", "Hold fire (only shoot back)"], { defaultValueIndex: Math.max(0, ["aggressive", "defensive", "holdfire"].indexOf(def.stance ?? "aggressive")) })
@@ -2007,7 +2012,7 @@ async function batonUseInner(player) {
     const or = await show(of, player);
     if (!or || or.canceled || !or.formValues) return;
     const v = or.formValues.map(Number);
-    cfg = { faction: fac, order: v[0], squad: v[1], count: v[2], radius: v[3], stance: ["aggressive", "defensive", "holdfire"][v[4]] ?? "aggressive", ao: Math.round(v[5] ?? 100), free: v[6] !== 1 };
+    cfg = { faction: fac, coal: coalPick, order: v[0], squad: v[1], count: v[2], radius: v[3], stance: ["aggressive", "defensive", "holdfire"][v[4]] ?? "aggressive", ao: Math.round(v[5] ?? 100), free: v[6] !== 1 };
     if (ORDERS[cfg.order][0] === "mark") { await markSpot(player); return; }
     if (ORDERS[cfg.order][0] === "charge") {
       const tf = new ActionFormData().title("Charge POS: where?").button("Where I'm looking (any distance)").button("Nearest enemy war flag")
@@ -2063,14 +2068,17 @@ async function giveOrder(player, cfg) {
   try { await giveOrderInner(player, cfg); }
   catch (err) { player.onScreenDisplay.setActionBar(`§cThat order couldn't be given here (${String(err).slice(0, 60)}).`); }
 }
-async function giveOrderInner(player, cfg) {
+async function giveOrderInner(player, cfg, given) {
   let order = ORDERS[cfg.order][0];
   if (order === "mark") { await markSpot(player); return; }
   const now = tick();
-  let pool = player.dimension.getEntities({ type: SOLDIER, location: player.location, maxDistance: cfg.radius }).filter((e) => {
+  const coalMembers = cfg.coal !== undefined ? (getCoals()[cfg.coal]?.members ?? []) : [];
+  if (cfg.coal !== undefined && !coalMembers.length) { player.onScreenDisplay.setActionBar("§7That coalition has no factions (or is gone)."); return; }
+  let pool = given ?? player.dimension.getEntities({ type: SOLDIER, location: player.location, maxDistance: cfg.radius }).filter((e) => {
     const d = sd(e);
     if (d.surr || d.div === "guard" || d.div === "medic" || isRiding(e)) return false;
-    if (cfg.faction && d.faction !== cfg.faction) return false;
+    if (cfg.coal !== undefined) { if (!coalMembers.includes(d.faction)) return false; }   // (v6.9.3: a coalition order)
+    else if (cfg.faction && d.faction !== cfg.faction) return false;
     if (cfg.squad && d.squad !== cfg.squad) return false;
     if (d.div === "garrison" && !cfg.squad) return false; // garrison only answers to its own squad
     return true;
@@ -2081,8 +2089,14 @@ async function giveOrderInner(player, cfg) {
     const fb = now - Number(gdp(b, "war:ordt") ?? -99999) < 2400 ? 1 : 0;
     return fa - fb || dist(a.location, player.location) - dist(b.location, player.location);
   });
-  if (cfg.count) pool = pool.slice(0, cfg.count);
+  if (cfg.count && !given) pool = pool.slice(0, cfg.count);
   if (!pool.length) { player.onScreenDisplay.setActionBar("§7No soldiers matched that order."); return; }
+  if (cfg.coal !== undefined && !given) {                         // v6.9.3: a coalition: the same order to each member faction's men
+    const byF = new Map(); for (const e of pool) { const f = sd(e).faction; if (!byF.has(f)) byF.set(f, []); byF.get(f).push(e); }
+    for (const [f, grp] of byF) await giveOrderInner(player, { ...cfg, coal: undefined, faction: f }, grp);
+    player.onScreenDisplay.setActionBar(`§e${ORDERS[cfg.order][1]}: §f${pool.length} soldiers of §l${getCoals()[cfg.coal]?.name ?? "the coalition"}§r §7(${[...byF].map(([f, g]) => `${g.length} ${factionLabel(f, true)}`).join(", ")})`);
+    return;
+  }
 
   if (order === "board") {
     let veh;
@@ -2993,6 +3007,7 @@ function isTargetFor(e, d, o) {
   if (o.id === e.id) return false;
   if (o.typeId === SOLDIER && (downed.has(o.id) || pows.has(o.id))) return false;   // nobody shoots the downed or prisoners
   if (d.weapon === "at" && (VEHICLES.includes(o.typeId) || d.div !== "grenadier")) return VEHICLES.includes(o.typeId) && isHostile(d.faction, vehicleFaction(o));   // (v6.9.1: the Demolition bazooka fires at men too)
+  if (d.weapon === "at" && isMob(o)) return false;                    // (v6.9.3: never a rocket at a zombie or a creeper: only the enemy's army)
   if (VEHICLES.includes(o.typeId)) return false;
   if (o.typeId === SOLDIER || o.typeId === HOUND) return isHostile(d.faction, factionOf(o)) || isProvoker(d.faction, o, tick());
   if (o.typeId === "minecraft:player") { try { return playerFair(o) && (isHostile(d.faction, factionOf(o)) || isProvoker(d.faction, o, tick())); } catch { return false; } }
@@ -5739,7 +5754,7 @@ function callout(e, text, opt = {}) {
     const f = Number(P(e, "war:faction") ?? 0), lang = opt.lang ?? voiceOf(f);
     if (!lang || lang === "none") return false;
     const has = VOICE_HAS[lang] ?? BASE_LINES, now = tick(), l = e.location, did = e.dimension.id;
-    const saidNear = (k, win) => heardLine.some((h) => h.key === k && h.dim === did && now - h.t < win && Math.abs(h.x - l.x) < 40 && Math.abs(h.z - l.z) < 40);
+    const saidNear = (k, win) => heardLine.some((h) => h.key === k && h.f === f && h.dim === did && now - h.t < win && Math.abs(h.x - l.x) < 40 && Math.abs(h.z - l.z) < 40);   // (v6.9.3: per faction: two sides can both shout "Contact!")
     let key = opt.key ?? (test ? has[Math.floor(Math.random() * has.length)] : CALL_KEY[text]);
     if (text === "IDLE") { const fresh = IDLE_LINES.filter((k) => voiceHas(lang, k) && !saidNear(k, 6000)); key = fresh[Math.floor(Math.random() * fresh.length)]; }
     if (!key || !voiceHas(lang, key)) return false;
@@ -5747,11 +5762,11 @@ function callout(e, text, opt = {}) {
       if (now - (lastCall.get(e.id) ?? -9999) < callGap()) return false;        // one shout per man every few seconds
       if (saidNear(key, LINE_WIN(key))) return false;                         // v6.8: never the same line from two men at once (any squad)
       const sec = Math.floor(now / 20); if (sec !== callSec) { callSec = sec; callsThisSec = 0; }
-      if (callsThisSec >= 3 || !playerNear(e, 32)) return false;              // never a wall of noise; nobody near: no sound
+      if (callsThisSec >= 6 || !playerNear(e, 32)) return false;            // (v6.9.3: up to 6 a second, overlapping: a battle sounds like one)              // never a wall of noise; nobody near: no sound
     }
     lastCall.set(e.id, now); callsThisSec++;
     if (lastCall.size > 4000) lastCall.clear();
-    heardLine.push({ key, dim: did, x: l.x, z: l.z, t: now });
+    heardLine.push({ key, f, dim: did, x: l.x, z: l.z, t: now });
     while (heardLine.length && now - heardLine[0].t > 6000) heardLine.shift();
     if (heardLine.length > 300) heardLine.splice(0, heardLine.length - 300);
     const pitch = 0.92 + ((e.id.charCodeAt(e.id.length - 1) * 7) % 17) / 100 - (downed.has(e.id) ? 0.05 : 0);   // his own voice (weaker when he's down)
@@ -6511,8 +6526,9 @@ function buildingMove(e, d, now, S, t, B, underFire, exposure, moving, anchor) {
   const defending = ["hold", "post", "sentry", "stand"].includes(d.func) && (!anchor || isIndoorsAt(e.dimension, anchor.location) || flat(anchor.location, e.location) < 12);
   if (inside && defending && S?.known?.size) {
     // the building is theirs: everyone on alert, facing the way in, firing from doorways and windows
-    if (t?.isValid && canHit(e, t)) { turnTo(e, t.location, 25); return undefined; }   // a shot: take it
+    if (t?.isValid && canHit(e, t)) { turnTo(e, t.location, 25); B.huntT = undefined; return undefined; }   // a shot: take it
     if (GUNS.includes(d.weapon)) { const sw = stairWatch(e, d, S, now, B); if (sw) return sw; }   // (v6.9.2: the enemy's below: cover the stairheads)
+    if (GUNS.includes(d.weapon)) { const hm = huntContact(e, d, S, now, B); if (hm) return hm; }   // (v6.9.3: in the next room: go and fight them)
     if (t?.isValid) { turnTo(e, t.location, 25); if (!canHit(e, t) && openWindow(e, t, now)) return { g: "g_none", t: "t_mid", urgent: false }; }
     note(e, "defending the building");
     return undefined;                                                   // (the brain / gunfire do the fighting from here)
@@ -6612,6 +6628,25 @@ function stairWatch(e, d, S, now, B) {
   if (Math.random() < 0.4) callout(e, "Hold position!");
   note(e, "taking the stairs");
   return { g: "g_wp", slot, t: "t_mid", urgent: true };
+}
+// v6.9.3: inside, the enemy known (seen or heard) on this floor within 30 blocks, and nothing to shoot at for 3 s: go
+// and engage him along a real route (through the doorway, round the corner); the route stops him as soon as he has a
+// shot. Before, a squad holding a hallway beside the room the enemy had walked into stood there for the whole fight,
+// and so did the enemy: both sides "defending the building", nobody fighting.
+function huntContact(e, d, S, now, B) {
+  const l = e.location;
+  if (B.stair && now - B.stair.t < 400) return undefined;                  // watching a stairhead: that IS the fight, he stays
+  let best, bd = 1e9;
+  for (const q of S.known.values()) { if (Math.abs(q.y - l.y) > 2.5 || onStairs(e.dimension, q) || q.y < l.y - 1) continue; const dd = Math.hypot(q.x - l.x, q.z - l.z); if (dd < bd && dd < 30) { bd = dd; best = q; } }   // (one coming up the stairs: let him come)
+  if (!best) { B.huntT = undefined; return undefined; }
+  const g = gunState.get(e.id);
+  if (now - (g?.lastShot ?? -999) < 60) { B.huntT = undefined; return undefined; }   // he's fighting
+  B.huntT ??= now;
+  if (now - B.huntT < 60) return undefined;
+  if (S.ratio !== undefined && S.ratio < 0.6) return undefined;                // badly outnumbered: hold and let them come
+  if (!personal.has(e.id) || now - (B.huntPlanT ?? -999) > 200) { B.huntPlanT = now; planPersonalTo(e, "engage", { x: best.x, y: best.y, z: best.z }, now); }
+  note(e, "moving to engage");
+  return followPersonal(e, now);
 }
 // attackers: about to climb to a floor where the enemy is: wait at the foot for the others, then all go
 const stackUp = new Map(); // "squad|stair cell" -> { t0, go }

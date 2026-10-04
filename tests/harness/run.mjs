@@ -794,6 +794,43 @@ const S = {
     const keys = {}; for (const v of SIM.voices) { const k = v.split(" ")[1].split(".").pop(); keys[k] = (keys[k] ?? 0) + 1; }
     report({ ticks: SIM.tick - t0, defUp: def.filter((e) => e.isValid && !W.isDowned(e)).length, attUp: att.filter((e) => e.isValid && !W.isDowned(e)).length, defNotes: dn, attNotes: an, lines: keys, attShots: shotStats(1, t0), defShots: shotStats(2, t0) });
   },
+  // v6.9.3: a coalition order: soldiers of the member factions (1 and 3) obey, faction 2 doesn't
+  async coalOrder() {
+    spawnPlayer({ x: 0, y: 0, z: -5 });
+    MC.world.setDynamicProperty("war:coal", JSON.stringify([{ name: "Pact", members: [1, 3] }]));
+    const s1 = [soldier(1, { x: 0.5, y: 0, z: 0.5 }), soldier(1, { x: 2.5, y: 0, z: 0.5 })], s3 = [soldier(3, { x: 4.5, y: 0, z: 0.5 })], s2 = [soldier(2, { x: 6.5, y: 0, z: 0.5 })];
+    step(20);
+    await W.giveOrder(player, { faction: 0, coal: 0, order: 0, squad: 0, count: 0, radius: 200, stance: "aggressive", ao: 100, free: true, target: 5, cx: 3, cz: 40, cy: 0, then: "hold" });
+    step(900);
+    const z = (L) => L.map((e) => Math.round(e._loc.z));
+    report({ f1: z(s1), f3: z(s3), f2: z(s2), bar: SIM.log.filter((m) => /\[bar\]/.test(m)).slice(-1) });
+  },
+  // v6.9.3: defenders holding a hallway (2 wide) beside a big room. The enemy comes in through the room's far door. The
+  //   defenders hear them and must get into the fight (through the doorways), not stand in the corridor.
+  async hallway() {
+    SIM.bounds = { x0: -20, x1: 50, z0: -20, z1: 50, y0: -8, y1: 20 };
+    fill(-20, -4, -20, 50, -1, 50, "grass_block");
+    fill(0, 0, 0, 30, 4, 12, "stone_bricks"); fill(1, 0, 1, 29, 3, 11, "air");     // the building, 4 high inside
+    fill(1, 0, 3, 29, 3, 3, "stone_bricks");                                     // the hallway wall (hallway z 1-2, room z 4-11)
+    for (const x of [5, 25]) { setBlock(x, 0, 3, "air"); setBlock(x, 1, 3, "air"); }   // two doorways from the hallway into the room
+    setBlock(15, 0, 12, "air"); setBlock(15, 1, 12, "air");                      // the room's outside door
+    setBlock(0, 0, 2, "air"); setBlock(0, 1, 2, "air");                          // the hallway's outside door
+    spawnPlayer({ x: 15, y: 0, z: 30 });
+    W.setRelPair(1, 2, "1", false);
+    const def = []; for (let i = 0; i < 6; i++) def.push(soldier(2, { x: 9 + i * 2 + 0.5, y: 0, z: 1.5 + (i % 2) }, "rifle", 1, "hold"));
+    const att = []; for (let i = 0; i < 6; i++) att.push(soldier(1, { x: 12 + i + 0.5, y: 0, z: 22.5 }, ["rifle", "smg", "semi"][i % 3]));
+    step(40);
+    await order(1, { x: 15, y: 0, z: 7 }, "hold");
+    const t0 = SIM.tick, dn = {}; let firstDefShot = -1;
+    for (let t = 0; t < Number(opt.ticks ?? 2400); t += 10) {
+      step(10);
+      for (const e of def) { if (!e.isValid || W.isDowned(e)) continue; const n = W.notes.get(e.id); if (n && SIM.tick - n.t < 20) dn[n.text.replace(/\d+/g, "#")] = (dn[n.text.replace(/\d+/g, "#")] ?? 0) + 1; }
+      if (firstDefShot < 0 && shotStats(2, t0).shots > 0) firstDefShot = SIM.tick - t0;
+      if (opt.trace && SIM.tick % Number(opt.trace) === 0) console.error("T", SIM.tick, def.map((e) => `${e._loc.x.toFixed(0)},${e._loc.z.toFixed(0)}${W.isDowned(e) ? "D" : ""}:${(W.notes.get(e.id)?.text ?? "").slice(0, 16)}`).join(" | "), "||", att.map((e) => `${e._loc.x.toFixed(0)},${e._loc.z.toFixed(0)}${W.isDowned(e) ? "D" : ""}:${(W.notes.get(e.id)?.text ?? "").slice(0, 12)}`).join(" "));
+      if (!def.some((e) => e.isValid && !W.isDowned(e)) || !att.some((e) => e.isValid && !W.isDowned(e))) break;
+    }
+    report({ ticks: SIM.tick - t0, defUp: def.filter((e) => e.isValid && !W.isDowned(e)).length, attUp: att.filter((e) => e.isValid && !W.isDowned(e)).length, firstDefShot, defShots: shotStats(2, t0).shots, attShots: shotStats(1, t0).shots, defNotes: dn });
+  },
   // v6.6: weapons. mode=molotov: 6 molotov soldiers vs 6 swordsmen; mode=spear: 6 spears vs 6 swords (melee duel)
   async weapons() {
     SIM.bounds = { x0: -40, x1: 40, z0: -40, z1: 60, y0: -8, y1: 30 };

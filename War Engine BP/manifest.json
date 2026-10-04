@@ -1,13 +1,13 @@
 {
   "format_version": 2,
   "header": {
-    "name": "War Engine BP v6.9.2",
+    "name": "War Engine BP v6.9.3",
     "description": "Faction NPC war framework",
     "uuid": "67b58306-3e4b-4c5d-9066-5f8fc72ff122",
     "version": [
       6,
       9,
-      2
+      3
     ],
     "min_engine_version": [
       1,
@@ -22,7 +22,7 @@
       "version": [
         6,
         9,
-        2
+        3
       ]
     },
     {
@@ -32,7 +32,7 @@
       "version": [
         6,
         9,
-        2
+        3
       ],
       "entry": "scripts/main.js"
     }
@@ -43,7 +43,7 @@
       "version": [
         6,
         9,
-        2
+        3
       ]
     },
     {

@@ -1,5 +1,24 @@
 # War Engine changelog
 
+## v6.9.3 (Indoor fights that actually happen, coalition orders, overlapping callouts)
+
+- **No more standing in the hallway.** Inside a building, a soldier who knows of the enemy on his floor within 30
+  blocks (seen or heard), and has had nothing to shoot at for 3 s, now goes and engages along a real route: through
+  the doorway, round the corner. He stops as soon as he has a shot. Before, a squad holding a hallway beside the room
+  the enemy had walked into stood there for the whole fight, and so did the enemy, both "defending the building".
+  Exceptions:
+  - a man covering a stairhead stays there;
+  - nobody chases a man who is coming up the stairs;
+  - a squad that is badly outnumbered holds and lets them come.
+- **Coalition orders.** The Command Baton's "which faction?" list now has every coalition. An order to a coalition
+  goes to the soldiers of all its member factions within range: each faction gets the same order, and its own march
+  if it's a march. Squads 1-9 mean that squad in every member faction.
+- **Callouts overlap.** Different lines, and the same line from different sides, can now play at the same time. Only
+  the same line from the same faction nearby is held back (as before). Up to 6 a second (was 3).
+- **Bazookas** never fire at mobs (zombies, creepers...): only at the enemy's army and vehicles.
+- **Cavaliers and houndmasters** die outright instead of lying downed. Hounds never had a downed state.
+- Checked every test scenario for silently caught errors: none from the war logic.
+
 ## v6.9.2 (Staircases, no shooting into cover, coalition spawn, grenade facing)
 
 - **Staircases are choke points.**
