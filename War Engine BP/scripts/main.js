@@ -25,6 +25,9 @@ import "./extensions/index.js";
 // v8.1: the current tick, read from the game ONCE per tick. Asking the game (system.currentTick) is a call into the
 // engine, and the add-on asked millions of times a battle: on a real server that alone was 45% of all its work in a
 // 90 v 90 (half the lag). This interval is registered first, so it runs before every other one in the tick.
+// v8.2: level of detail. When the server falls behind (a big battle), every soldier looks and thinks a little less
+// often (down to ~40% of normal) so the game keeps running at full speed; as it catches up they go back to normal.
+const aiLoad = () => Math.min(2.5, Math.max(1, tickGap / 52));
 let TICK_NOW = 0, tickGap = 50, lastTickMs = 0;   // (tickGap: real ms between ticks, smoothed: 50 = the server keeps pace)
 system.runInterval(() => { TICK_NOW = system.currentTick; const t = Date.now(); if (lastTickMs) tickGap = tickGap * 0.95 + Math.min(500, t - lastTickMs) * 0.05; lastTickMs = t; }, 1);
 
@@ -469,8 +472,10 @@ function makeWaypoint(dim, loc, reuse = true) {
   allOfCache.delete(WAYPOINT);                                   // v5.3: the next claim this tick sees this marker too (no shared numbers)
   try { m.addEffect("invisibility", 20000000, { showParticles: false }); } catch {}
   const s = claimSlot(m);
+  try { mkPos.delete(s); } catch {}                                 // (a new marker on this number: no remembered place)
   if (!s) m.remove();
-  else { const seen = getJSON(world, "war:slotseen", {}); seen[s] = Date.now(); setJSON(world, "war:slotseen", seen); }
+  // (v8.2: no "war:slotseen" record any more: nothing ever read it, and rewriting it in full for every new waypoint
+  //  was 3.6 MB of saved data every 30 s in a big battle on a real server)
   return s;
 }
 function setGoal(e, slot) {
@@ -1161,7 +1166,7 @@ system.runInterval(() => {
   const list = allOf(SOLDIER), n = list.length;
   if (!n) return;
   const v = relVersion(), now = tick();
-  thinkAcc = Math.min(THINK_MAX, thinkAcc + n / 20);                  // (each soldier once per 20 ticks, not more often: re-deciding too often made squads flip-flop)
+  thinkAcc = Math.min(THINK_MAX, thinkAcc + n / (20 * aiLoad()));                  // (each soldier once per 20 ticks, not more often: re-deciding too often made squads flip-flop)
   const per = Math.min(n, Math.floor(thinkAcc));
   thinkAcc -= per;
   for (let k = 0; k < per; k++) {
@@ -3057,7 +3062,8 @@ function rayHit(dim, from, u, L, opts = {}) {
   return d <= L ? { hb, d, p } : undefined;
 }
 const LOS = new Map(); let losThisTick = 0;
-system.runInterval(() => { losThisTick = 0; if (LOS.size > 8000) LOS.clear(); }, 1);
+let losEntries = 0;
+system.runInterval(() => { losThisTick = 0; if (LOS.size > 8000 || losEntries > 60000) { LOS.clear(); losEntries = 0; } }, 1);   // (v8.2: the answers inside count too)
 function clearShot(dim, from, to) {
   const dx = to.x - from.x, dy = to.y - from.y, dz = to.z - from.z, l = Math.hypot(dx, dy, dz);
   if (l < 0.5) return true;
@@ -3071,6 +3077,7 @@ function clearShot(dim, from, to) {
   losThisTick++;
   let v = false;
   try { v = !rayHit(dim, from, { x: dx / l, y: dy / l, z: dz / l }, l - 0.3); } catch {}
+  if (!inner.has(kb)) losEntries++;
   inner.set(kb, { v, t: now });
   return v;
 }
@@ -3505,7 +3512,7 @@ function gunTick(e, now) {
   let st = gunState.get(e.id);
   if (!st) { st = { target: undefined, ammo: spec.mag, next: 0, seen: -999, check: 0, step: 0, back: 0 }; gunState.set(e.id, st); }
   if (now >= st.check) {
-    st.check = now + 5;
+    st.check = now + Math.round(5 * aiLoad());
     const ps = perc.get(e.id);
     const prev = st.target;
     const t = ps?.threat;
@@ -3813,7 +3820,7 @@ function perceive(e, now) {
     near = k8;
   }
   const all = [];
-  for (const c of near) { if (c.e.isValid && isTargetFor(e, d, c.e)) all.push({ o: c.e, dd: c.dd }); }
+  for (const c of near) { if (validNow(c.e) && isTargetFor(e, d, c.e)) all.push({ o: c.e, dd: c.dd }); }
   const soldiersAround = all.some((c) => !isMob(c.o));
   const cands = all
     // mid-battle, distant mobs are ignored unless they're on top of him or attacking
@@ -3908,7 +3915,7 @@ system.runInterval(() => {
   const list = allOf(SOLDIER), n = list.length;
   if (n) {
     bigBattle = n > 300;
-    percAcc = Math.min(bigBattle ? 24 : PERC_MAX, percAcc + n / 10);
+    percAcc = Math.min(bigBattle ? 24 : PERC_MAX, percAcc + n / (10 * aiLoad()));
     const per = Math.min(n, Math.floor(percAcc));
     percAcc -= per;
     for (let k = 0; k < per; k++) {
@@ -4083,7 +4090,12 @@ function getMarches() {
   }
   return marches;
 }
-function saveMarches() {
+// (v8.2: marches are saved at most every 5 s (a write of every march, every half second, was over a megabyte of saved
+//  data a minute: the server warns at 10 MB a minute, and the saving itself was lag)
+let marchesDirty = false;
+function saveMarches() { marchesDirty = true; }
+system.runInterval(() => { if (marchesDirty) { marchesDirty = false; saveMarchesNow(); } }, 100);
+function saveMarchesNow() {
   const slim = {};
   for (const [id, m] of Object.entries(marches ?? {})) { const { path, legs, ...rest } = m; slim[id] = rest; }
   try { setJSON(world, "war:marches2", slim); } catch {}
@@ -4543,7 +4555,7 @@ system.runInterval(() => {
       formMode.delete(e.id);
       if (!driveOn.has(e.id)) driveOn.set(e.id, { off: 0 });
       const pi = progOf.get(e.id) ?? 0;
-      const slot = myMarker(e, m.path[Math.min(m.path.length - 1, lookahead(m.path, pi, 4))]);   // the route driver moves it on from here
+      const slot = myMarker(e, m.path[Math.min(m.path.length - 1, lookahead(m.path, pi, 4))], "war:mymk", 1.5);   // the route driver moves it on from here
       if (slot) setCatchup(e, slot);
     }
     const last = m.path[m.path.length - 1];
@@ -4930,7 +4942,7 @@ const planJobs = [];
 const TERRAIN = new Map();            // "dim|x|y|z" -> { typeId, isAir, isLiquid, t }
 let freshReads = 0, readBudget = 1500;
 system.runInterval(() => { freshReads = 0; }, 1);
-system.runInterval(() => { const now = tick(); if (TERRAIN.size > 150000) TERRAIN.clear(); else for (const [k, v] of TERRAIN) if (now - v.t > 600) TERRAIN.delete(k); }, 600);
+system.runInterval(() => { const now = tick(); if (TERRAIN.size > 100000) TERRAIN.clear(); else for (const [k, v] of TERRAIN) if (now - v.t > 600) TERRAIN.delete(k); }, 600);
 // v5.7: terrain memory keys are numbers (no text built per lookup); far-out coordinates fall back to text
 const dimIx = (id) => id.endsWith("nether") ? 1 : id.endsWith("the_end") ? 2 : 0;
 function bkey(dimId, x, y, z) {
@@ -4943,6 +4955,7 @@ function tBlock(dim, x, y, z) {
   const c = TERRAIN.get(key);
   if (c) return c;
   freshReads++;
+  if (TERRAIN.size > 120000) TERRAIN.clear();                           // (v8.2: checked as it grows: up to 1500 new blocks a tick could pile up between the 30 s sweeps)
   const b = dim.getBlock({ x, y, z });                                   // throws when unloaded (callers handle it)
   if (!b) return undefined;
   const v = { typeId: b.typeId, isAir: b.isAir, isLiquid: b.isLiquid, t: tick() };
@@ -4971,6 +4984,7 @@ const isTall = (b) => !!b && TI(b.typeId).tall;
 const pathable = (b) => passable(b) || isOpenable(b);
 // a real floor: solid under the feet (a ladder counts: he can stand on its top rung); not a plant, torch, open trapdoor or fence
 const isFloor = (b) => { if (!b || b.isAir || b.isLiquid) return false; const t = TI(b.typeId); return !t.tall && !(t.trap && b.open) && (!t.pass || t.climb) && !t.leaves && !t.hazard; };
+let planCells = 0; const PLAN_CELLS_MAX = 160000;   // (v8.2: all route searches together: ~160k map cells, a few tens of MB at most)
 const PLAN_BUDGET = 2000;         // node expansions per tick, shared by all plans (v8.1: the time limit is what really caps it)
 function cellAt(job, x, z, refY) {
   const key = job.step > 1 ? job.nkey(x, z, 0) : job.nkey(x, z, Math.floor(refY));
@@ -5096,7 +5110,7 @@ function planRoute(dim, start, goal, onDone, opts = {}) {
   job.open.push({ x: sx, z: sz, y: s0.y, w: s0.w, climb: !!s0.climb, f: h0 });
   job.g.set(nkey(sx, sz, s0.y), 0);
   job.best = { x: sx, z: sz, key: nkey(sx, sz, s0.y) }; job.bestH = h0;
-  if (planJobs.length >= 30) {                                         // v6.1: never more than 30 searches in memory at once
+  if (planJobs.length >= 16) {                                         // v6.1: never more than 16 searches in memory at once (v8.2: was 30)
     const old = planJobs.findIndex((j) => !j.prio);
     if (old >= 0) { const [j] = planJobs.splice(old, 1); try { j.onDone(undefined, true, false); } catch {} }
   }
@@ -5148,6 +5162,11 @@ system.runInterval(() => {
   //  and ate the planner's time. And the time per tick follows how the server is coping: up to 8 ms while it keeps
   //  pace, 3 ms when it's behind: at a flat 3 ms a route through a building took over a minute in the real game)
   for (let k = planJobs.length - 1; k >= 0; k--) if (planJobs[k].cancel) planJobs.splice(k, 1);
+  planCells = 0; for (const j of planJobs) planCells += j.cells.size + j.open.size;
+  if (planCells > PLAN_CELLS_MAX) {                                 // (over the memory budget: the biggest search that isn't a march gives up first)
+    let big; for (const j of planJobs) if (!j.prio && (!big || j.cells.size > big.cells.size)) big = j;
+    if (big) { planJobs.splice(planJobs.indexOf(big), 1); try { big.onDone(undefined, true, false); } catch {} }
+  }
   const MS = tickGap < 58 ? 8 : tickGap < 75 ? 5 : 3;
   while (budget > 0 && planJobs.length && freshReads < readBudget && rounds < planJobs.length * 4 && Date.now() - tStart < MS) {
     rounds++;
@@ -5157,7 +5176,7 @@ system.runInterval(() => {
     let share = Math.max(40, Math.floor(PLAN_BUDGET / planJobs.length)) * (job.prio ? 3 : 1);
     let finished = false;
     while (share-- > 0 && budget-- > 0 && freshReads < readBudget && ((budget & 31) || Date.now() - tStart < MS)) {
-      if (!job.open.size || job.exp >= job.max || job.cells.size > 90000 || job.open.size > 60000) {   // (v6.1: and a hard size cap: never a memory blow-up)
+      if (!job.open.size || job.exp >= job.max || job.cells.size > Math.min(40000, job.max * 3 + 2000) || job.open.size > Math.min(25000, job.max * 2 + 1000) || planCells > PLAN_CELLS_MAX) {   // (v8.2: size caps per search AND for all searches together: a pile of big searches went over the game's script memory limit and crashed it)
         // no full route: go as far as we can toward the goal (re-planned later)
         const bk = job.best.key ?? job.nkey(job.best.x, job.best.z, 0);
         if (job.bestH < Math.hypot(job.goal.x - job.origin.x, job.goal.z - job.origin.z) - 6) finishJob(job, bk, true); else { try { job.onDone(undefined, true, !!job.hitUnloaded); } catch {} }
@@ -5302,6 +5321,7 @@ function helpInArea(victim, attacker, fv, now) {
 const sweep = new Map(); // id -> { slot, at, t }
 function patrolSweep(e, d, now) {
   if (d.func !== "patrol" || d.retreat || isRiding(e)) return undefined;
+  if (squads.get(squadKey(e, d))?.known?.size) { sweep.delete(e.id); return undefined; }   // (v8.2: in a fight a patrol stops wandering: the fight decides where he goes)
   const roam = !!gdp(e, "war:roam");
   const r = roam ? Math.max(d.radius, Math.min(150, aoOf(e))) : Math.max(d.radius, freeOf(e) ? Math.min(150, aoOf(e)) : d.radius);
   // every patrol uses the sweep: points on his level (v7.0: reached by a real route if need be, not only a plain walk:
@@ -5492,7 +5512,9 @@ system.runInterval(() => {
         const o = world.getEntity(sh.id); if (o?.isValid && !downed.has(o.id)) hearIt(S, o, sh, now - 30);
       }
       for (const e of ours) { const fa = firedAt.get(e.id); if (fa && now - fa.t < 40) { const o = world.getEntity(fa.by); if (o?.isValid && !downed.has(o.id)) hearIt(S, o, o.location, now - 20); } }
-      for (const [id, kk] of [...S.known]) if (!kk.ent.isValid || now - kk.t > 300 || downed.has(id) || pows.has(id)) S.known.delete(id);
+      // (v8.2: a player in creative or spectator mode is never an enemy the squad knows about: heard or seen, he isn't
+      //  hunted, grenaded or given covering fire; before, only the aimed shot skipped him)
+      for (const [id, kk] of [...S.known]) if (!kk.ent.isValid || now - kk.t > 300 || downed.has(id) || pows.has(id) || (kk.ent.typeId === "minecraft:player" && !playerFair(kk.ent))) S.known.delete(id);
       const known = [...S.known.values()];
       const oc = { x: 0, y: 0, z: 0 }; for (const e of ours) { oc.x += e.location.x; oc.y += e.location.y; oc.z += e.location.z; }
       oc.x /= ours.length; oc.y /= ours.length; oc.z /= ours.length; S.ourC = oc;
@@ -6994,12 +7016,17 @@ function buildingPlan(k, S, ours, known, now) {
   const opts = [];
   const otherFloor = known.filter((q) => Math.abs(q.y - oc.y) > 2.5 && isIndoorsAt(dim, q)).length;
   if (homeIn && inside >= 0.5) {
+    // v8.2: the house is broken into (enemy inside it): with the numbers, clear it (counterattack, decided, not a coin
+    // toss); without them, hold what's held (the stairheads and windows). Nobody stands about while the house is lost.
+    const inHouse = known.filter((q) => isIndoorsAt(dim, q)).length;
+    if (inHouse && S.ratio >= 1.0 && bold) opts.push(["assault", 4.0]);
+    else if (inHouse && S.ratio < 0.6) opts.push(["defend", 4.0]);
     opts.push(["defend", 2.0]);
-    if (bold && (S.ratio >= 1.4 || (S.ratio >= 1.0 && quiet > 900))) opts.push(["sortie", 0.2 + (S.ratio >= 1.8 ? 0.6 : 0) + (quiet > 900 ? 0.4 : 0)]);   // (out the door into their guns: only with the upper hand)
-    if (bold && otherFloor && S.ratio >= 0.8) opts.push(["assault", 0.6 + (S.ratio >= 1.2 ? 0.7 : 0) + (quiet > 300 ? 0.5 : 0)]);
+    if (bold && !inHouse && (S.ratio >= 1.4 || (S.ratio >= 1.0 && quiet > 900))) opts.push(["sortie", 0.2 + (S.ratio >= 1.8 ? 0.6 : 0) + (quiet > 900 ? 0.4 : 0)]);   // (out the door into their guns: only with the upper hand)
+    if (bold && otherFloor && S.ratio >= 0.8 && !inHouse) opts.push(["assault", 0.6 + (S.ratio >= 1.2 ? 0.7 : 0) + (quiet > 300 ? 0.5 : 0)]);
   } else if (!homeIn && (kIn >= 0.5 || inside >= 0.5)) {
     opts.push(["attack", 2.0]);
-    if (!bold || S.ratio < 0.6) opts.push(["contain", 1.5]);
+    if ((!bold || S.ratio < 0.6) && inside < 0.5) opts.push(["contain", 1.5]);   // (once inside: no going back to covering it from outside)
   }
   if (!opts.length) { S.bplan = undefined; return; }
   const sum = opts.reduce((t, o) => t + o[1], 0);
@@ -7221,7 +7248,7 @@ function assignJobs(S, P0, ours) {
   const jobs = new Map();
   const want = side === "def"
     ? { door: n >= 3 ? Math.max(1, Math.round(n * (P0.door ?? 0.3))) : 0, stairs: n >= 4 ? Math.min(2, Math.max(1, Math.round(n * 0.15))) : 0 }
-    : { support: Math.max(0, n - Math.max(1, Math.round(n * (P0.attack ?? 0.6)))) };
+    : { support: ours.filter((e) => isIndoors(e)).length * 2 >= ours.length ? 0 : Math.max(0, n - Math.max(1, Math.round(n * (P0.attack ?? 0.6)))) };   // (v8.2: most of us inside: everyone storms)
   const count = (j) => [...jobs.values()].filter((x) => x === j).length;
   for (const e of gun) { const j = keep.get(e.id); if (j && (want[j] === undefined || count(j) < want[j])) jobs.set(e.id, j); }   // (sticky)
   const free = gun.filter((e) => !jobs.has(e.id));
@@ -7827,8 +7854,13 @@ function travel(e, dest, kind, now, urgent = false) {
 // ================================================================ v5.3: route stepping, shared routes, close-combat drills
 // ---- one marker per soldier for his own moves (personal routes, short hops, brain spots). It is moved, never
 // re-spawned, so a soldier crossing a castle no longer leaves a trail of markers behind him (lag).
-function myMarker(e, loc, key = "war:mymk") {
+// (v8.2: tol: how far off the marker may be before it's moved. A walking man's marker (3+ blocks ahead, and Minecraft's
+//  walking stops 3 short of it anyway) needs no move for less than 1.5 blocks: on a real server these teleports were
+//  ~50 a tick in a 90 v 90. Where he must stand exactly (a firing spot, his place) it's still 0.4.)
+const mkPos = new Map(); // slot -> last place it was put
+function myMarker(e, loc, key = "war:mymk", tol = 0.4) {
   let s = Number(gdp(e, key) ?? 0);
+  if (s && tol > 0.4) { const p = mkPos.get(s); if (p && Math.hypot(p.x - loc.x, p.y - loc.y, p.z - loc.z) <= tol) return s; }
   const m = s ? marker(s) : undefined;
   if (!m) {
     s = makeWaypoint(e.dimension, loc, false);
@@ -7838,7 +7870,10 @@ function myMarker(e, loc, key = "war:mymk") {
     try { noteRefs(e); } catch {}
     return s;
   }
-  if (dist(m.location, loc) > 0.4) { try { m.teleport(loc); } catch {} }
+  const lp = mkPos.get(s) ?? m.location;
+  if (dist(lp, loc) > tol) { try { m.teleport(loc); mkPos.set(s, { x: loc.x, y: loc.y, z: loc.z }); } catch {} }
+  else if (!mkPos.has(s)) mkPos.set(s, { x: lp.x, y: lp.y, z: lp.z });
+  if (mkPos.size > 5000) mkPos.clear();
   return s;
 }
 
@@ -8070,9 +8105,26 @@ function trackRemote(e, now, wantsToMove) {
   if (!r) { r = { x: l.x, y: l.y, z: l.z, frozen: 0, on: false }; remoteMemo.set(e.id, r); return; }
   const moved = l.x !== r.x || l.y !== r.y || l.z !== r.z;
   r.x = l.x; r.y = l.y; r.z = l.z;
-  if (moved) { if (!gliders.has(e.id) && !climbing.has(e.id)) { r.frozen = 0; r.on = false; } return; }   // he moved by himself: simulated
+  // v8.2: a test, not a guess. Standing still for 2 s isn't proof (a man waiting his turn at a stair stands still): before
+  // he's taken to be out of range, he's given a tiny nudge; if the game moves him, it IS simulating him and he walks on
+  // his own. While he's being carried the test is repeated every ~5 s. (False alarms had men carried, teleport by
+  // teleport, the whole way: the jerky "tweaking", heavy lag, and squads bunched where the carrying ended.)
+  if (r.probe) {
+    if (now - r.probe.t >= 4) {
+      const ok = Math.hypot(l.x - r.probe.x, l.z - r.probe.z) > 0.004 || Math.abs(l.y - r.probe.y) > 0.004;
+      r.probe = undefined; r.lastProbe = now;
+      if (ok) { r.frozen = 0; r.on = false; gliders.delete(e.id); } else r.on = true;
+    }
+    return;
+  }
+  if (moved) { if (!gliders.has(e.id) && !climbing.has(e.id)) { r.frozen = 0; r.on = false; } else if (r.on && now - (r.lastProbe ?? 0) > 100) startProbe(e, r, now); return; }   // he moved by himself: simulated
   if (wantsToMove) r.frozen += 4;
-  if (r.frozen >= 40 && !playerNear(e, 32)) r.on = true;
+  if (r.frozen >= 40 && !playerNear(e, 56) && now - (r.lastProbe ?? -999) > 40) startProbe(e, r, now);
+}
+function startProbe(e, r, now) {
+  gliders.delete(e.id); glideBan.set(e.id, now + 6);
+  const l = e.location; r.probe = { t: now, x: l.x, y: l.y, z: l.z };
+  try { e.applyImpulse({ x: (Math.random() - 0.5) * 0.06, y: 0.02, z: (Math.random() - 0.5) * 0.06 }); } catch {}
 }
 // he's set to walk (Minecraft's walking on) toward a marker that's well away from him
 function wantsWalk(e, goal) {
@@ -8088,7 +8140,7 @@ function playerNear(e, R) {
 function isRemote(e) {
   const r = remoteMemo.get(e.id);
   if (!r?.on) return false;
-  if (playerNear(e, 32)) { r.on = false; r.frozen = 0; return false; }
+  if (playerNear(e, 56)) { r.on = false; r.frozen = 0; return false; }
   return true;
 }
 system.runInterval(() => {
@@ -8158,7 +8210,7 @@ system.runInterval(() => {
       gliders.delete(e.id);
       let tgt = pts[ahead >= 0 ? ahead : driveAhead(pts, i, 7)];
       if (mm && !mm.final && ahead >= 0) tgt = sideBySide(e, mm, pts, ahead, tgt) ?? tgt;   // (v7.2: in the open, side by side, not nose to tail)
-      myMarker(e, tgt);
+      myMarker(e, tgt, "war:mymk", dist(tgt, e.location) > 4 ? 1.5 : 0.4);
       if (dist(tgt, e.location) <= 3.3) stepAlong(e, pts, i);
     } catch (err) { oops("route driver", err); }
   }
@@ -9122,3 +9174,19 @@ function learnEnd(S, nNow, now) {
   }
   saveLearned();
 }
+
+// ================================================================ v8.2: memory housekeeping
+// Bedrock gives scripts a fixed amount of memory and stops the game when it's used up ("Exceeded scripting memory
+// limit"). Every per-soldier record is dropped once that soldier is gone (dead, removed, unloaded for good), checked
+// once a minute; the route searches and the caches have size caps of their own.
+system.runInterval(() => {
+  try {
+    const live = new Set();
+    for (const t of [SOLDIER, HOUND]) for (const e of allOf(t)) live.add(e.id);
+    for (const p of world.getAllPlayers()) live.add(p.id);
+    for (const m of [firedAt, lastPos, noiseFrom, noiseT, alertUntil, modeMemo, propSync, mountedAt, wetTrack, swimGiveUp, breakCool, recentHits, wetMemo, medicCall, lastHp, buildBudget, shotAtPlayer, doorLook, hopT, settleT, flinchT, edgeFearT, kiteT, fleeFire, lastUse, hurtBy, perc, brain, gunState, notes, sweep, marchWatch, forceGlide, glideBan, aimedBy, hpMemo]) {
+      if (!m?.size) continue;
+      for (const k of [...m.keys()]) if (typeof k === "string" && k.length > 3 && !k.includes(":") && !live.has(k)) m.delete(k);
+    }
+  } catch (err) { oops("memory sweep", err); }
+}, 1200);

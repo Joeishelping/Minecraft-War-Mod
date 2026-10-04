@@ -1,5 +1,39 @@
 # War Engine changelog
 
+## v8.2 (The crash, the lag, the false "out of range", committing in building fights)
+
+Everything below was found and checked on a real Bedrock server.
+
+- **Fixed the "Exceeded scripting memory limit" crash.** Each route search kept a map of every cell it looked at:
+  up to 90,000 per route, with up to 30 routes at once. A soldier hit far from his spot (fight, then back, then stuck,
+  then retry) could start a burst of big searches and use up the game's script memory. Now:
+  - All route searches together have a size budget (about 160,000 cells); the biggest one gives up first.
+  - Each search's size follows its own range, and at most 16 run at once.
+  - The block cache is capped as it grows, not every 30 s.
+  - The line-of-sight cache counts everything it holds.
+  - Every per-soldier record is cleared once that soldier is gone.
+- **Lag.** A 90 v 90 on a real server went from ~10 to ~16 ticks a second (20 is full speed):
+  - The current tick is read once per tick.
+  - Position and "is he alive" checks come from a shared snapshot, not a call per soldier.
+  - Saved data in a big battle went from ~5 MB to ~0.4 MB per 30 s. The game warns at 10 MB a minute; a waypoint
+    record nothing read was rewritten in full for every new waypoint, and every march was saved twice a second.
+  - Walking soldiers' markers move only when it matters.
+  - The game's own target scan runs every half second (the game logged a performance warning at a quarter second).
+  - When the server falls behind, soldiers look around and think a little less often until it catches up (level of
+    detail).
+- **No more false "out of range".** A man more than 32 blocks from you who stood still 2 s (waiting his turn at a
+  stair) was taken to be out of the game's simulation range and carried by script, teleport by teleport, for the
+  rest of the trip. That caused the jerky "tweaking", a lot of lag, and squads bunched where the carrying ended. Now
+  he's given a tiny nudge first; if the game moves him, he walks on his own. The distance is 56 blocks, close to the
+  game's default simulation range.
+- **Creative and spectator players are never enemies.** Before, only the aimed shot skipped them. A creative player
+  heard or seen could still be hunted, grenaded or given covering fire.
+- **Patrols stop wandering in a fight** ("on the way through", then "patrolling"); the fight decides where they go.
+- **Committing in building fights:**
+  - Defenders whose house is broken into clear it if they have the numbers (a decided counterattack, not a coin
+    toss), and hold the stairheads and windows if they don't.
+  - Attackers who are mostly inside all storm; nobody goes back out to "cover the building".
+
 ## v8.1 (Tested in the real game: the "seeing through walls" bug found and fixed)
 
 Run on a real Bedrock Dedicated Server (1.26.52) with the test kit in `tests/bds`, not only the simulator.

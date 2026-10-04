@@ -194,16 +194,51 @@ KS.rayprobe = async (o, ox, oz) => {
   }
   return { rays: out };
 };
+// the castle in the screenshots: a 12-man squad on a wall walkway (8 up, battlements), a lava moat below, a one-block
+// brick-stair bridge from the wall down over the lava as the only way out; ordered to a field 120 blocks off, then on
+// to a second spot 80 blocks to the side ("the top right")
+KS.castle = async (o, ox, oz) => {
+  floorAt(ox - 60, oz - 20, ox + 100, oz + 150);
+  kfill(ox - 30, Y, oz, ox + 30, Y + 7, oz + 3, "stone_bricks");                       // the wall, walk on y=8
+  for (let x = -30; x <= 30; x += 2) kset(ox + x, Y + 8, oz + 3, "stone_bricks");      // battlements on the moat side
+  kfill(ox - 40, Y - 1, oz + 4, ox + 40, Y - 1, oz + 13, "lava"); kfill(ox - 40, Y - 2, oz + 4, ox + 40, Y - 2, oz + 13, "stone");
+  kset(ox, Y + 8, oz + 3, "air");                                                      // the gap to the bridge
+  for (let i = 0; i < 8; i++) { kset(ox, Y + 7 - i, oz + 4 + i, `brick_stairs ["weirdo_direction"=3]`); }   // down toward +z, over the lava
+  kfill(ox, Y, oz + 12, ox, Y, oz + 13, "air");
+  for (let k = 0; k < 20; k++) { const x = ox - 40 + ((k * 37) % 120), z = oz + 30 + ((k * 53) % 100); kfill(x, Y, z, x, Y + 3, z, "oak_log"); kfill(x - 2, Y + 3, z - 2, x + 2, Y + 5, z + 2, "oak_leaves"); }
+  const team = []; for (let i = 0; i < 12; i++) team.push(kitSoldier(1, { x: ox - 11 + i * 2 + 0.5, y: Y + 8, z: oz + 1.5 }, ["rifle", "smg", "semi", "mg"][i % 4]));
+  await kitWait(20);
+  const legs = [{ x: ox, y: Y, z: oz + 120 }, { x: ox + 80, y: Y, z: oz + 130 }];
+  const out = { legs: [] };
+  for (const dest of legs) {
+    await kitOrder(1, dest);
+    const t0 = tick(); let arrived = -1, still = 0; const last = new Map(); let lava = 0;
+    await kitLoop(Number(o.ticks ?? 3000), () => {
+      const up = team.filter((e) => e.isValid && !isDown(e));
+      for (const e of up) { const lp = last.get(e.id); if (lp && Math.hypot(lp.x - e.location.x, lp.z - e.location.z) < 0.3 && Math.hypot(e.location.x - dest.x, e.location.z - dest.z) > 14) still++; last.set(e.id, { ...e.location }); try { if (e.getComponent("minecraft:onfire") || e.isInWater === undefined) {} } catch {} }
+      if (up.filter((e) => Math.hypot(e.location.x - dest.x, e.location.z - dest.z) < 14).length >= Math.ceil(up.length * 0.85)) { arrived = tick() - t0; return true; }
+      return false;
+    });
+    out.legs.push({ arrived, alive: team.filter((e) => e.isValid && !isDown(e)).length, stillPerMan: +(still / 12).toFixed(1), final: team.slice(0, 6).map((e) => e.isValid ? `${Math.round(e.location.x - ox)},${Math.round(e.location.y - Y)},${Math.round(e.location.z - oz)}:${(notes.get(e.id)?.text ?? "").slice(0, 14)}` : "x") });
+  }
+  return out;
+};
 KS.load = async (o, ox, oz) => {                                      // how fast the server runs with N idle soldiers (or cows)
   const N = Number(o.n ?? 180);
   floorAt(ox - 60, oz - 90, ox + 60, oz + 90);
-  for (let i = 0; i < N; i++) { const at = { x: ox + (i % 20) * 3 - 30 + 0.5, y: Y, z: oz - 60 + Math.floor(i / 20) * 3 + 0.5 }; if (o.cow) ow().spawnEntity("minecraft:cow", at); else kitSoldier(1 + (i % 2), at, "rifle", "hold"); }
+  for (let i = 0; i < N; i++) { const at = { x: ox + (i % 20) * 3 - 30 + 0.5, y: Y, z: oz - 60 + Math.floor(i / 20) * 3 + 0.5 }; if (o.cow) ow().spawnEntity("minecraft:cow", at); else kitSoldier(o.mixed ? 1 + (i % 2) : 1, at, "rifle", "hold"); }
   await kitWait(60);
   const t0 = tick(), r0 = Date.now();
   await kitLoop(Number(o.ticks ?? 400), () => false);
-  const sec = (Date.now() - r0) / 1000;
+  const sec = (Date.now() - r0) / 1000, tpsA = +((tick() - t0) / sec).toFixed(1);
+  let tpsB;
+  if (o.nowp) {                                                         // the same, with every waypoint marker gone
+    for (const w of allOf(WAYPOINT)) { try { w.remove(); } catch {} }
+    const t1 = tick(), r1 = Date.now(); await kitLoop(Number(o.ticks ?? 400), () => { for (const w of allOf(WAYPOINT)) { try { w.remove(); } catch {} } return false; });
+    tpsB = +((tick() - t1) / ((Date.now() - r1) / 1000)).toFixed(1);
+  }
   if (o.cow) kcmd("kill @e[type=cow]");
-  return { n: N, cow: !!o.cow, tps: +((tick() - t0) / sec).toFixed(1), waypoints: allOf(WAYPOINT).length };
+  return { n: N, cow: !!o.cow, tps: tpsA, tpsNoWaypoints: tpsB, waypoints: allOf(WAYPOINT).length };
 };
 KS.big = async (o, ox, oz) => {
   const N = Number(o.n ?? 90);
@@ -214,10 +249,10 @@ KS.big = async (o, ox, oz) => {
   for (let i = 0; i < N; i++) kitSoldier(2, { x: ox + (i % 20) * 2 - 20 + 0.5, y: Y, z: oz + 60 + Math.floor(i / 20) * 2 + 0.5 }, W8[i % 6]);
   await kitWait(20);
   await kitOrder(1, { x: ox, y: Y, z: oz + 60 }); await kitOrder(2, { x: ox, y: Y, z: oz - 60 });
-  const t0 = tick(), r0 = Date.now(); let slow = 0, last = Date.now(), worst = 0;
+  globalThis.__dpReport?.(); globalThis.__evReport?.(1); const t0 = tick(), r0 = Date.now(); let slow = 0, last = Date.now(), worst = 0;
   await kitLoop(Number(o.ticks ?? 600), () => { const now = Date.now(), dt = now - last; last = now; worst = Math.max(worst, dt); if (dt > 600) slow++; return false; });
   const sec = (Date.now() - r0) / 1000, ticks = tick() - t0;
-  return { n: N, ticks, realSec: +sec.toFixed(1), tps: +(ticks / sec).toFixed(1), worstGapMs: worst, left1: kitSoldiers(1).filter((e) => !isDown(e)).length, left2: kitSoldiers(2).filter((e) => !isDown(e)).length, ...kitShotStats(t0) };
+  return { ev: globalThis.__evReport?.(tick() - t0), dp: globalThis.__dpReport?.(), n: N, ticks, realSec: +sec.toFixed(1), tps: +(ticks / sec).toFixed(1), worstGapMs: worst, left1: kitSoldiers(1).filter((e) => !isDown(e)).length, left2: kitSoldiers(2).filter((e) => !isDown(e)).length, ...kitShotStats(t0) };
 };
 function kitShotStats(t0) {
   const a = KSHOTS.filter((x) => x.t >= t0);
@@ -241,7 +276,7 @@ system.afterEvents.scriptEventReceive.subscribe((ev) => {
     try {
       for (const e of [...allOf(SOLDIER), ...allOf(WAYPOINT), ...allOf(HOUND)]) { try { e.remove(); } catch {} }   // (leftovers of an interrupted run)
       kcmd("tickingarea remove_all"); kcmd("time set noon"); kcmd("gamerule dodaylightcycle false"); await kitWait(40);
-       const r = name === "probe" || name === "rayprobe" ? [ox - 20, oz - 20, ox + 20, oz + 20] : name === "trip" && o.mode === "flat" ? [ox - 60, oz - 330, ox + 60, oz + 20] : name === "big" || name === "load" ? [ox - 60, oz - 90, ox + 60, oz + 90] : [ox - 30, oz - 180, ox + 80, oz + 50];
+       const r = name === "castle" ? [ox - 60, oz - 20, ox + 100, oz + 150] : name === "probe" || name === "rayprobe" ? [ox - 20, oz - 20, ox + 20, oz + 20] : name === "trip" && o.mode === "flat" ? [ox - 60, oz - 330, ox + 60, oz + 20] : name === "big" || name === "load" ? [ox - 60, oz - 90, ox + 60, oz + 90] : [ox - 30, oz - 180, ox + 80, oz + 50];
       // (a ticking area keeps the land loaded and its mobs moving with no player near; at most ~100 chunks each)
       const w = r[2] - r[0], h = r[3] - r[1];
       const parts = Math.max(1, Math.ceil((Math.ceil(w / 16) + 1) * (Math.ceil(h / 16) + 1) / 90));
@@ -278,3 +313,12 @@ system.run(() => {
     };
   } catch (err) { console.warn(`KIT spawn wrap failed ${err}`); }
 });
+// dynamic-property writes, by key: count and bytes (the server warns above 10 MB a minute)
+const DPSTAT = new Map(); let dpWrapped = false;
+function dpWrap(obj) { const proto = Object.getPrototypeOf(obj), f = proto.setDynamicProperty; if (!f || f.__kit) return; const w = function (k, v) { const r = DPSTAT.get(k) ?? { n: 0, b: 0 }; r.n++; r.b += v === undefined ? 0 : typeof v === "string" ? v.length : 8; DPSTAT.set(k, r); return f.call(this, k, v); }; w.__kit = true; proto.setDynamicProperty = w; }
+system.runInterval(() => { if (dpWrapped) return; try { dpWrap(world); const s = allOf(SOLDIER)[0] ?? allOf(WAYPOINT)[0]; if (s) { dpWrap(s); dpWrapped = true; } } catch {} }, 20);
+globalThis.__dpReport = () => { const a = [...DPSTAT].sort((x, y) => y[1].b - x[1].b).slice(0, 12).map(([k, r]) => `${k}:${r.n}x/${(r.b / 1024).toFixed(0)}KB`); DPSTAT.clear(); return a; };
+// entity events (component group swaps) and teleports, counted
+const EVSTAT = new Map(); let evWrapped = false;
+system.runInterval(() => { if (evWrapped) return; try { const s = allOf(SOLDIER)[0]; if (!s) return; const proto = Object.getPrototypeOf(s); for (const fn of ["triggerEvent", "teleport", "applyImpulse", "clearVelocity", "addTag", "removeTag", "setProperty"]) { const f = proto[fn]; if (!f || f.__kit) continue; const w = function (...a) { let k = fn === "triggerEvent" ? `ev:${String(a[0]).split(":").pop().replace(/[0-9]+$/, "#")}` : fn; if (fn === "teleport") { const ln = (new Error().stack ?? "").split("\n").slice(2, 4).map((x) => (x.match(/main\.js:(\d+)/) ?? [])[1]).join("<"); k = `tp@${ln}${this.typeId === SOLDIER ? "" : ":mk"}`; } EVSTAT.set(k, (EVSTAT.get(k) ?? 0) + 1); return f.apply(this, a); }; w.__kit = true; proto[fn] = w; } evWrapped = true; } catch {} }, 20);
+globalThis.__evReport = (ticks) => { const a = [...EVSTAT].sort((x, y) => y[1] - x[1]).slice(0, 14).map(([k, n]) => `${k}:${(n / Math.max(1, ticks)).toFixed(1)}/t`); EVSTAT.clear(); return a; };

@@ -49,7 +49,7 @@
         "must_see": true,
         "must_see_forget_duration": 6.0,
         "reselect_targets": true,
-        "scan_interval": 5,
+        "scan_interval": 10,
         "within_radius": 16,
         "persist_time": 2.0,
         "entity_types": [
