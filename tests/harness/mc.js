@@ -20,6 +20,11 @@ Math.random = () => { rs ^= rs << 13; rs >>>= 0; rs ^= rs >>> 17; rs ^= rs << 5;
 // ---------------------------------------------------------------- blocks
 const PASS = ["short_grass", "tall_grass", "fern", "flower", "torch", "carpet", "pressure_plate", "ladder", "vine", "button", "sign", "rail"];
 const k3 = (x, y, z) => `${x},${y},${z}`;
+export function rayExact(from, to) {                           // (the harness's own line-of-sight: exact, not the game's ray)
+  const dx = to.x - from.x, dy = to.y - from.y, dz = to.z - from.z, L = Math.hypot(dx, dy, dz) || 1;
+  for (let t = 0; t <= L - 0.3; t += 0.05) { const x = Math.floor(from.x + dx / L * t), y = Math.floor(from.y + dy / L * t), z = Math.floor(from.z + dz / L * t); if (rayStops(x, y, z)) return false; }
+  return true;
+}
 export function setBlock(x, y, z, id) { if ((id === "air" || id === "minecraft:air") && y >= SIM.groundY) SIM.blocks.delete(k3(x, y, z)); else SIM.blocks.set(k3(x, y, z), id.includes(":") ? id : `minecraft:${id}`); }
 export function fill(x0, y0, z0, x1, y1, z1, id) {
   for (let x = Math.min(x0, x1); x <= Math.max(x0, x1); x++) for (let y = Math.min(y0, y1); y <= Math.max(y0, y1); y++) for (let z = Math.min(z0, z1); z <= Math.max(z0, z1); z++) setBlock(x, y, z, id);
@@ -217,15 +222,20 @@ export class Dimension {
     return new Block(this, x, y, z);
   }
   getTopmostBlock(loc) { count("getTopmostBlock"); if (!inBounds(Math.floor(loc.x), Math.floor(loc.z)) || !loadedAt(loc.x, loc.z)) throw new Error("LocationInUnloadedChunkError"); for (let y = SIM.bounds.y1; y >= SIM.bounds.y0; y--) if (solidCell(loc.x, y, loc.z)) return new Block(this, Math.floor(loc.x), y, Math.floor(loc.z)); return undefined; }
+  // v8.1: like the real game: maxDistance counts the block CELLS the ray steps through (a diagonal steps through more
+  // cells than its length), not the straight-line distance. faceLocation is the hit point relative to the block's corner.
   getBlockFromRay(from, dir, opts = {}) {
     count("getBlockFromRay");
-    const max = opts.maxDistance ?? 64, st = 0.1;
-    let lx, ly, lz;
-    for (let t = 0; t <= max; t += st) {
-      const x = Math.floor(from.x + dir.x * t), y = Math.floor(from.y + dir.y * t), z = Math.floor(from.z + dir.z * t);
-      if (x === lx && y === ly && z === lz) continue; lx = x; ly = y; lz = z;
+    const max = opts.maxDistance ?? 64, st = 0.05;
+    let lx, ly, lz, cells = 0;
+    for (let t = 0; t <= 400; t += st) {
+      const px = from.x + dir.x * t, py = from.y + dir.y * t, pz = from.z + dir.z * t;
+      const x = Math.floor(px), y = Math.floor(py), z = Math.floor(pz);
+      if (x === lx && y === ly && z === lz) continue;
+      if (lx !== undefined) { cells += (x !== lx) + (y !== ly) + (z !== lz); if (cells > max) return undefined; }
+      lx = x; ly = y; lz = z;
       if (!inBounds(x, z)) return undefined;
-      if (rayStops(x, y, z)) return { block: new Block(this, x, y, z), face: "Up", faceLocation: { x: 0.5, y: 0.5, z: 0.5 } };
+      if (rayStops(x, y, z)) return { block: new Block(this, x, y, z), face: "Up", faceLocation: { x: px - x, y: py - y, z: pz - z } };
     }
     return undefined;
   }
@@ -351,7 +361,7 @@ const hostileTo = (a, b) => { for (const t of a.tags) if (t.startsWith("war_h") 
 function los(a, b) {
   const h = a.getHeadLocation(), c = { x: b._loc.x, y: b._loc.y + 1.2, z: b._loc.z };
   const dx = c.x - h.x, dy = c.y - h.y, dz = c.z - h.z, L = Math.hypot(dx, dy, dz) || 1;
-  return !overworld.getBlockFromRay(h, { x: dx / L, y: dy / L, z: dz / L }, { maxDistance: L - 0.3 });
+  return rayExact(h, { x: h.x + dx, y: h.y + dy, z: h.z + dz });
 }
 function markerFor(e) {
   // follow_mob filters: self war_grR + war_gcC  <-> other war_wrR + war_wcC

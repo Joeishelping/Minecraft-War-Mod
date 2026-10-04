@@ -118,7 +118,7 @@ SIM.shots.push = (x) => { try { const o = x.owner; let bd = 1e9; for (const e of
   // v7.1: blind = at the moment of the shot, no straight line from the muzzle to any part of any enemy within 80
   let seeAny = false; const f0 = x.from;
   for (const e of alive()) { if (seeAny || e === o || W.isDowned(e) || e.props.get("war:faction") === o.props.get("war:faction")) continue; if (Math.hypot(e._loc.x - f0.x, e._loc.z - f0.z) > 80) continue;
-    for (const hy of [0.6, 1.2, 1.7]) { const t = { x: e._loc.x, y: e._loc.y + hy, z: e._loc.z }, dx = t.x - f0.x, dy = t.y - f0.y, dz = t.z - f0.z, L = Math.hypot(dx, dy, dz) || 1; if (!overworld.getBlockFromRay(f0, { x: dx / L, y: dy / L, z: dz / L }, { maxDistance: L - 0.3 })) { seeAny = true; break; } } }
+    for (const hy of [0.6, 1.2, 1.7]) { if (MC.rayExact(f0, { x: e._loc.x, y: e._loc.y + hy, z: e._loc.z })) { seeAny = true; break; } } }
   x.blind = !seeAny; { const tg = W.gunState.get(o.id)?.target ?? W.gunState.get(o.id)?.supp?.ent; if (tg?._loc) x.tgtD = Math.hypot(tg._loc.x - f0.x, tg._loc.y + 1.2 - f0.y, tg._loc.z - f0.z); } if (x.blind && opt.blindlog) { const gs = W.gunState.get(o.id), tg = gs?.target; console.error("BLIND", SIM.tick, "wb", !!x.wb, "from", f0.x.toFixed(1), f0.y.toFixed(1), f0.z.toFixed(1), "tgt", tg ? `${tg._loc.x.toFixed(1)},${tg._loc.y.toFixed(1)},${tg._loc.z.toFixed(1)} down=${W.isDowned(tg)} fac=${tg.props?.get("war:faction")} type=${tg.typeId}` : "-", "supp", !!gs?.supp, "shooter", o._loc.x.toFixed(1), o._loc.y.toFixed(1), o._loc.z.toFixed(1)); } } catch {} return origPush(x); };
 // v8.0: precise hits are logged like bullets (the same shot statistics)
 globalThis.__warShot = (r) => { try {

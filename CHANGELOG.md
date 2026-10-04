@@ -1,5 +1,39 @@
 # War Engine changelog
 
+## v8.1 (Tested in the real game: the "seeing through walls" bug found and fixed)
+
+Run on a real Bedrock Dedicated Server (1.26.52) with the test kit in `tests/bds`, not only the simulator.
+
+- **The cause of "shooting at walls", found.** Bedrock's block ray counts its maximum distance in block cells
+  stepped through, not in straight-line distance. A slanted line (up to a window, across a courtyard) steps through
+  more cells than its length. So every "can I see him?" check gave up before reaching the wall and answered
+  "clear". In the real game, v7.4 and v8.0 attackers put 92–99.9% of their rounds into walls. Every ray now looks
+  far enough and measures the true distance to what it hit: 0% into walls in every real-game test. The simulator now
+  reproduces this behaviour, so it can't hide again.
+- **Routes through buildings finish.** In the real game the route planner managed about 30 steps per tick, and routes
+  that soldiers had given up on stayed in the queue: a route through a building took about 80 s, and men stood
+  saying "working out the way" / "storming the building". Now:
+  - Abandoned searches are cancelled.
+  - The planner gets up to 8 ms per tick while the server keeps pace (3 ms when it's struggling).
+  - Routes finish in a few seconds, and labels were wrong 0% of the time in the real test.
+- **Hits are a chance, not geometry.** With precise hits nearly every shot landed (90%+). Now each shot has a hit
+  chance by weapon and range (rifles good at range, SMGs only close), lower when the shooter is wounded or pinned
+  and against a moving or kneeling man. A miss flies clear past him on an open side, never into the frame beside
+  him. About half the shots hit in a typical fight.
+- **Less script work per tick.** The current tick is read once per tick; position and alive checks use the shared
+  half-second snapshot; gunfire "hearing" and the friendly-fire check no longer query the game per soldier.
+- **Real-game scorecard (one run each, results in `tests/bds/`):**
+  - **v8.1, 8 of 10 passed:**
+    - no blind shots, and 0% of rounds into walls;
+    - defenders on the ground floor at the breach;
+    - 30-man and 8-man marches arrive;
+    - roam downstairs works;
+    - labels truthful;
+    - no errors.
+  - **v8.1 failed:** attackers took 94 s (not 60 s) to get upstairs in the big hall; 90 v 90 still runs at ~10 ticks
+    a second (half speed).
+  - **v7.4, 4 of 10 passed** (it fails the shooting, breach and big-hall checks).
+
 ## v8.0 (Precise hits, the aim fixed at the muzzle, and a pass/fail test suite)
 
 - **Precise hits (Settings → "Bullets", the new default).** The hit is decided by the script along the exact line of

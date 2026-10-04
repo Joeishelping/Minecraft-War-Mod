@@ -1,0 +1,9 @@
+{"scenario":"siege","args":{"mode":"out"},"mode":"out","ticks":1890,"attLeft":7,"defLeft":0,"firstBreach":1760,"defGroundAtBreach":0,"attUpMax":0,"firstAttUp":-1,"shots":682,"s1":{"n":578,"blind":0,"cover":0.92,"hit":0.073},"s2":{"n":104,"blind":0,"cover":0.712,"hit":0.192},"errors":0}
+{"scenario":"siege","args":{"mode":"in"},"mode":"in","ticks":1550,"attLeft":1,"defLeft":0,"firstBreach":440,"defGroundAtBreach":6,"attUpMax":0,"firstAttUp":-1,"shots":351,"s1":{"n":316,"blind":0,"cover":0.759,"hit":0.234},"s2":{"n":35,"blind":0,"cover":0.114,"hit":0.857},"errors":0}
+{"scenario":"bigSiege","args":{},"ticks":4800,"attLeft":5,"defLeft":7,"firstUp":-1,"attUpMax":0,"labelLies":0.411,"labelN":1155,"shots":4607,"s1":{"n":4598,"blind":0,"cover":0.989,"hit":0.011},"s2":{"n":9,"blind":0,"cover":0,"hit":1},"errors":0}
+{"scenario":"trip","args":{"mode":"flat","n":"30","ticks":"4800"},"mode":"flat","n":30,"arrivedTicks":2800,"there":26,"final":["-5,0,-300","-4,0,-300","0,0,-293","1,0,-296","0,0,-284","7,0,-298"],"errors":0}
+{"scenario":"trip","args":{"mode":"down","n":"8","ticks":"2400"},"mode":"down","n":8,"arrivedTicks":1490,"there":7,"final":["5,0,-153","7,0,-146","7,0,-141","8,0,-157","6,0,-155","9,0,-156"],"errors":0}
+{"scenario":"trip","args":{"mode":"up","n":"8","ticks":"2400"},"mode":"up","n":8,"arrivedTicks":1670,"there":7,"final":["8,11,7","7,11,8","7,11,10","7,11,8","7,11,9","7,11,8"],"errors":0}
+{"scenario":"roam","args":{},"downAt":150,"errors":0}
+{"scenario":"big","args":{"n":"90","ticks":"600"},"n":90,"ticks":600,"realSec":64.5,"tps":9.3,"worstGapMs":1338,"left1":54,"left2":51,"shots":343,"s1":{"n":174,"blind":0,"cover":0.006,"hit":0.851},"s2":{"n":169,"blind":0,"cover":0.006,"hit":0.893},"errors":0}
+ALLDONE

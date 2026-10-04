@@ -8,7 +8,7 @@ import { WarAPI } from "./api.js";
 const ERRS = new Map(); // system -> { n, t }
 function oops(sys, err) {
   try {
-    const now = system.currentTick, r = ERRS.get(sys) ?? { n: 0, t: -99999 };
+    const now = tick(), r = ERRS.get(sys) ?? { n: 0, t: -99999 };
     r.n++;
     if (now - r.t >= 1200) {
       r.t = now;
@@ -22,6 +22,11 @@ function oops(sys, err) {
 }
 { const ri = system.runInterval.bind(system); system.runInterval = (f, n) => ri(() => { try { f(); } catch (err) { oops("loop", err); } }, n); }
 import "./extensions/index.js";
+// v8.1: the current tick, read from the game ONCE per tick. Asking the game (system.currentTick) is a call into the
+// engine, and the add-on asked millions of times a battle: on a real server that alone was 45% of all its work in a
+// 90 v 90 (half the lag). This interval is registered first, so it runs before every other one in the tick.
+let TICK_NOW = 0, tickGap = 50, lastTickMs = 0;   // (tickGap: real ms between ticks, smoothed: 50 = the server keeps pace)
+system.runInterval(() => { TICK_NOW = system.currentTick; const t = Date.now(); if (lastTickMs) tickGap = tickGap * 0.95 + Math.min(500, t - lastTickMs) * 0.05; lastTickMs = t; }, 1);
 
 // ================================================================ constants
 const SOLDIER = "war:soldier", HOUND = "war:hound", WAYPOINT = "war:waypoint", FLAG = "war:flag";
@@ -232,14 +237,14 @@ system.runInterval(() => { for (const id of [...DPC.keys()]) if (id !== "@world"
 const dist = (a, b) => Math.hypot(a.x - b.x, a.y - b.y, a.z - b.z);
 const flat = (a, b) => Math.hypot(a.x - b.x, a.z - b.z);
 const findPlayer = (id) => (id ? world.getAllPlayers().find((p) => p.id === id) : undefined);
-const tick = () => system.currentTick;
+const tick = () => TICK_NOW || system.currentTick;
 const DIMS = ["overworld", "nether", "the_end"];
 const allOfCache = new Map(); // type -> { t, list }  (one world search per type per tick)
 // v6.3: soldiers picked up with the TP wand (soldier id -> { by: player id }). They are left out of allOf, so nothing
 // thinks for them, moves them, aims or shoots with them, or rescues them while they're carried.
 const held = new Map();
 function allOf(type) {
-  const now = system.currentTick, c = allOfCache.get(type);
+  const now = tick(), c = allOfCache.get(type);
   if (c && c.t === now) { if (!c.checked) { c.list = c.list.filter((e) => e.isValid); c.checked = true; } return c.list; }
   let out = [];
   for (const d of DIMS) { try { out.push(...world.getDimension(d).getEntities({ type })); } catch {} }
@@ -249,7 +254,7 @@ function allOf(type) {
 }
 const rideMemo = new Map(); // id -> { t, v, on }
 function rideInfo(e) {
-  const now = system.currentTick, c = rideMemo.get(e.id);
+  const now = tick(), c = rideMemo.get(e.id);
   if (c && now - c.t < 5) return c;
   let on;
   try { on = e.getComponent("minecraft:riding")?.entityRidingOn; } catch {}
@@ -317,7 +322,7 @@ const factionOf = (e) => (e.typeId === "minecraft:player" ? playerFaction(e) : g
 const sdCache = new Map(); // id -> { t, d }
 const sdDrop = (e) => { try { sdCache.delete(e.id); } catch {} };
 function sd(e) {
-  const c = sdCache.get(e.id), now = system.currentTick;
+  const c = sdCache.get(e.id), now = tick();
   if (c && now - c.t <= 2) return c.d;
   const d = sdRead(e);
   sdCache.set(e.id, { t: now, d });
@@ -1534,7 +1539,7 @@ function blockedAhead(v, dir, reach, heights) {
   for (const h of heights) {
     try {
       const from = { x: v.location.x, y: v.location.y + h, z: v.location.z };
-      if (v.dimension.getBlockFromRay(from, dir, { maxDistance: reach, includeLiquidBlocks: false, includePassableBlocks: false })) return true;
+      if (rayHit(v.dimension, from, dir, reach)) return true;
     } catch {}
   }
   return false;
@@ -2968,9 +2973,13 @@ function nearSnap(dimId, loc, r) {
   return out;
 }
 system.runInterval(refreshCombatants, 10);
+// (v8.1: "is he still there?" asked of the game once per soldier per tick, not on every search: on a real server those
+//  calls were a large part of the lag in a big battle)
+const validMemo = new Map(); let validT = -1;
+function validNow(e) { const t = tick(); if (t !== validT) { validT = t; validMemo.clear(); } let v = validMemo.get(e.id); if (v === undefined) { v = e.isValid; validMemo.set(e.id, v); } return v; }
 function nearbyCombatants(dimId, loc, r) {
   const out = [];
-  for (const c of nearSnap(dimId, loc, r)) if (c.e.isValid) out.push(c.e);
+  for (const c of nearSnap(dimId, loc, r)) if (validNow(c.e)) out.push(c.e);
   return out;
 }
 
@@ -3031,6 +3040,22 @@ const GUN_SPEC = {
 };
 const gunState = new Map(); // soldier id -> { target, ammo, next, seen, check, step }
 function chest(o) { const l = o.location; const ps = o.typeId === SOLDIER ? (poseOf.get(o.id) ?? 0) : 0; return { x: l.x, y: l.y + (o.typeId === "war:tank" ? 1.0 : o.typeId === HOUND ? 0.5 : ps === 2 ? 0.35 : ps === 1 ? 0.85 : 1.2), z: l.z }; }
+// v8.1: THE "SEEING THROUGH WALLS" BUG. Bedrock's block ray counts its maxDistance in block CELLS stepped through
+// (about |dx|+|dy|+|dz| on a diagonal), not in straight-line distance. Every line-of-sight check asked for the
+// straight-line length, so on any slanted line (up to a window, across a courtyard) the ray gave up BEFORE it reached
+// the wall and answered "clear": men "saw" and fired at enemies behind walls (measured in the real game: 92-99% of
+// attackers' rounds went into walls). Found by running the add-on on a real Bedrock server; the test simulator's ray
+// didn't have this quirk. Every ray now asks far enough in cells, then measures the real distance to what it hit.
+function rayHit(dim, from, u, L, opts = {}) {
+  const cells = (Math.abs(u.x) + Math.abs(u.y) + Math.abs(u.z)) * L + 3;
+  const hb = dim.getBlockFromRay(from, u, { includeLiquidBlocks: false, includePassableBlocks: false, ...opts, maxDistance: cells });
+  if (!hb) return undefined;
+  const bl = hb.block.location, fl = hb.faceLocation ?? { x: 0.5, y: 0.5, z: 0.5 };
+  const rel = Math.abs(fl.x) <= 1.001 && Math.abs(fl.y) <= 1.001 && Math.abs(fl.z) <= 1.001;   // (relative to the block's corner, as documented; absolute if not)
+  const p = rel ? { x: bl.x + fl.x, y: bl.y + fl.y, z: bl.z + fl.z } : fl;
+  const d = Math.hypot(p.x - from.x, p.y - from.y, p.z - from.z);
+  return d <= L ? { hb, d, p } : undefined;
+}
 const LOS = new Map(); let losThisTick = 0;
 system.runInterval(() => { losThisTick = 0; if (LOS.size > 8000) LOS.clear(); }, 1);
 function clearShot(dim, from, to) {
@@ -3045,7 +3070,7 @@ function clearShot(dim, from, to) {
   if (losThisTick > (bigBattle ? 160 : 260)) return c && now - c.t < 60 ? c.v : false;  // over the per-tick cap: reuse what we knew, if it's recent (v6.0: lower caps; v6.9: never an old answer from where he no longer is)
   losThisTick++;
   let v = false;
-  try { v = !dim.getBlockFromRay(from, { x: dx / l, y: dy / l, z: dz / l }, { maxDistance: l - 0.3, includeLiquidBlocks: false, includePassableBlocks: false }); } catch {}
+  try { v = !rayHit(dim, from, { x: dx / l, y: dy / l, z: dz / l }, l - 0.3); } catch {}
   inner.set(kb, { v, t: now });
   return v;
 }
@@ -3090,11 +3115,11 @@ function pickTarget(e, d, spec) {
 function friendlyInLine(e, d, from, to, target) {
   const dx = to.x - from.x, dy = to.y - from.y, dz = to.z - from.z, L = Math.hypot(dx, dy, dz) || 1;
   const ux = dx / L, uy = dy / L, uz = dz / L;
-  for (const o of nearbyCombatants(e.dimension.id, from, L + 2)) {
-    if (o.id === e.id || o.id === target.id || VEHICLES.includes(o.typeId)) continue;
-    if (!(o.typeId === SOLDIER || o.typeId === HOUND || o.typeId === "minecraft:player")) continue;
-    if (!isFriendly(d.faction, factionOf(o))) continue;
-    const c = chest(o);
+  for (const s0 of nearSnap(e.dimension.id, from, L + 2)) {             // (v8.1: from the half-second snapshot: no calls into the game per man)
+    if (s0.id === e.id || s0.id === target.id || s0.down) continue;
+    if (!(s0.type === SOLDIER || s0.type === HOUND || s0.type === "minecraft:player")) continue;
+    if (!isFriendly(d.faction, s0.f)) continue;
+    const c = { x: s0.x, y: s0.y + (s0.type === HOUND ? 0.5 : 1.2), z: s0.z };
     const px = c.x - from.x, py = c.y - from.y, pz = c.z - from.z;
     const along = px * ux + py * uy + pz * uz;
     if (along < 0.5 || along > L - 0.5) continue;
@@ -3183,7 +3208,7 @@ function headLoc(o) {
 function openNow(dim, a, b) {
   const dx = b.x - a.x, dy = b.y - a.y, dz = b.z - a.z, L = Math.hypot(dx, dy, dz);
   if (L < 0.6) return true;
-  try { return !dim.getBlockFromRay(a, { x: dx / L, y: dy / L, z: dz / L }, { maxDistance: L - 0.4, includeLiquidBlocks: false, includePassableBlocks: false }); } catch { return true; }
+  try { return !rayHit(dim, a, { x: dx / L, y: dy / L, z: dz / L }, L - 0.4); } catch { return false; }   // (v8.1: can't tell: not clear)
 }
 // known only by ear: kept (and moved) unless he's actually been seen more recently
 function hearIt(S, ent, at, t) { const q = S.known.get(ent.id); if (q && !q.heard && q.t >= t) return; S.known.set(ent.id, { ent, x: at.x, y: at.y, z: at.z, t, heard: true }); }
@@ -3232,6 +3257,7 @@ system.runInterval(() => {
 // bullet code (the cause of the marks on walls nobody could see past). A faint tracer and a puff at the end show it.
 // The gun pack still gives the gun models and sounds. Bazookas keep real rockets. "Gun pack bullets" is the old way.
 const HIT_DMG = { rifle: 7, semi: 6, smg: 4, mg: 5, shotgun: 9, pistol: 5, sniper: 12 };
+const HIT_CHANCE = { rifle: [0.7, 0.25, 70], semi: [0.65, 0.22, 60], smg: [0.6, 0.08, 40], mg: [0.5, 0.15, 70], shotgun: [0.8, 0.05, 25], pistol: [0.55, 0.08, 35], sniper: [0.85, 0.5, 150] };   // [chance close (8 blocks), chance far, "far" in blocks]
 const preciseHits = () => setting("bullets", "precise") !== "pack";
 const NOT_HITTABLE = [WAYPOINT, FLAG, "war:blank", "war:bomb", "war:shell", "minecraft:item", "minecraft:xp_orb", "minecraft:arrow", "minecraft:armor_stand"];
 function hittable(o, shooter) {
@@ -3246,7 +3272,7 @@ const onNestW = (e) => (ridingNest(e) ? "mg" : undefined);
 function hitscan(e, spec, from, dir, range, weapon) {
   const dim = e.dimension, n = Math.hypot(dir.x, dir.y, dir.z) || 1, u = { x: dir.x / n, y: dir.y / n, z: dir.z / n };
   let blockD = range;
-  try { const hb = dim.getBlockFromRay(from, u, { maxDistance: range, includeLiquidBlocks: false, includePassableBlocks: false }); if (hb) { const bl = hb.block.location, fl = hb.faceLocation ?? { x: 0.5, y: 0.5, z: 0.5 }; blockD = Math.min(range, Math.hypot(bl.x + fl.x - from.x, bl.y + fl.y - from.y, bl.z + fl.z - from.z)); } } catch {}
+  try { const rh = rayHit(dim, from, u, range); if (rh) blockD = rh.d; } catch {}
   let hit;
   try {
     const hits = dim.getEntitiesFromRay(from, u, { maxDistance: blockD + 0.3 }).sort((a, b) => a.distance - b.distance);
@@ -3378,7 +3404,25 @@ function fireGun(e, spec, t, aim) {
     }
     if (g && g.expo < 1) { g.coverMiss = (g.coverMiss ?? 0) + 1; return false; }
     if (g) g.coverMiss = 0;
-    hitscan(e, spec, fv, { x: dx / n + r(), y: dy / n + r(), z: dz / n + r() }, Math.min(spec.fire + 20, 220), onNestW(e) ?? sd(e).weapon); noteShot(e); return true;
+    // v8.1: hit or miss is a CHANCE (as in most shooters), by weapon and range: a rifle is good at range, an SMG only
+    // close. Less when he's wounded or pinned (a shakier aim), at a moving or kneeling man. A hit goes into his body;
+    // a miss goes clear past him (half a block to a block and a half to one side or over), into whatever is behind.
+    const w = onNestW(e) ?? sd(e).weapon, HC = HIT_CHANCE[w] ?? HIT_CHANCE.rifle;
+    let p = HC[0] + (HC[1] - HC[0]) * Math.max(0, Math.min(1, (l - 8) / Math.max(1, HC[2] - 8)));
+    p /= Math.max(1, spec.spread / ((GUN_SPEC[w] ?? spec).spread || spec.spread));   // (shaky: wounded, pinned, just turned)
+    try { const v = t.getVelocity(); if (Math.hypot(v.x, v.z) > 0.08) p *= 0.8; } catch {}
+    if ((poseOf.get(t.id) ?? 0) >= 1) p *= 0.85;
+    const ux = dx / n, uy = dy / n, uz = dz / n, hz = Math.hypot(ux, uz) || 1, px = -uz / hz, pz = ux / hz;
+    let shot;
+    if (Math.random() < p) shot = { x: ux + r() * 0.3, y: uy + r() * 0.3, z: uz + r() * 0.3 };
+    else {
+      const off = (0.6 + Math.random() * 0.9) / Math.max(2, l);
+      const sides = [{ x: ux + px * off, y: uy + r() * 0.3, z: uz + pz * off }, { x: ux - px * off, y: uy + r() * 0.3, z: uz - pz * off }, { x: ux + r() * 0.3, y: uy + off, z: uz + r() * 0.3 }].sort(() => Math.random() - 0.5);
+      const reach = l + 1.5;
+      shot = sides.find((d) => { const dl = Math.hypot(d.x, d.y, d.z) || 1; return openNow(e.dimension, fv, { x: fv.x + (d.x / dl) * reach, y: fv.y + (d.y / dl) * reach, z: fv.z + (d.z / dl) * reach }); });   // (a miss past him on a side that's open: not into the frame beside him)
+      if (!shot) { if (g) g.coverMiss = (g.coverMiss ?? 0) + 1; return false; }                    // (boxed in by cover all round: he's not really in the open)
+    }
+    hitscan(e, spec, fv, shot, Math.min(spec.fire + 20, 220), w); noteShot(e); return true;
   }
   for (let k = 0; k < 3 && !dir; k++) {
     const dv = { x: dx / n + r(), y: dy / n + r(), z: dz / n + r() };
@@ -3816,9 +3860,9 @@ function hearNoise(dim, loc, maker) {
   const now = tick();
   if (maker) noiseFrom.set(maker.id, now);
   const mf = maker ? factionOf(maker) : 0;
-  for (const o of nearbyCombatants(dim.id, loc, 64)) {
-    if (o.typeId !== SOLDIER) continue;
-    try { if (!mf || isHostile(Number(P(o, "war:faction")), mf)) { const s = pstate(o); s.noise = { x: loc.x, y: loc.y, z: loc.z }; s.noiseT = now; } } catch {}
+  for (const c of nearSnap(dim.id, loc, 64)) {                          // (v8.1: from the snapshot: no calls into the game per listener)
+    if (c.type !== SOLDIER || c.down) continue;
+    try { if (!mf || isHostile(c.f, mf)) { const s = perc.get(c.id) ?? pstate(c.e); s.noise = { x: loc.x, y: loc.y, z: loc.z }; s.noiseT = now; } } catch {}
   }
 }
 world.afterEvents.entityHurt.subscribe((ev) => {
@@ -4927,7 +4971,7 @@ const isTall = (b) => !!b && TI(b.typeId).tall;
 const pathable = (b) => passable(b) || isOpenable(b);
 // a real floor: solid under the feet (a ladder counts: he can stand on its top rung); not a plant, torch, open trapdoor or fence
 const isFloor = (b) => { if (!b || b.isAir || b.isLiquid) return false; const t = TI(b.typeId); return !t.tall && !(t.trap && b.open) && (!t.pass || t.climb) && !t.leaves && !t.hazard; };
-const PLAN_BUDGET = 700;          // node expansions per tick, shared by all plans (a big search takes a few seconds)
+const PLAN_BUDGET = 2000;         // node expansions per tick, shared by all plans (v8.1: the time limit is what really caps it)
 function cellAt(job, x, z, refY) {
   const key = job.step > 1 ? job.nkey(x, z, 0) : job.nkey(x, z, Math.floor(refY));
   const c = job.cells.get(key);
@@ -5056,7 +5100,8 @@ function planRoute(dim, start, goal, onDone, opts = {}) {
     const old = planJobs.findIndex((j) => !j.prio);
     if (old >= 0) { const [j] = planJobs.splice(old, 1); try { j.onDone(undefined, true, false); } catch {} }
   }
-  planJobs.push(job);
+  job.t0 = tick(); planJobs.push(job);
+  return job;
 }
 // a cell the known enemies can see (chest height), checked once per cell per route, with a ray budget per route
 function exposedCost(job, b) {
@@ -5077,6 +5122,7 @@ function exposedCost(job, b) {
   return v;
 }
 function finishJob(job, endKey, partial = false) {
+  { const ps = globalThis.__planStats; if (ps) { ps.done++; ps.doneT += tick() - (job.t0 ?? tick()); } }
   const pts = [];
   let k = endKey;
   while (k !== undefined) { const { x, z, y } = job.dec(k); const c = job.cells.get(k); pts.push({ x: x + 0.5, y: c && c.y !== undefined ? c.y : y, z: z + 0.5, w: !!c?.w, climb: !!c?.climb, open: !!c?.open }); k = job.came.get(k); }
@@ -5098,14 +5144,19 @@ system.runInterval(() => {
   let budget = PLAN_BUDGET;
   let rounds = 0;
   const tStart = Date.now();
-  while (budget > 0 && planJobs.length && freshReads < readBudget && rounds < planJobs.length * 4 && Date.now() - tStart < 3) {
+  // (v8.1: dead jobs (the soldier gave up waiting or asked again) are dropped at once: on a real server they piled up
+  //  and ate the planner's time. And the time per tick follows how the server is coping: up to 8 ms while it keeps
+  //  pace, 3 ms when it's behind: at a flat 3 ms a route through a building took over a minute in the real game)
+  for (let k = planJobs.length - 1; k >= 0; k--) if (planJobs[k].cancel) planJobs.splice(k, 1);
+  const MS = tickGap < 58 ? 8 : tickGap < 75 ? 5 : 3;
+  while (budget > 0 && planJobs.length && freshReads < readBudget && rounds < planJobs.length * 4 && Date.now() - tStart < MS) {
     rounds++;
     jobTurn = (jobTurn + 1) % planJobs.length;
     const prioJob = planJobs.find((j) => j.prio);
     const job = prioJob && rounds % 2 ? prioJob : planJobs[jobTurn];
     let share = Math.max(40, Math.floor(PLAN_BUDGET / planJobs.length)) * (job.prio ? 3 : 1);
     let finished = false;
-    while (share-- > 0 && budget-- > 0 && freshReads < readBudget && ((budget & 31) || Date.now() - tStart < 3)) {
+    while (share-- > 0 && budget-- > 0 && freshReads < readBudget && ((budget & 31) || Date.now() - tStart < MS)) {
       if (!job.open.size || job.exp >= job.max || job.cells.size > 90000 || job.open.size > 60000) {   // (v6.1: and a hard size cap: never a memory blow-up)
         // no full route: go as far as we can toward the goal (re-planned later)
         const bk = job.best.key ?? job.nkey(job.best.x, job.best.z, 0);
@@ -5185,6 +5236,7 @@ system.runInterval(() => {
     }
     if (finished) { planJobs.splice(planJobs.indexOf(job), 1); jobTurn = Math.max(0, Math.min(jobTurn, planJobs.length - 1)); }
   }
+  { const ps = globalThis.__planStats; if (ps) { ps.ticks++; ps.exp += PLAN_BUDGET - budget; ps.ms += Date.now() - tStart; ps.reads += freshReads; } }   // (test servers only)
 }, 1);
 
 world.afterEvents.entityDie.subscribe((ev) => {
@@ -5684,6 +5736,7 @@ function localReachBFS(dim, from, to, maxNodes) {
 const PENDING = new Map(); // dest key -> { t, from, id }: routes being worked out right now (v7.3)
 function planPersonalTo(e, kind, dest, now) {
   const pr = { pts: undefined, idx: 0, kind, t: now, planning: true, dest: { x: dest.x, y: dest.y, z: dest.z } };
+  { const old = personal.get(e.id); if (old?.job && old.planning) old.job.cancel = true; }   // (v8.1: his old search stops)
   personal.set(e.id, pr);
   const hit = cachedRoute(e.dimension, e.location, dest);                       // a squad mate just worked this out: use his route
   if (hit) { pr.planning = false; pr.pts = hit; return; }
@@ -5706,7 +5759,7 @@ function planPersonalTo(e, kind, dest, now) {
   const danger = bwOf(sd(e).faction).cov !== false && Sq?.known?.size && ["advance", "engage", "spot", "rally", "refuge", "exit", "settle"].includes(kind)
     ? [...Sq.known.values()].filter((q) => now - q.t < 300).slice(0, 4).map((q) => ({ x: q.x, y: q.y + 1.6, z: q.z })) : undefined;
   const otherFloor = Number.isFinite(dest.y) && Math.abs(dest.y - e.location.y) > 2.5;
-  planRoute(dim, e.location, dest, (pts, partial) => {
+  pr.job = planRoute(dim, e.location, dest, (pts, partial) => {
     PENDING.delete(pk);
     // (v7.3: a route cut short that ends on the wrong floor is no route: it left the stormers standing under the enemy)
     if (pts && partial && otherFloor && Math.abs(pts[pts.length - 1].y - dest.y) > 2) pts = undefined;
@@ -6769,7 +6822,14 @@ function isIndoors(e) {
   return false;
 }
 // ---- personal routes (3D): the quickest way out of a building, or into one for refuge
-const personal = new Map(); // id -> { pts, idx, kind, t, planning }
+// (v8.1: removing or replacing a soldier's route also stops its search, wherever in the code that happens: on a real
+//  server searches nobody was waiting for any more filled the planner's queue)
+class RouteTable extends Map {
+  set(k, v) { const o = super.get(k); if (o && o !== v && o.job && o.planning) o.job.cancel = true; return super.set(k, v); }
+  delete(k) { const o = super.get(k); if (o?.job && o.planning) o.job.cancel = true; return super.delete(k); }
+  clear() { for (const o of super.values()) if (o?.job && o.planning) o.job.cancel = true; super.clear(); }
+}
+const personal = new RouteTable(); // id -> { pts, idx, kind, t, planning }
 function planPersonal(e, kind, goalFn, now, max = 20000, radius = 60) {
   const pr = { pts: undefined, idx: 0, kind, t: now, planning: true };
   personal.set(e.id, pr);
@@ -6795,13 +6855,13 @@ function roofNear(e, now) {
 function followPersonal(e, now) {
   const pr = personal.get(e.id);
   if (!pr) return undefined;
-  const drop = () => { personal.delete(e.id); travelTo.delete(e.id); return undefined; };
+  const drop = () => { if (pr.job && pr.planning) pr.job.cancel = true; personal.delete(e.id); travelTo.delete(e.id); return undefined; };
   if (pr.planning && pr.waitKey) {                                     // (v7.3: a mate's route to the same place)
     const hit = cachedRoute(e.dimension, e.location, pr.dest);
     if (hit) { pr.planning = false; pr.pts = hit; pr.waitKey = undefined; pr.t = now; }
     else if (!PENDING.has(pr.waitKey) || now - pr.t > 400) { const k = pr.kind, d0 = pr.dest; personal.delete(e.id); PENDING.delete(pr.waitKey); planPersonalTo(e, k, d0, now); return { g: "g_none", t: "t_mid", urgent: false }; }
   }
-  if (pr.planning) { if (now - pr.t > (["advance", "engage", "settle"].includes(pr.kind) ? 400 : 160)) return drop(); return now - pr.t < 40 ? { g: "g_none", t: "t_mid", urgent: false } : undefined; }   // a short wait for the route; never frozen (v7.3: a long one gets time)
+  if (pr.planning) { if (now - pr.t > (["advance", "engage", "settle"].includes(pr.kind) ? 400 : 160)) { if (globalThis.__planStats) globalThis.__planStats.dropped++; return drop(); } return now - pr.t < 40 ? { g: "g_none", t: "t_mid", urgent: false } : undefined; }   // a short wait for the route; never frozen (v7.3: a long one gets time)
   if (!pr.pts) return drop();
   const i = trackIdx(e.id, pr.pts, e.location);
   pr.idx = i;
@@ -6833,7 +6893,7 @@ function openWindow(e, t, now) {
   if (!setting("build", true) || !canBuild(e, now)) return false;
   try {
     const h = headLoc(e), c = chest(t), dx = c.x - h.x, dy = c.y - h.y, dz = c.z - h.z, L = Math.hypot(dx, dy, dz) || 1;
-    const hit = e.dimension.getBlockFromRay(h, { x: dx / L, y: dy / L, z: dz / L }, { maxDistance: 4, includePassableBlocks: false });
+    const hit = rayHit(e.dimension, h, { x: dx / L, y: dy / L, z: dz / L }, 4)?.hb;
     const b = hit?.block;
     if (!b || !b.typeId.includes("glass")) return false;
     restoreList.push({ dim: e.dimension.id, loc: { ...b.location }, typeId: b.typeId, placed: "minecraft:air", at: now + 2400 });
@@ -8838,6 +8898,7 @@ function tacSpot(e, d, S, o, now) {
     cands.push({ ...w, r: flat(w, here) });
   }
   const mates = nearbyCombatants(dim.id, center, o.rMax + 5).filter((m) => m.typeId === SOLDIER && m.id !== e.id && !downed.has(m.id) && Number(P(m, "war:faction") ?? 0) === f);
+  const mateLocs = mates.map((m) => m.location);                       // (v8.1: read once, not once per candidate spot: each read is a call into the game)
   const scored = [];
   for (const c of cands) {
     if (c.r > 0 && claimedByOther(c, e.id, now)) continue;
@@ -8848,7 +8909,7 @@ function tacSpot(e, d, S, o, now) {
       if (c.r > 0 && g < 1.5) s -= 1;                                    // a bound that gains nothing isn't a bound
     }
     let crowd = 0;
-    for (const m of mates) { const ml = m.location; if (Math.hypot(ml.x - c.x, ml.z - c.z) < 1.6 && Math.abs(ml.y - c.y) < 1.5) crowd++; }
+    for (const ml of mateLocs) if (Math.hypot(ml.x - c.x, ml.z - c.z) < 1.6 && Math.abs(ml.y - c.y) < 1.5) crowd++;
     c.s = s - TW.crowd * crowd;
     scored.push(c);
   }
