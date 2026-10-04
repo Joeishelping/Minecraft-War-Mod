@@ -644,7 +644,7 @@ function surrender(e, captor) {
   try { sdDrop(e); } catch {}
   const d = sd(e);
   if (d.surr) return;
-  callout(e, "Don't shoot!");                                    // (v6.6)
+  callout(e, "Don't shoot!", { event: true });                   // (v6.6)
   sdp(e, "war:prevfunc", d.func);
   sdp(e, "war:surr", captor);
   const slot = makeWaypoint(e.dimension, e.location);
@@ -932,7 +932,7 @@ function molotov(e, d, now) {
   turnTo(e, t.location, 180);                                    // (v6.9.2: facing the throw)
   sdp(e, "war:molo", n - 1); sdp(e, "war:molot", now + MOLO.cd); squadMolo.set(sq, now + MOLO.squadGap);
   if (!gdp(e, "war:molor")) sdp(e, "war:molor", now);
-  callout(e, "Grenade!");
+  callout(e, "Grenade!", { event: true });
   const err = Math.min(2, dd / 10);                              // a lob isn't a rifle shot
   const at = { x: t.location.x + (Math.random() - 0.5) * err * 2, y: t.location.y, z: t.location.z + (Math.random() - 0.5) * err * 2 };
   throwMolotov(e, at, dd);
@@ -1004,7 +1004,7 @@ function grenade(e, d, now) {
   turnTo(e, t.location, 180);                                    // (v6.9.2: he faces where he throws: it went out of his back)
   sdp(e, "war:nade", n - 1); sdp(e, "war:nadet", now + NADE.cd); squadNade.set(sq, now + NADE.squadGap);
   if (!gdp(e, "war:nader")) sdp(e, "war:nader", now);
-  callout(e, "Grenade!");
+  callout(e, "Grenade!", { event: true });
   const dd = dist(t.location, e.location), err = Math.min(2.5, dd / 9);
   const at = { x: t.location.x + (Math.random() - 0.5) * err * 2, y: t.location.y, z: t.location.z + (Math.random() - 0.5) * err * 2 };
   const dim = e.dimension, from = headLoc(e), T = Math.round(12 + dd * 0.9), g = walkableNear(dim, at.x, at.z, at.y) ?? at, by = e;
@@ -2476,7 +2476,7 @@ async function warTable(player, pre) {
       .toggle("Close-combat drills (cover-and-move, shoot-and-scoot, flinch)", { defaultValue: !!setting("drills", true) })
       .toggle("Kneel in firefights", { defaultValue: !!setting("poses", true) })
       .toggle("Soldiers cut off and outnumbered may surrender", { defaultValue: !!setting("isosurr", true) })
-      .toggle("Battle learning (factions adapt their tactics from their own battles)", { defaultValue: !!setting("learn", true) })
+      .toggle("Battle learning (experimental: factions slowly adapt their tactics from their own battles)", { defaultValue: setting("learn", false) === true })
       .toggle("Rescue stuck soldiers (teleport to a squad mate, last resort only)", { defaultValue: !!setting("rescue", true) })
       .toggle("On the march, finish an enemy off before carrying on", { defaultValue: !!setting("commit", true) })
       .toggle("Armbands showing each soldier's type", { defaultValue: !!setting("bands", true) })
@@ -5582,12 +5582,12 @@ system.runInterval(() => {
                 try { cmdr?.onScreenDisplay.setActionBar(`§e${d0.squad ? squadName(d0.faction, d0.squad) : factionLabel(d0.faction, true)}: §fpinning them, ${nF} flanking`); } catch {}
               }
             } else if (!dug) S.plan = "assault";
-          } else if (!dug && S.ratio >= BW.ratioFix && !S.siege) { S.plan = "assault"; callout(ours[0], "Charge!"); }
+          } else if (!dug && S.ratio >= BW.ratioFix && !S.siege) { S.plan = "assault"; callout(ours[0], "Charge!", { event: true }); }
         }
         if (S.plan === "fix") {
           const fl = ours.filter((e) => S.flankers.has(e.id));
           const inPlace = fl.length && fl.filter((e) => flat(S.flankPt, e.location) < 8 || now - (gunState.get(e.id)?.lastShot ?? -999) < 20).length >= Math.ceil(fl.length / 2);
-          if (inPlace || now - S.contactT > BW.stallT * 3 || !fl.length) { S.plan = "assault"; S.flankers.clear(); S.suppressors.clear(); callout(ours[0], "Go, go, go!"); radio(ours[0], "assaulting the position", true); }
+          if (inPlace || now - S.contactT > BW.stallT * 3 || !fl.length) { S.plan = "assault"; S.flankers.clear(); S.suppressors.clear(); callout(ours[0], "Go, go, go!", { event: true }); radio(ours[0], "assaulting the position", true); }
         }
         if (S.plan === "assault" && S.ratio < 0.5) S.plan = "contact";
       }
@@ -6160,7 +6160,7 @@ function callout(e, text, opt = {}) {
     if (text === "IDLE") { const fresh = IDLE_LINES.filter((k) => voiceHas(lang, k) && !saidNear(k, 6000)); key = fresh[Math.floor(Math.random() * fresh.length)]; }
     if (!key || !voiceHas(lang, key)) return false;
     if (!test && !opt.force) {
-      if (now - (lastCall.get(e.id) ?? -9999) < callGap()) return false;        // one shout per man every few seconds
+      if (!opt.event && now - (lastCall.get(e.id) ?? -9999) < callGap()) return false;   // one shout per man every few seconds (v8.2: a one-off event or a squad decision always gets its line)
       if (saidNear(key, LINE_WIN(key))) return false;                         // v6.8: never the same line from two men at once (any squad)
       const sec = Math.floor(now / 20); if (sec !== callSec) { callSec = sec; callsThisSec = 0; }
       if (callsThisSec >= 6 || !playerNear(e, 32)) return false;            // (v6.9.3: up to 6 a second, overlapping: a battle sounds like one)              // never a wall of noise; nobody near: no sound
@@ -6435,7 +6435,7 @@ function medicMove(e, d, now) {
       if (isDowned(best)) {
         mt.reachT ??= now;
         note(e, "treating a downed soldier");
-        if (now - mt.reachT >= 20) { revive(best, 8); mt.reachT = undefined; note(e, "revived a soldier"); callout(e, "You're okay!"); const rb = best; system.runTimeout(() => callout(rb, "Thanks!"), 30); }
+        if (now - mt.reachT >= 20) { revive(best, 8); mt.reachT = undefined; note(e, "revived a soldier"); callout(e, "You're okay!", { event: true }); const rb = best; system.runTimeout(() => callout(rb, "Thanks!", { event: true }), 30); }
       }
       turnTo(e, best.location, 30);
       return { g: "g_none", t: "t_off", urgent: false };
@@ -7154,7 +7154,9 @@ function planCheck(S, ours, now) {
   if (!P0.said && doing >= Math.max(1, Math.ceil(ours.length / 2))) {
     P0.said = true;
     radio(ours[0], BPLANS[P0.kind], true);
-    callout(ours[Math.floor(Math.random() * ours.length)], P0.kind === "sortie" || P0.kind === "assault" ? "Moving up!" : "Hold position!");
+    // v8.2: the line fits the plan (storming in, a sortie out, pushing up, or holding / covering)
+    const line = { assault: "Go, go, go!", sortie: "Charge!", attack: "Moving up!", contain: "Suppressing!" }[P0.kind] ?? "Hold position!";
+    callout(ours[Math.floor(Math.random() * ours.length)], line, { event: true });
   }
   if (now - P0.t > 200 && doing < Math.max(1, Math.ceil(ours.length / 3))) P0.until = now;   // not working: think again
 }
@@ -7481,7 +7483,7 @@ function stackAtStairs(e, pr, i, now) {
   if (!st || now - st.t0 > 900) { st = { t0: now, go: 0 }; stackUp.set(key, st); if (stackUp.size > 200) stackUp.clear(); }
   if (st.go && now - st.go < 200) return false;                              // the stack is going: up he goes
   const here = nearbyCombatants(e.dimension.id, l, 5).filter((o) => o.typeId === SOLDIER && !downed.has(o.id) && Number(P(o, "war:faction")) === d.faction && sd(o).squad === d.squad).length;   // (him included)
-  if (here >= Math.min(3, S.n) || now - st.t0 > 120) { st.go = now; callout(e, "Go, go, go!"); radio(e, "going up the stairs", true); return false; }
+  if (here >= Math.min(3, S.n) || now - st.t0 > 120) { st.go = now; callout(e, "Go, go, go!", { event: true }); radio(e, "going up the stairs", true); return false; }
   return true;
 }
 // ---- general's view: the camera hangs above a ground cursor and looks straight down, so the middle of your
@@ -9138,7 +9140,7 @@ const LEARN_SPACE = { fire: [0.2, 1.5], expo: [0, 1.2], adv: [0.3, 1.6], close: 
 let learned = null; // faction -> { mean: {k: v}, base, n }
 function getLearned() { if (!learned) learned = getJSON(world, "war:learn", {}); return learned; }
 function saveLearned() { try { setJSON(world, "war:learn", learned ?? {}); } catch {} }
-const learnOn = () => setting("learn", true) !== false;
+const learnOn = () => setting("learn", false) === true;   // (v8.2: off unless switched on: experimental)
 const BW_DEF = () => ({ ...BW, headK: HEAD_K });
 function learnedBW(f) {
   if (!f || !learnOn()) return undefined;

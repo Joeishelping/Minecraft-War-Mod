@@ -34,6 +34,22 @@ Everything below was found and checked on a real Bedrock server.
     toss), and hold the stairheads and windows if they don't.
   - Attackers who are mostly inside all storm; nobody goes back out to "cover the building".
 
+- **Settings audit.** Every switch in War Table → Settings was traced to the code it controls, and every one of
+  them works. Battle learning is now **off by default** and marked experimental:
+  - It can't crash anything: it's small, bounded and saved as a few numbers per faction.
+  - But it judges a whole tactic from one fight's result, which is mostly luck.
+  - It also makes a world's soldiers behave differently from the tested ones, so a "they got dumber" report can't
+    be told apart from drift.
+  - Switch it on if you like the idea; "Reset what every faction has learned" undoes it.
+- **Voice lines.**
+  - A man who had just shouted something could swallow a one-off line: a surrender ("Don't shoot!") or "Thanks!"
+    after a revive (he'd just yelled "Medic!"). The same went for a squad's decision ("Charge!", "Go, go, go!").
+    These events now always get their line; the "no two men say the same line at once" rule still holds.
+  - Building plans get fitting lines: storming in "Go, go, go!", a sortie "Charge!", pushing up "Moving up!",
+    covering the building "Suppressing!", holding "Hold position!".
+  - "Frag out!" comes only from Demolition soldiers (throwing, or when a grenade lands near someone). "You're
+    okay!" / "Thanks!" come only when a Medic revives someone.
+
 ## v8.1 (Tested in the real game: the "seeing through walls" bug found and fixed)
 
 Run on a real Bedrock Dedicated Server (1.26.52) with the test kit in `tests/bds`, not only the simulator.
