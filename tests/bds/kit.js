@@ -284,8 +284,9 @@ system.afterEvents.scriptEventReceive.subscribe((ev) => {
       // wait until every corner of the area is loaded (up to 30 s)
       for (let k = 0; k < 60; k++) { let ok = true; for (const [x, z] of [[r[0], r[1]], [r[2], r[1]], [r[0], r[3]], [r[2], r[3]], [(r[0] + r[2]) >> 1, (r[1] + r[3]) >> 1]]) { try { if (!ow().getBlock({ x, y: Y, z })) ok = false; else { const t = ow().spawnEntity("war:blank", { x: x + 0.5, y: Y + 1, z: z + 0.5 }); t.remove(); } } catch { ok = false; } } if (ok) break; await kitWait(10); }   // (loaded AND ticking: something can be spawned there)
       await kitWait(20);
+      globalThis.__v9 = {};
       const res = await KS[name](o, ox, oz);
-      console.warn(`WARTEST ${JSON.stringify({ scenario: name, args: o, ...res, errors: ERRS.size })}`);
+      console.warn(`WARTEST ${JSON.stringify({ scenario: name, args: o, ...res, v9: globalThis.__v9, errors: ERRS.size })}`);
     } catch (err) { console.warn(`WARTEST ${JSON.stringify({ scenario: name, args: o, crash: String(err), stack: String(err?.stack ?? "").slice(0, 300) })}`); }
     finally {
       for (const e of allOf(SOLDIER)) { try { e.remove(); } catch {} }

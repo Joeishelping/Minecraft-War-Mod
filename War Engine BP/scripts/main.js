@@ -771,7 +771,7 @@ function think(e) {
     // v5.6: a fresh order is obeyed at once: for ~5 s after it nothing stops him to fight (he still shoots on the move)
     const fresh = now - Number(gdp(e, "war:ordt") ?? -99999) < 100 && (["charge", "follow", "patrol"].includes(d.func) || (anchor && dist(anchor.location, e.location) > 6));
     const fight = !fresh && !wet;
-    const engaged = medicMove(e, d, now) ?? shakenMove(e, d, now) ?? waterExit(e, d, now) ?? (fresh || wet ? undefined : reflexMove(e, d, now, anchor, bLeash)) ?? extDecide("first", e, d, now) ?? (personal.has(e.id) ? followPersonal(e, now) : undefined) ?? spreadMove(e, now) ?? (fight ? combatMove(e, d, now, melee, anchor, bLeash) : undefined) ?? (fight ? engagement(e, d, now, d.goal, melee) : undefined) ?? (fresh ? undefined : reinforceMove(e, d, now)) ??
+    const engaged = medicMove(e, d, now) ?? casevacMove(e, d, now) ?? shakenMove(e, d, now) ?? waterExit(e, d, now) ?? (fresh || wet ? undefined : reflexMove(e, d, now, anchor, bLeash)) ?? extDecide("first", e, d, now) ?? (personal.has(e.id) ? followPersonal(e, now) : undefined) ?? spreadMove(e, now) ?? (fight ? combatMove(e, d, now, melee, anchor, bLeash) : undefined) ?? (fight ? engagement(e, d, now, d.goal, melee) : undefined) ?? (fresh ? undefined : reinforceMove(e, d, now)) ??
       (cu !== undefined && marker(Number(cu)) ? (note(e, formMode.has(e.id) ? "marching" : "catching up"), { g: "g_wp", slot: Number(cu), t: "t_mid", urgent: true }) : undefined) ??
       patrolSweep(e, d, now) ?? followLeader(e, d, now) ?? extDecide("last", e, d, now);
     // how far each stationary order may leave its spot to fight: post barely, hold to meet a charge, sentry its whole radius
@@ -3062,11 +3062,13 @@ function rayHit(dim, from, u, L, opts = {}) {
   return d <= L ? { hb, d, p } : undefined;
 }
 const LOS = new Map(); let losThisTick = 0;
+const SMOKES = [];   // v9.0: smoke clouds (see the smoke section): nobody sees or shoots through one
 let losEntries = 0;
 system.runInterval(() => { losThisTick = 0; if (LOS.size > 8000 || losEntries > 60000) { LOS.clear(); losEntries = 0; } }, 1);   // (v8.2: the answers inside count too)
 function clearShot(dim, from, to) {
   const dx = to.x - from.x, dy = to.y - from.y, dz = to.z - from.z, l = Math.hypot(dx, dy, dz);
   if (l < 0.5) return true;
+  if (SMOKES.length && smokeBlocks(dim.id, from, to)) return false;   // (v9.0: checked before the memory: a cloud comes and goes)
   // v5.7: two number keys (each end rounded to a block, half-blocks in height) in nested maps instead of one long text key
   const ka = bkey("", Math.round(from.x), Math.round(from.y * 2), Math.round(from.z)), kb = bkey("", Math.round(to.x), Math.round(to.y * 2), Math.round(to.z));
   let inner = LOS.get(ka);
@@ -3215,6 +3217,7 @@ function headLoc(o) {
 function openNow(dim, a, b) {
   const dx = b.x - a.x, dy = b.y - a.y, dz = b.z - a.z, L = Math.hypot(dx, dy, dz);
   if (L < 0.6) return true;
+  if (SMOKES.length && smokeBlocks(dim.id, a, b)) return false;
   try { return !rayHit(dim, a, { x: dx / L, y: dy / L, z: dz / L }, L - 0.4); } catch { return false; }   // (v8.1: can't tell: not clear)
 }
 // known only by ear: kept (and moved) unless he's actually been seen more recently
@@ -3558,6 +3561,7 @@ function gunTick(e, now) {
   }
   if (!st.target || now < st.next) return;
   const t = st.target;
+  if (ambushHold(e, d, t, now)) { st.next = now + 2; return; }          // v9.0: an ambush: nobody fires until it's sprung
   if (!t.isValid || downed.has(t.id) || pows.has(t.id)) { st.target = undefined; st.check = now; return; }   // (v7.1: down or surrendered: no more rounds into him, or past him into the wall)
   if (!shotAt(e, d, t, now)) return;                                    // beyond the gun's useful range, or a head too far to hit: close in first (v5.4)
   if (closeEnemy(e, d, 2.5)) return;                                    // hand-to-hand right now
@@ -5430,6 +5434,7 @@ function shakenMove(e, d, now) {
   const slot = makeWaypoint(e.dimension, spot);
   if (!slot) return undefined;
   shaken.set(e.id, { slot, at: spot, until: now + 400, key });
+  try { const t = perc.get(e.id)?.threat; if (t?.isValid && dist(t.location, e.location) > 8) smokeScreen(e, e.location, t.location, 2.5, "covering a man falling back"); } catch {}   // (v9.0)
   callout(e, "Fall back!");
   note(e, "shaken: running");
   return { g: "g_wp", slot, t: "t_off", urgent: true };
@@ -5483,7 +5488,7 @@ system.runInterval(() => {
       const BW = squads.get(k)?.bw ?? bwOf(sd(ours[0]).faction);
       let S = squads.get(k);
       if (!S) { S = { known: new Map(), plan: "advance", contactT: -1, flankers: new Set(), suppressors: new Set(), t: now }; squads.set(k, S); }
-      S.t = now; S.n = ours.length;
+      S.t = now; S.n = ours.length; S.ours = ours;
       const d0 = sd(ours[0]);
       const oc0 = ours.reduce((a, e) => ({ x: a.x + e.location.x / ours.length, z: a.z + e.location.z / ours.length }), { x: 0, z: 0 });
       // shared knowledge: everything any member has seen (a shout away)
@@ -5525,6 +5530,7 @@ system.runInterval(() => {
         helpCall.delete(k); continue;
       }
       if (S.contactT < 0) {
+        ambushDecide(S, ours, known, now);                                // v9.0: they haven't seen us: lie in wait
         S.contactT = now; callout(ours[Math.floor(Math.random() * ours.length)], "Contact!");
         learnStart(S, d0.faction, ours.length, known, now);
         const ec = { x: known.reduce((t, q) => t + q.x, 0) / known.length, z: known.reduce((t, q) => t + q.z, 0) / known.length };
@@ -5591,6 +5597,7 @@ system.runInterval(() => {
         }
         if (S.plan === "assault" && S.ratio < 0.5) S.plan = "contact";
       }
+      try { squadSmoke(S, ours, known, now); } catch (err) { oops("smoke", err); }   // v9.0
       try { buildingPlan(k, S, ours, known, now); if (S.bplan) assignJobs(S, S.bplan, ours); else S.jobs = undefined; planCheck(S, ours, now); } catch (err) { oops("building plan", err); }   // v7.0 (v7.1: checked)
       // key terrain: the highest nearby ground that sees the enemy
       if (!S.keyPt || now % 200 < 20) {
@@ -6154,6 +6161,7 @@ function callout(e, text, opt = {}) {
     const test = text === "Testing!";
     const f = Number(P(e, "war:faction") ?? 0), lang = opt.lang ?? voiceOf(f);
     if (!lang || lang === "none") return false;
+    if (!opt.force && !opt.event && ambushQuiet(e)) return false;          // (v9.0: lying in wait, nobody shouts)
     const has = VOICE_HAS[lang] ?? BASE_LINES, now = tick(), l = e.location, did = e.dimension.id;
     const saidNear = (k, win) => heardLine.some((h) => h.key === k && h.f === f && h.dim === did && now - h.t < win && Math.abs(h.x - l.x) < 40 && Math.abs(h.z - l.z) < 40);   // (v6.9.3: per faction: two sides can both shout "Contact!")
     let key = opt.key ?? (test ? has[Math.floor(Math.random() * has.length)] : CALL_KEY[text]);
@@ -9177,6 +9185,292 @@ function learnEnd(S, nNow, now) {
   saveLearned();
 }
 
+// ================================================================ v9.0: smoke, the wounded dragged to cover, ambushes
+// ---- smoke. A canister thrown (lobbed like a grenade) makes a cloud about 7 blocks across and 4 high for ~22 s that
+// nobody sees or shoots through: it's checked in the line-of-sight test itself (sighting, aiming, the trigger), so a
+// man behind it simply isn't there for the enemy. Two men a step apart inside the same cloud still see each other.
+// Thrown to cover a dash: the start of an assault or a flank over open ground, a man going out for a wounded mate, a
+// man breaking and running. Each rifleman carries one (another after 2 min); a squad throws one every 25 s at most.
+const v9stat = (k, n = 1) => { const S9 = globalThis.__v9; if (S9) S9[k] = (S9[k] ?? 0) + n; };   // (test statistics only)
+const SMOKE = { life: 440, grow: 40, r: 3.6, refill: 2400, squadGap: 500, reach: 26 };
+const smokeUsed = new Map();   // soldier id -> tick he threw his
+function smokeR(s, now) { return SMOKE.r * Math.min(1, 0.35 + (now - s.t0) / SMOKE.grow) * Math.min(1, 0.4 + (s.until - now) / 100); }
+function smokeBlocks(dimId, a, b) {
+  const now = tick();
+  for (const s of SMOKES) {
+    if (s.dimId !== dimId || now < s.t0 || now > s.until) continue;
+    const dx = b.x - a.x, dy = b.y - a.y, dz = b.z - a.z, L2 = dx * dx + dy * dy + dz * dz;
+    if (L2 < 9) continue;                                                     // a step apart: seen, smoke or not
+    let u = L2 ? ((s.x - a.x) * dx + (s.cy - a.y) * dy + (s.z - a.z) * dz) / L2 : 0;
+    u = Math.max(0, Math.min(1, u));
+    const px = a.x + dx * u - s.x, py = (a.y + dy * u - s.cy) / 0.6, pz = a.z + dz * u - s.z, r = smokeR(s, now);
+    if (px * px + py * py + pz * pz < r * r) return true;                      // (a flattened ball: wide, man-high)
+  }
+  return false;
+}
+function canSmoke(e, d, now) {
+  if (!e?.isValid || downed.has(e.id) || d.surr || d.div === "medic" || isRiding(e) || !GUNS.includes(d.weapon) || held.has(e.id)) return false;
+  return now - (smokeUsed.get(e.id) ?? -99999) > SMOKE.refill;
+}
+// a screen between "us" (at) and "them" (from), `k` blocks out from `at` toward them
+function smokeScreen(e, at, from, k, why) {
+  const now = tick(), d = sd(e);
+  if (!canSmoke(e, d, now)) return false;
+  const S = squads.get(squadKey(e, d));
+  if (S && now - (S.smokeT ?? -99999) < SMOKE.squadGap) return false;
+  const dx = from.x - at.x, dz = from.z - at.z, L = Math.hypot(dx, dz) || 1;
+  const p = { x: at.x + (dx / L) * Math.min(k, L * 0.6), y: at.y, z: at.z + (dz / L) * Math.min(k, L * 0.6) };
+  if (flat(p, e.location) > SMOKE.reach) return false;
+  if (S) S.smokeT = now;
+  throwSmoke(e, p, why);
+  return true;
+}
+function throwSmoke(e, at, why) {
+  const now = tick(), dim = e.dimension, from = headLoc(e), dd = Math.max(2, flat(at, e.location));
+  const g = walkableNear(dim, at.x, at.z, at.y) ?? at, T = Math.round(8 + dd * 0.8);
+  smokeUsed.set(e.id, now); v9stat(`smoke:${why}`);
+  turnTo(e, g, 180);
+  try { dim.playSound("random.bow", from, { volume: 0.5, pitch: 0.5 }); } catch {}
+  for (let k = 1; k <= T; k += 2) system.runTimeout(() => {
+    try { const u = k / T, h = Math.max(2.5, dd * 0.3); dim.spawnParticle("minecraft:basic_smoke_particle", { x: from.x + (g.x - from.x) * u, y: from.y + (g.y + 0.3 - from.y) * u + 4 * h * u * (1 - u), z: from.z + (g.z - from.z) * u }); } catch {}
+  }, k);
+  system.runTimeout(() => {
+    const t0 = tick();
+    SMOKES.push({ dimId: dim.id, dim, x: g.x, y: g.y, cy: g.y + 1.4, z: g.z, t0, until: t0 + SMOKE.life });
+    if (SMOKES.length > 24) SMOKES.shift();
+    try { dim.playSound("random.fizz", g, { volume: 0.9, pitch: 0.6 }); } catch {}
+  }, T);
+  note(e, `throwing smoke: ${why}`);
+  radio(e, `smoke out, ${why}`);
+  if (Math.random() < 0.5) callout(e, "Cover me!", { event: true });
+}
+// the cloud itself: billowing puffs while anyone is near enough to see it
+let smokeFxOk = true;
+system.runInterval(() => {
+  const now = tick();
+  for (let i = SMOKES.length - 1; i >= 0; i--) if (now > SMOKES[i].until) SMOKES.splice(i, 1);
+  if (!SMOKES.length) return;
+  const players = world.getAllPlayers();
+  for (const s of SMOKES) {
+    if (!players.some((p) => { try { return p.dimension.id === s.dimId && dist(p.location, s) < 112; } catch { return false; } })) continue;
+    const r = smokeR(s, now), n = now - s.t0 < 60 ? 5 : 3;
+    for (let k = 0; k < n; k++) {
+      const a = Math.random() * Math.PI * 2, q = Math.sqrt(Math.random()) * r * 0.8;
+      const at = { x: s.x + Math.cos(a) * q, y: s.y + 0.3 + Math.random() * 2.2, z: s.z + Math.sin(a) * q };
+      try {
+        if (smokeFxOk) s.dim.spawnParticle("war:smoke_cloud", at);
+        else s.dim.spawnParticle("minecraft:campfire_tall_smoke_particle", at);
+      } catch { smokeFxOk = false; }
+    }
+  }
+}, 6);
+// the squad's own use of it: (1) the start of an assault or a flank across open ground they can be shot on; (2) the
+// dash at a held building's door; (3) pinned down in the open (most of them under fire where they lie): a screen to
+// get out from under it
+function squadSmoke(S, ours, known, now) {
+  const prev = S.smokePlan; S.smokePlan = S.plan;
+  if (!known.length || now - (S.smokeT ?? -99999) < SMOKE.squadGap) return;
+  const oc = S.ourC; if (!oc) return;
+  const dim = ours[0].dimension, look = known.filter((q) => !q.heard).slice(0, 4);
+  let near, nd = 1e9;
+  for (const q of known) { const dd = Math.hypot(q.x - oc.x, q.z - oc.z); if (dd < nd) { nd = dd; near = q; } }
+  if (!near || nd > 60) return;
+  let screenAt, why;
+  if (prev !== S.plan && (S.plan === "assault" || S.plan === "fix") && nd >= 8) {
+    const go = S.plan === "fix" && S.flankPt ? { x: (oc.x + S.flankPt.x) / 2, y: oc.y, z: (oc.z + S.flankPt.z) / 2 } : { x: oc.x + (near.x - oc.x) * 0.4, y: oc.y, z: oc.z + (near.z - oc.z) * 0.4 };
+    if (look.length && exposureAt(dim, go, look) > 0) { screenAt = { x: go.x + (near.x - go.x) * 0.45, y: go.y, z: go.z + (near.z - go.z) * 0.45 }; why = S.plan === "fix" ? "covering the flank" : "covering the assault"; }
+  }
+  if (!screenAt && S.bplan?.kind === "attack" && !S.bplan.smoked && ours.filter((e) => isIndoors(e)).length * 2 < ours.length) {
+    const doors = entrances(dim, S.enemyC ?? near).slice().sort((p, q) => flat(p, oc) - flat(q, oc));
+    const door = doors[0];
+    const watch = known.slice(0, 4);                                          // (inside, they're mostly heard, not seen: where they are is enough)
+    if (door && flat(door, oc) >= 8 && flat(door, oc) <= SMOKE.reach + 6 && (exposureAt(dim, { x: (oc.x + door.x) / 2, y: oc.y, z: (oc.z + door.z) / 2 }, watch) > 0 || ours.some((e) => now - (firedAt.get(e.id)?.t ?? -9999) < 100))) {
+      S.bplan.smoked = true;
+      screenAt = { x: oc.x + (door.x - oc.x) * 0.7, y: door.y, z: oc.z + (door.z - oc.z) * 0.7 }; why = "covering the run to the door";
+    }
+  }
+  if (!screenAt && nd >= 10) {
+    const pinned = ours.filter((e) => (suppB.get(e.id) ?? 0) > 8 || now - (firedAt.get(e.id)?.t ?? -9999) < 30).length;
+    if (pinned * 2 > ours.length && ours.filter((e) => !isIndoors(e)).length * 2 > ours.length && look.length && exposureAt(dim, oc, look) > 0) {
+      const L = nd; screenAt = { x: oc.x + ((near.x - oc.x) / L) * 5, y: oc.y, z: oc.z + ((near.z - oc.z) / L) * 5 }; why = "pinned down, screening";
+    }
+  }
+  if (!screenAt) return;
+  let who, wd = 1e9;
+  for (const e of ours) { const d = sd(e); if (!canSmoke(e, d, now) || (S.plan === "fix" && S.flankers?.has(e.id))) continue; const dd = flat(e.location, screenAt); if (dd < wd && dd <= SMOKE.reach) { wd = dd; who = e; } }
+  if (!who) return;
+  S.smokeT = now;
+  throwSmoke(who, screenAt, why);
+}
+
+// ---- the wounded dragged to cover. A man down where the enemy can see him, with no medic on the way: the nearest
+// squad mate (within 16 blocks) goes out for him, throws smoke if he has it, grabs him and drags him back to the
+// nearest spot the enemy can't see, then patches him up: ~5 s of first aid and he's back on his feet, weak (4 hearts
+// of 20 for most). A man down out of sight gets the same first aid where he lies. A medic coming takes over.
+const DRAG = new Map();    // downed id -> { by, phase: "go" | "drag" | "aid", to, t0, phaseT }
+const dragOf = new Map();  // rescuer id -> downed id
+const dragCool = new Map(); // rescuer id -> tick he may go out again
+const enemiesSeeing = (v, f, r = 48) => {
+  const out = [];
+  for (const c of nearSnap(v.dimension.id, v.location, r)) {
+    if (c.down || !c.f || !isHostile(f, c.f) || !c.e.isValid || (c.type !== SOLDIER && c.type !== "minecraft:player")) continue;
+    if (c.type === "minecraft:player" && !playerFair(c.e)) continue;
+    out.push(c);
+  }
+  return out.filter((c) => clearShot(v.dimension, { x: c.x, y: c.y + 1.6, z: c.z }, { x: v.location.x, y: v.location.y + 0.4, z: v.location.z })).slice(0, 4);
+};
+function coverFrom(dim, at, threats, now) {
+  let best, bs = 1e9;
+  for (let i = 0; i < 20; i++) {
+    const a = (i / 20) * Math.PI * 2 + (i % 2) * 0.3, r = 3 + (i % 4) * 2.5;
+    const w = walkableNear(dim, at.x + Math.cos(a) * r, at.z + Math.sin(a) * r, at.y);
+    if (!w || Math.abs(w.y - at.y) > 1.5 || dangerNear(dim, w)) continue;
+    if (threats.some((c) => clearShot(dim, { x: c.x, y: c.y + 1.6, z: c.z }, { x: w.x, y: w.y + 0.6, z: w.z }))) continue;
+    const sc = r + threats.reduce((m, c) => m - Math.min(8, Math.hypot(c.x - w.x, c.z - w.z)) * 0.05, 0);
+    if (sc < bs) { bs = sc; best = w; }
+  }
+  return best;
+}
+const dragEnd = (id) => { const D = DRAG.get(id); if (D) { dragOf.delete(D.by); dragCool.set(D.by, tick() + 300); } DRAG.delete(id); };
+system.runInterval(() => {
+  const now = tick();
+  for (const [id, D] of [...DRAG]) { const r = world.getEntity(D.by); if (!downed.has(id) || !r?.isValid || downed.has(D.by) || now - D.t0 > 900 || medicComing(id, now)) dragEnd(id); }
+  for (const [id] of downed) {
+    if (DRAG.has(id) || held.has(id) || pows.has(id) || medicComing(id, now) || (downed.get(id) ?? 0) - now < 160) continue;   // (too late to get to him: under 8 s left)
+    const v = world.getEntity(id); if (!v?.isValid || v.typeId !== SOLDIER) continue;
+    const dv = sd(v); if (!dv.faction || gdp(v, "war:surr")) continue;
+    let who, wd = 1e9;
+    for (const c of nearSnap(v.dimension.id, v.location, 16)) {
+      if (c.type !== SOLDIER || c.down || c.f !== dv.faction || c.id === id || !c.e.isValid || dragOf.has(c.id) || now < (dragCool.get(c.id) ?? 0)) continue;
+      const dc = sd(c.e);
+      if (dc.surr || dc.div === "medic" || dc.div === "guard" || dc.retreat || isRiding(c.e) || shaken.has(c.id) || held.has(c.id) || pows.has(c.id)) continue;
+      if (closeEnemy(c.e, dc, 6)) continue;                                   // fighting for his own life right now
+      if (Math.abs(c.y - v.location.y) > 4) continue;
+      if (c.dd < wd) { wd = c.dd; who = c.e; }
+    }
+    if (!who) continue;
+    const wk = squadKey(who, sd(who)), WS = squads.get(wk);
+    let busy = 0; for (const [, D2] of DRAG) if (D2.sq === wk) busy++;
+    if (busy >= ((WS?.n ?? 0) >= 8 ? 2 : 1) || (WS?.ratio !== undefined && WS.ratio < 0.6 && flat(who.location, v.location) > 6)) continue;   // a squad losing the fight keeps its men in it
+    DRAG.set(id, { sq: wk, by: who.id, phase: "go", t0: now, phaseT: now }); v9stat("rescueGo");
+    dragOf.set(who.id, id);
+    note(who, "going for a wounded mate");
+    callout(who, "Moving up!", { event: true });
+    const seen = enemiesSeeing(v, dv.faction);
+    if (seen.length) { const c = seen[0]; smokeScreen(who, v.location, c, 3.5, "covering a wounded man"); }
+  }
+}, 20);
+function casevacMove(e, d, now) {
+  const vid = dragOf.get(e.id); if (!vid) return undefined;
+  const D = DRAG.get(vid), v = world.getEntity(vid);
+  if (!D || !v?.isValid || !downed.has(vid)) { dragEnd(vid); return undefined; }
+  const dd = flat(v.location, e.location), dy = Math.abs(v.location.y - e.location.y);
+  if (D.phase === "go") {
+    if (dd < 1.9 && dy < 1.5) {
+      downed.set(vid, Math.max(downed.get(vid) ?? now, now + 500)); try { sdp(v, "war:downed", downed.get(vid)); } catch {}   // pressure on the wound: he holds on
+      const seen = enemiesSeeing(v, d.faction);
+      const to = seen.length ? coverFrom(e.dimension, v.location, seen, now) : undefined;
+      if (to) { D.phase = "drag"; D.to = to; D.phaseT = now; v9stat("dragStart"); note(e, "dragging a wounded mate to cover"); radio(e, "dragging a wounded man to cover"); }
+      else { D.phase = "aid"; D.phaseT = now; }
+    } else {
+      if (now - D.phaseT > 300) { dragEnd(vid); return undefined; }         // can't get to him
+      note(e, "going for a wounded mate");
+      const mv = travel(e, v.location, "medic", now, true);
+      return mv ? { ...mv, t: "t_off" } : undefined;
+    }
+  }
+  if (D.phase === "drag") {
+    if (flat(e.location, D.to) < 1.4 || now - D.phaseT > 260) { D.phase = "aid"; D.phaseT = now; }
+    else {
+      note(e, "dragging a wounded mate to cover");
+      try { if (now % 20 === 0) e.addEffect("slowness", 24, { amplifier: 1, showParticles: false }); } catch {}
+      const mv = travel(e, D.to, "medic", now, true);
+      return mv ? { ...mv, t: "t_off" } : undefined;
+    }
+  }
+  // first aid, kneeling beside him
+  if (dd > 2.6 || dy > 1.8) { const mv = travel(e, v.location, "medic", now, true); return mv ? { ...mv, t: "t_off" } : undefined; }
+  if (!D.aidT) { D.aidT = now; downed.set(vid, Math.max(downed.get(vid) ?? now, now + 400)); try { sdp(v, "war:downed", downed.get(vid)); } catch {} }   // the bleeding's stopped
+  note(e, "first aid");
+  turnTo(e, v.location, 30);
+  if (now - D.aidT >= 100) {
+    revive(v, 4); dragEnd(vid); v9stat("firstAidRevive");
+    callout(e, "You're okay!", { event: true }); system.runTimeout(() => { try { if (v.isValid) callout(v, "Thanks!", { event: true }); } catch {} }, 30);
+    radio(e, "wounded man patched up, back in the fight");
+    return undefined;
+  }
+  return { g: "g_none", t: "t_off", urgent: false };
+}
+// the drag itself: the body follows a step behind the man pulling it (every other tick: smooth, a few bodies at most)
+system.runInterval(() => {
+  for (const [vid, D] of DRAG) {
+    if (D.phase !== "drag") continue;
+    try {
+      const v = world.getEntity(vid), r = world.getEntity(D.by);
+      if (!v?.isValid || !r?.isValid) continue;
+      const a = r.location, b = v.location, dx = b.x - a.x, dz = b.z - a.z, L = Math.hypot(dx, dz);
+      if (L < 1.25) continue;
+      const p = { x: a.x + (dx / L) * 1.1, y: a.y, z: a.z + (dz / L) * 1.1 };
+      if (!standAt(v.dimension, Math.floor(p.x), Math.floor(p.y), Math.floor(p.z))) { p.x = a.x; p.z = a.z; }
+      downPos.set(vid, p);
+      v.teleport(p);
+    } catch {}
+  }
+}, 2);
+
+// ---- ambushes. A squad that sees the enemy before the enemy sees it (no man of theirs aware of us, nobody shooting
+// at us, nobody closer than 14 blocks) lies in wait: no shot and no shout until it's sprung. It's sprung when most of
+// the squad has a man in its sights, when the enemy notices, shoots, or gets within 10 blocks, or after 6 s: then
+// every rifle opens up in the same second.
+const AMB = { max: 120, close: 10, minD: 14 };
+function enemyAware(q, ours, now) {
+  const o = q.ent ?? q;
+  if (!o?.isValid) return false;
+  if (o.typeId === "minecraft:player") return ours.some((e) => now - (shotAtPlayer.get(o.id) ?? -9999) < 200 || attackedRecently(e, o, now, 100)) || ours.some((e) => dist(e.location, o.location) < 18);
+  if (o.typeId !== SOLDIER) return true;                                     // (mobs: no ambush, just shoot)
+  const ps = perc.get(o.id);
+  if (!ps || ps.alert === "calm") return false;
+  return !!ps.threat && ours.some((e) => e.id === ps.threat.id) || ps.alert === "combat";
+}
+function ambushDecide(S, ours, known, now) {
+  S.amb = undefined;
+  if (ours.length < 2 || String(gdp(ours[0], "war:stance") ?? "aggressive") === "holdfire") return;
+  if (ours.some((e) => now - (firedAt.get(e.id)?.t ?? -9999) < 100 || now - (gunState.get(e.id)?.lastShot ?? -9999) < 100)) return;
+  const seen = known.filter((q) => !q.heard);
+  if (!seen.length || known.some((q) => ours.some((e) => Math.hypot(q.x - e.location.x, q.z - e.location.z) < AMB.minD))) return;
+  if (seen.some((q) => enemyAware(q, ours, now))) return;
+  S.amb = { t0: now, until: now + AMB.max }; v9stat("ambushSet");
+  radio(ours[0], "enemy hasn't seen us, hold your fire");
+  for (const e of ours) note(e, "ambush: holding fire");
+}
+function ambushSprung(S, now, why) {
+  if (!S.amb || now >= S.amb.until) return;
+  S.amb.until = now; v9stat(`sprung:${why}`);
+  const ours = (S.ours ?? []).filter((e) => e.isValid);
+  if (ours.length) { callout(ours[Math.floor(Math.random() * ours.length)], "Contact!", { event: true }); radio(ours[0], `ambush sprung (${why})`); }
+  for (const e of ours) { const st = gunState.get(e.id); if (st) { st.next = Math.min(st.next, now + 1 + Math.floor(Math.random() * 4)); st.check = now; } }
+}
+function ambushHold(e, d, t, now) {
+  const S = squads.get(squadKey(e, d));
+  if (!S?.amb || now >= S.amb.until) return false;
+  if (isMob(t)) { ambushSprung(S, now, "mobs"); return false; }
+  const ours = (S.ours ?? []).filter((o) => o.isValid && !downed.has(o.id));
+  if (!ours.length) return false;
+  if (ours.some((o) => now - (firedAt.get(o.id)?.t ?? -9999) < 20 || now - (hurtBy.get(o.id)?.t ?? -9999) < 20)) { ambushSprung(S, now, "they opened fire"); return false; }
+  for (const q of S.known.values()) {
+    if (ours.some((o) => Math.hypot(q.x - o.location.x, q.z - o.location.z) < AMB.close)) { ambushSprung(S, now, "too close"); return false; }
+    if (!q.heard && enemyAware(q, ours, now)) { ambushSprung(S, now, "they've seen us"); return false; }
+  }
+  const guns = ours.filter((o) => GUNS.includes(sd(o).weapon));
+  const ready = guns.filter((o) => gunState.get(o.id)?.target?.isValid).length;
+  if (now - S.amb.t0 >= 20 && ready >= Math.max(2, Math.ceil(guns.length * 0.75))) { ambushSprung(S, now, "everyone's set"); return false; }
+  note(e, "ambush: holding fire");
+  return true;
+}
+function ambushQuiet(e) {
+  try { const S = squads.get(squadKey(e, sd(e))); return !!S?.amb && tick() < S.amb.until; } catch { return false; }
+}
+
 // ================================================================ v8.2: memory housekeeping
 // Bedrock gives scripts a fixed amount of memory and stops the game when it's used up ("Exceeded scripting memory
 // limit"). Every per-soldier record is dropped once that soldier is gone (dead, removed, unloaded for good), checked
@@ -9186,7 +9480,7 @@ system.runInterval(() => {
     const live = new Set();
     for (const t of [SOLDIER, HOUND]) for (const e of allOf(t)) live.add(e.id);
     for (const p of world.getAllPlayers()) live.add(p.id);
-    for (const m of [firedAt, lastPos, noiseFrom, noiseT, alertUntil, modeMemo, propSync, mountedAt, wetTrack, swimGiveUp, breakCool, recentHits, wetMemo, medicCall, lastHp, buildBudget, shotAtPlayer, doorLook, hopT, settleT, flinchT, edgeFearT, kiteT, fleeFire, lastUse, hurtBy, perc, brain, gunState, notes, sweep, marchWatch, forceGlide, glideBan, aimedBy, hpMemo]) {
+    for (const m of [smokeUsed, dragCool, firedAt, lastPos, noiseFrom, noiseT, alertUntil, modeMemo, propSync, mountedAt, wetTrack, swimGiveUp, breakCool, recentHits, wetMemo, medicCall, lastHp, buildBudget, shotAtPlayer, doorLook, hopT, settleT, flinchT, edgeFearT, kiteT, fleeFire, lastUse, hurtBy, perc, brain, gunState, notes, sweep, marchWatch, forceGlide, glideBan, aimedBy, hpMemo]) {
       if (!m?.size) continue;
       for (const k of [...m.keys()]) if (typeof k === "string" && k.length > 3 && !k.includes(":") && !live.has(k)) m.delete(k);
     }
