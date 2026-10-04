@@ -12,6 +12,7 @@ This is the map of the add-on for adding features without breaking the base AI.
 | `War Engine BP/entities/war_soldier.json` | The soldier entity: component groups the script switches (`w_*` weapon, `t_*` targeting, `g_*` movement, `s_*` speed, `r_*`, `d_*`) |
 | `War Engine RP/` | Models, animations, skins |
 | `tests/harness/` | Headless test world that runs the real `main.js` (see CHANGELOG) |
+| `tests/harness/accept.mjs` | The acceptance suite: ten pass/fail checks on several seeds (`node accept.mjs 3 <dirA> [dirB]`) |
 | `tools/build_mcaddon.py` | Builds `dist/War_Engine_vX_Y.mcaddon` |
 
 ## How a soldier is driven

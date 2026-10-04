@@ -229,7 +229,23 @@ export class Dimension {
     }
     return undefined;
   }
-  getEntitiesFromRay() { return []; }
+  getEntitiesFromRay(from, dir, opts = {}) {                       // (v8.0: real: entity boxes along the ray, nearest first)
+    count("getEntitiesFromRay");
+    const max = opts.maxDistance ?? 64, out = [];
+    for (const e of SIM.entities.values()) {
+      if (!e._valid || e.dimension !== this || e.static || e.isBullet) continue;
+      const w = e.typeId === "war:hound" ? 0.35 : 0.3, h = e.typeId === "war:hound" ? 0.85 : 1.9, l = e._loc;
+      const lo = { x: l.x - w, y: l.y, z: l.z - w }, hi = { x: l.x + w, y: l.y + h, z: l.z + w };
+      let t0 = 0, t1 = max, ok = true;
+      for (const a of ["x", "y", "z"]) {
+        if (Math.abs(dir[a]) < 1e-9) { if (from[a] < lo[a] || from[a] > hi[a]) { ok = false; break; } continue; }
+        let ta = (lo[a] - from[a]) / dir[a], tb = (hi[a] - from[a]) / dir[a]; if (ta > tb) [ta, tb] = [tb, ta];
+        t0 = Math.max(t0, ta); t1 = Math.min(t1, tb); if (t0 > t1) { ok = false; break; }
+      }
+      if (ok) out.push({ entity: e, distance: t0 });
+    }
+    return out.sort((a, b) => a.distance - b.distance);
+  }
   getLightLevel(loc) { count("getLightLevel"); return Math.max(12, skyAt(loc.x, loc.y, loc.z)); }
   getSkyLightLevel(loc) { count("getSkyLightLevel"); return skyAt(loc.x, loc.y, loc.z); }
   getEntities(q = {}) {

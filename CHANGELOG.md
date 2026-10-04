@@ -1,5 +1,36 @@
 # War Engine changelog
 
+## v8.0 (Precise hits, the aim fixed at the muzzle, and a pass/fail test suite)
+
+- **Precise hits (Settings → "Bullets", the new default).** The hit is decided by the script along the exact line of
+  the shot, spread included, the way most military shooters handle rifle fire:
+  - The first man on the line is hit. If a wall comes first, the round stops in the wall.
+  - Nothing flies, so nothing can drop, drift or be moved by the gun pack's own bullet code.
+  - A faint tracer and a small puff show the shot; no marks are left on walls.
+  - The gun pack still provides the gun models and sounds. Bazookas keep real rockets.
+  - "Gun pack's own bullets" in the same menu brings back the old flying bullets.
+- **A long-standing aiming bug, fixed.** The aim was worked out from a soldier's eyes, but the round left from his
+  muzzle, 0.2 blocks lower. Every shot flew a parallel line just under the one that was checked, enough to clip
+  window sills and floor edges when shooting up at a man. This probably explains part of the "shooting at walls" all
+  along.
+- **Only real shots.** Before firing, a soldier checks four lines at the edges of his spread (high, low, left,
+  right). If any of them would hit cover in front of the man, he's half hidden: no shot. The soldier waits or moves
+  for a better one. A shot at a man nobody can see was already impossible.
+- **The acceptance suite (tests/harness/accept.mjs).** Ten pass/fail checks, each run on three seeds, with dropping
+  bullets in the simulator to match the gun pack:
+  1. no shots at men nobody can see;
+  2. rounds into cover in front of the target at most 8%;
+  3. attackers reach the upper floor of a big hall within 60 s;
+  4. defenders on the ground floor before the door is breached;
+  5. 30 men march 300 blocks;
+  6. 8 men in and out of a building;
+  7. "roam downstairs" works;
+  8. labels tell the truth;
+  9. 90 v 90 meets and fights without lag;
+  10. no errors.
+
+  v7.4 passes 8 of 10, failing both shooting checks. v8.0 passes 9 or 10 of 10, depending on the run.
+
 ## v7.4 (Shot diagnostics, a safer bullet-drop measurement, windows that are windows)
 
 - **New: Settings → "Shot diagnostics".** Turn it on and every round the soldiers fire is drawn: green sparkles along

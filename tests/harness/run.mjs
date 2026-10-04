@@ -120,6 +120,15 @@ SIM.shots.push = (x) => { try { const o = x.owner; let bd = 1e9; for (const e of
   for (const e of alive()) { if (seeAny || e === o || W.isDowned(e) || e.props.get("war:faction") === o.props.get("war:faction")) continue; if (Math.hypot(e._loc.x - f0.x, e._loc.z - f0.z) > 80) continue;
     for (const hy of [0.6, 1.2, 1.7]) { const t = { x: e._loc.x, y: e._loc.y + hy, z: e._loc.z }, dx = t.x - f0.x, dy = t.y - f0.y, dz = t.z - f0.z, L = Math.hypot(dx, dy, dz) || 1; if (!overworld.getBlockFromRay(f0, { x: dx / L, y: dy / L, z: dz / L }, { maxDistance: L - 0.3 })) { seeAny = true; break; } } }
   x.blind = !seeAny; { const tg = W.gunState.get(o.id)?.target ?? W.gunState.get(o.id)?.supp?.ent; if (tg?._loc) x.tgtD = Math.hypot(tg._loc.x - f0.x, tg._loc.y + 1.2 - f0.y, tg._loc.z - f0.z); } if (x.blind && opt.blindlog) { const gs = W.gunState.get(o.id), tg = gs?.target; console.error("BLIND", SIM.tick, "wb", !!x.wb, "from", f0.x.toFixed(1), f0.y.toFixed(1), f0.z.toFixed(1), "tgt", tg ? `${tg._loc.x.toFixed(1)},${tg._loc.y.toFixed(1)},${tg._loc.z.toFixed(1)} down=${W.isDowned(tg)} fac=${tg.props?.get("war:faction")} type=${tg.typeId}` : "-", "supp", !!gs?.supp, "shooter", o._loc.x.toFixed(1), o._loc.y.toFixed(1), o._loc.z.toFixed(1)); } } catch {} return origPush(x); };
+// v8.0: precise hits are logged like bullets (the same shot statistics)
+globalThis.__warShot = (r) => { try {
+  const o = r.owner; let near = false;
+  for (const e of alive()) { if (e === o || W.isDowned(e) || e.props.get("war:faction") === o.props.get("war:faction")) continue;
+    const c = { x: e._loc.x, y: e._loc.y + 1, z: e._loc.z }, t = Math.max(0, Math.min(r.blockD, (c.x - r.from.x) * r.dir.x + (c.y - r.from.y) * r.dir.y + (c.z - r.from.z) * r.dir.z));
+    if (Math.hypot(r.from.x + r.dir.x * t - c.x, r.from.y + r.dir.y * t - c.y, r.from.z + r.dir.z * t - c.z) < 2.5) { near = true; break; } }
+  SIM.shots.push({ from: r.from, owner: o, t: SIM.tick, nearEnemy: near, hit: r.hit, wb: false, typeId: r.typeId, block: r.block, blockD: r.blockD });
+  if (opt.cdbg) { const x = SIM.shots[SIM.shots.length - 1]; if (x.block && x.tgtD !== undefined && x.blockD < x.tgtD - 0.8) { const gs = W.gunState.get(o.id), tg = gs?.target ?? gs?.supp?.ent; console.error("COVER", SIM.tick, "from", r.from.x.toFixed(1), r.from.y.toFixed(1), r.from.z.toFixed(1), "end", r.end.x.toFixed(1), r.end.y.toFixed(1), r.end.z.toFixed(1), "tgt", tg ? `${tg._loc.x.toFixed(1)},${tg._loc.y.toFixed(1)},${tg._loc.z.toFixed(1)}` : "-", "supp", !gs?.target, "expo", gs?.expo, "tgtD", x.tgtD.toFixed(1), "blockD", x.blockD.toFixed(1)); } }
+} catch {} };
 // v6.0: teleports of more than 2.5 blocks (rescues / anything that jumps a soldier)
 let bigTp = 0;
 { const tp0 = MC.Entity.prototype.teleport; MC.Entity.prototype.teleport = function (loc, o) { if (this.typeId === SOLDIER && this._loc && Math.hypot(loc.x - this._loc.x, loc.y - this._loc.y, loc.z - this._loc.z) > 2.5) { bigTp++; if (opt.tplog) console.error("TP", SIM.tick, JSON.stringify(this._loc), "->", JSON.stringify(loc), W.notes?.get?.(this.id)?.text, opt.tplog === "2" ? new Error().stack.split("\n").slice(2, 5).map((s) => s.trim().replace(/\(.*main.js:/, "(")).join(" < ") : ""); } return tp0.call(this, loc, o); }; }
@@ -1147,7 +1156,11 @@ const S = {
     SIM.bounds = { x0: -60, x1: 60, z0: -200, z1: 40, y0: -8, y1: 40 };
     spawnPlayer({ x: 6, y: 0, z: -60 });
     let start, dest, okFn;
-    if (mode === "terrace") {
+    if (mode === "flat") {                                                       // 300 blocks of open ground with trees in the way
+      SIM.bounds = { x0: -60, x1: 60, z0: -330, z1: 40, y0: -8, y1: 40 };
+      for (let k = 0; k < 40; k++) { const x = -40 + ((k * 37) % 80), z = -30 - ((k * 53) % 280); fill(x, 0, z, x, 3, z, "oak_log"); fill(x - 2, 3, z - 2, x + 2, 5, z + 2, "oak_leaves"); }
+      start = (i) => ({ x: (i % 6) * 2 - 5 + 0.5, y: 0, z: -2 - Math.floor(i / 6) * 2 + 0.5 }); dest = { x: 0, y: 0, z: -302 }; okFn = (e) => Math.hypot(e._loc.x - dest.x, e._loc.z - dest.z) < 14;
+    } else if (mode === "terrace") {
       fill(-60, 0, -80, 60, 5, -70, "stone"); for (let i = 0; i < 6; i++) { setBlock(0, i, -69 - i, "stone_brick_stairs"); setBlock(1, i, -69 - i, "air"); } fill(0, 0, -80, 0, 5, -75, "stone");
       for (let i = 0; i < 6; i++) fill(0, i + 1, -69 - i, 0, 7, -69 - i, "air");
       start = (i) => ({ x: (i % 6) * 2 - 5 + 0.5, y: 0, z: -20 - Math.floor(i / 6) * 2 + 0.5 }); dest = { x: 0, y: 6, z: -170 }; okFn = (e) => Math.hypot(e._loc.x - dest.x, e._loc.z - dest.z) < 14;
@@ -1193,12 +1206,19 @@ const S = {
     step(40);
     if (opt.ddbg) { const e = def[0]; const cells = W.buildingCells(e.dimension, e.location, 24); console.error("cells", cells.length, "ys", [...new Set(cells.map((q) => q.y))], "ents", JSON.stringify(W.entrances(e.dimension, e.location)), "spot", JSON.stringify(W.doorWatchSpot(e, W.squads.get("2:1") ?? { }, 0, SIM.tick))); }
     await order(1, { x: 24, y: 0, z: -12 }, "hold");
-    const t0 = SIM.tick, an = {}, dn = {}; let attUpMax = 0, firstUp = -1, pileMax = 0, inMax = 0;
+    const t0 = SIM.tick, an = {}, dn = {}, lbl = { n: 0, lie: 0 }; let attUpMax = 0, firstUp = -1, pileMax = 0, inMax = 0;
     const inB = (e) => e._loc.x > 0.5 && e._loc.x < 47 && e._loc.z > 0.5 && e._loc.z < 29;
     for (let t = 0; t < Number(opt.ticks ?? 4800); t += 10) {
       step(10);
       const A = att.filter((e) => e.isValid && !W.isDowned(e)), D = def.filter((e) => e.isValid && !W.isDowned(e));
       for (const [L, N] of [[A, an], [D, dn]]) for (const e of L) { const n = W.notes.get(e.id); if (n && SIM.tick - n.t < 20) { const k = n.text.replace(/\d+/g, "#") + (e._loc.y > 5 ? "@up" : "@gf"); N[k] = (N[k] ?? 0) + 1; } }
+      // labels that claim a post ("at the upper windows", "covering the way in"...) must be true: he's on his post (within 2
+      // blocks of it); "storming the building" must be a man actually moving (more than a block in the last 5 s)
+      for (const e of [...A, ...D]) { const n = W.notes.get(e.id); if (!n || SIM.tick - n.t >= 20) continue; const post = /^(at the upper windows|watching from a window|covering the way in|holding the stairhead|covering the assault)$/.test(n.text), storm = n.text === "storming the building";
+        if (!post && !storm) continue; lbl.n++;
+        const sp = W.brain.get(e.id)?.role?.spot; const h = (e.__h ??= []); h.push({ ...e._loc }); if (h.length > 10) h.shift();
+        if (post && (!sp || Math.hypot(sp.x - e._loc.x, sp.z - e._loc.z) > 2 || Math.abs(sp.y - e._loc.y) > 1.5)) lbl.lie++;
+        if (storm && h.length >= 10 && Math.hypot(h[0].x - e._loc.x, h[0].z - e._loc.z) < 1 && Math.abs(h[0].y - e._loc.y) < 1) lbl.lie++; }
       const up = A.filter((e) => inB(e) && e._loc.y > 5.5).length; attUpMax = Math.max(attUpMax, up); if (up && firstUp < 0) firstUp = SIM.tick - t0;
       inMax = Math.max(inMax, A.filter(inB).length);
       pileMax = Math.max(pileMax, A.filter((e) => inB(e) && e._loc.y < 1 && Math.hypot(e._loc.x - 23.5, e._loc.z - 1) < 5).length);
@@ -1207,7 +1227,9 @@ const S = {
       if (!D.length || !A.length) break;
     }
     const top = (N) => Object.fromEntries(Object.entries(N).sort((a, b) => b[1] - a[1]).slice(0, 10));
-    report({ ticks: SIM.tick - t0, attLeft: att.filter((e) => e.isValid && !W.isDowned(e)).length, defLeft: def.filter((e) => e.isValid && !W.isDowned(e)).length, attUpMax, firstUp, inMax, pileMax, attNotes: top(an), defNotes: top(dn) });
+    const blindOf = (f) => { const a = SIM.shots.filter((x) => x.t >= t0 && x.owner?.props?.get("war:faction") === f); return a.length ? +(a.filter((x) => x.blind).length / a.length).toFixed(3) : 0; };
+    const coverOf = (f) => { const a = SIM.shots.filter((x) => x.t >= t0 && x.owner?.props?.get("war:faction") === f); return a.length ? +(a.filter((x) => x.block && x.tgtD !== undefined && x.blockD < x.tgtD - 0.8).length / a.length).toFixed(3) : 0; };
+    report({ labelLies: lbl.n ? +(lbl.lie / lbl.n).toFixed(3) : 0, labelN: lbl.n, blind: Math.max(blindOf(1), blindOf(2)), cover: Math.max(coverOf(1), coverOf(2)), ticks: SIM.tick - t0, attLeft: att.filter((e) => e.isValid && !W.isDowned(e)).length, defLeft: def.filter((e) => e.isValid && !W.isDowned(e)).length, attUpMax, firstUp, inMax, pileMax, attNotes: top(an), defNotes: top(dn) });
   },
   async big() {
     const N = Number(opt.n ?? 100);

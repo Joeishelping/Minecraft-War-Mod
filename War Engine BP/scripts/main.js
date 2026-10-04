@@ -1120,6 +1120,13 @@ world.afterEvents.entitySpawn.subscribe((ev) => {
     try {
       const owner = b.getComponent("minecraft:projectile")?.owner;
       if (!owner || owner.typeId !== SOLDIER) return;
+      shotFx(owner);
+    } catch {}
+  });
+});
+// the bang, the flash and the firing pose of one shot (v8.0: also for precise hits, which spawn no bullet)
+function shotFx(owner) {
+    try {
       const d = sd(owner);
       if (!GUNS.includes(d.weapon)) return;
       const m = gunModel(d.faction, d.weapon);
@@ -1133,8 +1140,7 @@ world.afterEvents.entitySpawn.subscribe((ev) => {
         owner.dimension.spawnParticle("ww:flash", { x: h.x + v.x * 1.3, y: h.y - 0.25 + v.y * 1.3, z: h.z + v.z * 1.3 });
       } catch {}
     } catch {}
-  });
-});
+}
 
 // ================================================================ main loops
 let phase = 0;
@@ -2467,7 +2473,8 @@ async function warTable(player, pre) {
       .toggle("§cReset what every faction has learned", { defaultValue: false })
       .toggle("Menus in A-Z order", { defaultValue: !!setting("abc", true) })
       .dropdown("Radio messages", ["Off", "Important only", "Everything"], { defaultValueIndex: Number(setting("radio", 1)) })
-      .toggle("Shot diagnostics (draw every shot's path, count shots not fired by the soldiers' aim)", { defaultValue: !!setting("diag", false) });
+      .toggle("Shot diagnostics (draw every shot's path, count shots not fired by the soldiers' aim)", { defaultValue: !!setting("diag", false) })
+      .dropdown("Bullets", ["Precise (the hit is decided along the exact line of the shot)", "Gun pack's own bullets (flying projectiles)"], { defaultValueIndex: preciseHits() ? 0 : 1 });
     const sr = await show(sf, player);
     if (!sr || sr.canceled || !sr.formValues) return;
     sdp(world, "war:set_capture", sr.formValues[0] === 0 ? "neutral" : "surrender");
@@ -2488,6 +2495,7 @@ async function warTable(player, pre) {
     sdp(world, "war:set_abc", !!sr.formValues[14]);
     sdp(world, "war:set_radio", Number(sr.formValues[15] ?? 1));
     sdp(world, "war:set_diag", !!sr.formValues[16]);
+    sdp(world, "war:set_bullets", Number(sr.formValues[17] ?? 0) === 1 ? "pack" : "precise");
     player.sendMessage("§aSettings saved.");
     return warTable(player, 5);
     player.sendMessage("§aSettings saved.");
@@ -3218,6 +3226,47 @@ system.runInterval(() => {
   for (const p of world.getAllPlayers()) { try { p.sendMessage(txt); } catch {} }
   diagOurs = 0; diagForeign = 0;
 }, 100);
+// v8.0: PRECISE HITS (Settings -> "Bullets", the default). The hit is decided by the script along the exact line of
+// the shot (spread included), the way most shooters do rifle fire: the first man on the line is hit; if a wall comes
+// first, the round stops in the wall. Nothing flies, so nothing can drop, drift or be steered by another add-on's own
+// bullet code (the cause of the marks on walls nobody could see past). A faint tracer and a puff at the end show it.
+// The gun pack still gives the gun models and sounds. Bazookas keep real rockets. "Gun pack bullets" is the old way.
+const HIT_DMG = { rifle: 7, semi: 6, smg: 4, mg: 5, shotgun: 9, pistol: 5, sniper: 12 };
+const preciseHits = () => setting("bullets", "precise") !== "pack";
+const NOT_HITTABLE = [WAYPOINT, FLAG, "war:blank", "war:bomb", "war:shell", "minecraft:item", "minecraft:xp_orb", "minecraft:arrow", "minecraft:armor_stand"];
+function hittable(o, shooter) {
+  try {
+    if (!o?.isValid || o.id === shooter.id || NOT_HITTABLE.includes(o.typeId) || o.typeId.includes("projectile")) return false;
+    if (o.typeId === SOLDIER && (downed.has(o.id) || pows.has(o.id))) return false;     // (a round never finishes off the wounded)
+    if (o.typeId === "minecraft:player") return playerFair(o);
+    return !!o.getComponent("minecraft:health");
+  } catch { return false; }
+}
+const onNestW = (e) => (ridingNest(e) ? "mg" : undefined);
+function hitscan(e, spec, from, dir, range, weapon) {
+  const dim = e.dimension, n = Math.hypot(dir.x, dir.y, dir.z) || 1, u = { x: dir.x / n, y: dir.y / n, z: dir.z / n };
+  let blockD = range;
+  try { const hb = dim.getBlockFromRay(from, u, { maxDistance: range, includeLiquidBlocks: false, includePassableBlocks: false }); if (hb) { const bl = hb.block.location, fl = hb.faceLocation ?? { x: 0.5, y: 0.5, z: 0.5 }; blockD = Math.min(range, Math.hypot(bl.x + fl.x - from.x, bl.y + fl.y - from.y, bl.z + fl.z - from.z)); } } catch {}
+  let hit;
+  try {
+    const hits = dim.getEntitiesFromRay(from, u, { maxDistance: blockD + 0.3 }).sort((a, b) => a.distance - b.distance);
+    for (const r of hits) { if (r.distance > blockD + 0.3) break; if (hittable(r.entity, e)) { hit = r; break; } }
+  } catch {}
+  const end = hit ? hit.distance : blockD;
+  if (hit) {
+    const dmg = HIT_DMG[weapon] ?? 5;
+    try { hit.entity.applyDamage(dmg, { cause: "projectile", damagingEntity: e }); } catch { try { hit.entity.applyDamage(dmg); } catch {} }
+  }
+  try {                                                                  // the tracer (every ~3 blocks) and where it ended
+    const k0 = 2 + Math.random() * 2;
+    for (let t = k0, c = 0; t < end && c < 14; t += 3, c++) dim.spawnParticle("minecraft:basic_crit_particle", { x: from.x + u.x * t, y: from.y + u.y * t, z: from.z + u.z * t });
+    if (!hit && end < range) dim.spawnParticle("minecraft:basic_smoke_particle", { x: from.x + u.x * end, y: from.y + u.y * end, z: from.z + u.z * end });
+  } catch {}
+  shotFx(e); if (diagOn()) diagOurs++;
+  try { noise(dim, e.location, e); } catch {}
+  try { globalThis.__warShot?.({ from: { ...from }, dir: u, owner: e, hit: !!hit, hitId: hit?.entity?.id, block: !hit && end < range, blockD: end, typeId: spec.bullet, end: { x: from.x + u.x * end, y: from.y + u.y * end, z: from.z + u.z * end } }); } catch {}
+  return !!hit;
+}
 // v7.3: ballistics, measured in the game, not assumed. The gun pack's bullets may drop (gravity) and slow down (drag):
 // a round aimed straight at a man in an upper window then hits the wall under it. Each bullet type's drop and drag are
 // measured from real rounds in flight (their speed 2 and 3 ticks after the shot); the aim is lifted to make the CURVED
@@ -3289,10 +3338,12 @@ function fireGun(e, spec, t, aim) {
   const mz = { x: h.x, y: h.y - 0.2, z: h.z };
   if (!openNow(e.dimension, mz, c0)) return false;                       // (v7.1: he must see him NOW, not just where he's heading)
   if (c !== c0 && !openNow(e.dimension, mz, c)) c = c0;
-  let dx = c.x - h.x, dy = c.y - h.y, dz = c.z - h.z;
+  let dx = c.x - h.x, dy = c.y - (h.y - 0.2), dz = c.z - h.z;           // (v8.0: aimed FROM THE MUZZLE, 0.2 under his eyes: aimed from the eyes, every round flew 0.2 low, clipping sills and floor edges)
   const l = Math.hypot(dx, dy, dz) || 1, Lh = Math.hypot(dx, dz);
-  const BL0 = ballOf(spec.bullet), BL = ballBelieved(BL0) ? BL0 : { g: 0, k: 1, n: 0 };
-  if (BL.n < 5 && spec.bullet === "ww:nbazooka_projectile") dy += (l * 0.03 * l) / (spec.speed * 2); // lift for the rocket's drop (until it's been measured)
+  const precise = preciseHits() && spec.bullet !== "ww:nbazooka_projectile";
+  const BL0 = ballOf(spec.bullet), BL = precise ? { g: 0, k: 1, n: 0 } : ballBelieved(BL0) ? BL0 : { g: 0, k: 1, n: 0 };
+  if (precise) { /* a straight line: nothing to lift */ }
+  else if (BL.n < 5 && spec.bullet === "ww:nbazooka_projectile") dy += (l * 0.03 * l) / (spec.speed * 2); // lift for the rocket's drop (until it's been measured)
   else if (BL.g >= 0.002 || BL.k <= 0.998) {                           // v7.3: lift the aim so the curve meets him
     const p0 = { x: h.x, y: h.y - 0.2, z: h.z };
     for (let it = 0; it < 4; it++) {
@@ -3304,13 +3355,31 @@ function fireGun(e, spec, t, aim) {
     dy = Math.min(dy, c.y - h.y + Lh * 0.1);                         // (never more than ~6 degrees over the man: a bad measurement can't send rounds over the roof)
   }
   const n = Math.hypot(dx, dy, dz) || 1;
-  const r = () => (Math.random() + Math.random() - 1) * spec.spread * 1.6;
+  const r = () => (Math.random() + Math.random() - 1) * spec.spread * (precise ? 2.4 : 1.6);   // (v8.0: a precise hit has no flight time to miss a moving man in: a little wider spread)
   // v7.2: the round itself must have a clear flight. The spread is drawn first and the actual line of THIS round is
   // checked up to the man: if it would go into the wall, the window frame or the parapet in front of him, another
   // draw (as a marksman waits for the sight picture); three bad draws and he doesn't fire at all (he looks for a
   // better spot instead). A man showing only a sliver behind cover is not "a shot". What still lands in a wall is a
   // miss that flew PAST him, into whatever is behind.
   let dir, from;
+  if (precise) {                                                     // (v8.0: the aim line is clear, so he fires: where the spread sends the round is where it goes, a miss by the frame included)
+    const fv = { x: h.x + (dx / n) * 0.9, y: h.y - 0.2 + (dy / n) * 0.9, z: h.z + (dz / n) * 0.9 };
+    if (!openNow(e.dimension, mz, fv) || !openNow(e.dimension, fv, c)) { const g = gunState.get(e.id); if (g) g.coverMiss = (g.coverMiss ?? 0) + 1; return false; }
+    // how much of him is open to this gun: four lines across the spread; any of them blocked is a man half behind cover:
+    // not a shot (he waits or moves for a better one), so the rounds that do go mostly fly true (checked per 10 ticks)
+    const g = gunState.get(e.id);
+    if (g && (g.expoT === undefined || tick() - g.expoT > 10 || g.expoId !== t.id)) {
+      let clear = 0;
+      // (the edges of his spread, not random draws: high, low, left and right at its full reach, so a
+      //  line that grazes a sill or a floor edge is always caught)
+      const sp = spec.spread * 2.4 * 1.0, hz = Math.hypot(dx, dz) || 1, px = -dz / hz, pz = dx / hz;
+      for (const [oy, os] of [[sp, 0], [-sp, 0], [0, sp], [0, -sp]]) { const dv = { x: dx / n + px * os, y: dy / n + oy, z: dz / n + pz * os }, dl = Math.hypot(dv.x, dv.y, dv.z) || 1; if (openNow(e.dimension, fv, { x: fv.x + (dv.x / dl) * Math.max(0.5, l - 1), y: fv.y + (dv.y / dl) * Math.max(0.5, l - 1), z: fv.z + (dv.z / dl) * Math.max(0.5, l - 1) })) clear++; }
+      g.expo = clear / 4; g.expoT = tick(); g.expoId = t.id;
+    }
+    if (g && g.expo < 1) { g.coverMiss = (g.coverMiss ?? 0) + 1; return false; }
+    if (g) g.coverMiss = 0;
+    hitscan(e, spec, fv, { x: dx / n + r(), y: dy / n + r(), z: dz / n + r() }, Math.min(spec.fire + 20, 220), onNestW(e) ?? sd(e).weapon); noteShot(e); return true;
+  }
   for (let k = 0; k < 3 && !dir; k++) {
     const dv = { x: dx / n + r(), y: dy / n + r(), z: dz / n + r() };
     const fv = { x: h.x + dv.x * 0.9, y: h.y - 0.2 + dv.y * 0.9, z: h.z + dv.z * 0.9 };
@@ -5483,7 +5552,7 @@ function suppressNear(t, w) { try { for (const o of nearbyCombatants(t.dimension
 // fire at a position (suppressing a last known position, no clear view needed)
 function fireAtPoint(e, spec, p) {
   const h = headLoc(e);
-  let dx = p.x - h.x, dy = p.y + 1 - h.y, dz = p.z - h.z;
+  let dx = p.x - h.x, dy = p.y + 1 - (h.y - 0.2), dz = p.z - h.z;   // (v8.0: from the muzzle)
   const n = Math.hypot(dx, dy, dz) || 1;
   const r = () => (Math.random() + Math.random() - 1) * spec.spread * 3;
   let dir, from;                                                     // (v7.2: as an aimed shot: only a round with a clear flight to him)
@@ -5493,7 +5562,8 @@ function fireAtPoint(e, spec, p) {
     if (openNow(e.dimension, h, fv) && openNow(e.dimension, fv, { x: fv.x + (dv.x / dl) * reach, y: fv.y + (dv.y / dl) * reach, z: fv.z + (dv.z / dl) * reach })) { dir = dv; from = fv; }
   }
   if (!dir) return false;
-  try {
+  if (preciseHits() && spec.bullet !== "ww:nbazooka_projectile") hitscan(e, spec, from, dir, Math.min(spec.fire + 20, 220), onNestW(e) ?? sd(e).weapon);
+  else try {
     const b = e.dimension.spawnEntity(spec.bullet, from);
     const pc = b.getComponent("minecraft:projectile");
     if (pc) { OURS.add(b.id); pc.owner = e; pc.shoot({ x: dir.x * spec.speed, y: dir.y * spec.speed, z: dir.z * spec.speed }); if (diagOn()) traceShot(b, p); }
