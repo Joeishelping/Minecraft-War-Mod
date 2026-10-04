@@ -14,7 +14,7 @@ const pick = (d) => {
 };
 for (const s of scen.split(",")) {
   const rows = dirs.map(() => []);
-  for (let k = 1; k <= Number(nSeeds); k++) dirs.forEach((dir, j) => {
+  for (let k = Number(process.env.SEED0 ?? 1); k < Number(process.env.SEED0 ?? 1) + Number(nSeeds); k++) dirs.forEach((dir, j) => {
     try { const out = execFileSync("node", [path.join(here, "run.mjs"), s, dir, `seed=${k * 7919}`], { encoding: "utf8", timeout: 900000, stdio: ["ignore", "pipe", "ignore"] }); rows[j].push(pick(JSON.parse(out.trim().split("\n").pop()))); }
     catch (err) { rows[j].push({ crash: 1 }); }
   });

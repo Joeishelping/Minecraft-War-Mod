@@ -1,5 +1,48 @@
 # War Engine changelog
 
+## v7.0 (The building brain: real fights in and around buildings)
+
+- **Squads read the situation and pick a plan.** Every squad in a fight in or around a building works out who's
+  inside, who's outside and on which floors, and picks a plan. The choice is weighted by the odds and by chance, so
+  the same fight doesn't play out the same way twice. It keeps a plan for 25-45 s, then looks again. Each man gets his
+  own part:
+  - **Inside, enemy outside or below:**
+    - *Man the windows:* each man finds a spot, on any floor, with a clear shot at an enemy.
+    - *Secure the building:* spread out over every floor and room, a few blocks apart, near the stairheads and the
+      ways in.
+    - *Sortie:* half the squad goes out after them while the other half covers from the windows. Only with the
+      upper hand, or after a long stalemate. Out the door into their guns isn't a plan.
+  - **Inside, enemy on another floor:** *storm it*. The staircases are shared out round the squad, so they go up
+    both at once (a real flank). Each group stacks up at the foot of its stairs, then goes.
+  - **Outside, enemy inside:** *contain* (spots that see the windows and doors), or *assault* (in through every way
+    up).
+- **Floors are no prison.** A plan takes a man to any floor. Holding the high ground (a roof, a wall, an upper floor)
+  still keeps him there unless his part in the plan is to go down.
+- **Awareness:**
+  - Squads now know about enemy soldiers within 32 blocks, roughly where they are ("they're in that building").
+    Gunfire gives the shooter away up to 64 blocks. Whoever is shooting at one of us is known.
+  - Squads of one faction (and its allies) within ~96 blocks share what they know (the radio net).
+  - The team upstairs and the team outside now know about each other.
+- **Clear shots:**
+  - A man with the enemy near, and nothing to shoot at for 3 s, goes and finds a line: out from under the balcony,
+    to the rail, to the next window. Before, he stood firing into the ceiling.
+  - The gun takes any enemy the man has in view that the bullet can actually reach, when the one he was watching is
+    out of reach.
+  - It keeps the man he's shooting at while it still can, instead of flip-flopping between targets. Every switch
+    reset his aim, so he almost never fired.
+  - A man carried along a route faces his target, if he has one, so he can fire on the move.
+- **No more bunching.** A man with nothing to do and a mate on top of him spreads out (inside a building).
+- **Roam** (a new order, and a "When they arrive" choice): free to go anywhere in the area, any floor, in and out of
+  buildings, hunting what they find.
+- **Patrol inside a building works.** It walks the rooms of its floor and out through the doors. It used to stand
+  still: it looked for points up to 100 blocks off, all outside the building.
+- **No jumping off balconies:** routes avoid drops of more than 3 blocks whenever there are stairs.
+- **Every list in every menu is in A-Z order:** factions (by their name, once named), coalitions, squads, skins,
+  weapons, units, orders, settings pages. "All", "None", "My faction" stay on top; "« Back", "Cancel", "+ Create" at
+  the bottom. Lists of 3 or fewer keep their natural order. The per-faction pages (diplomacy, gun loadouts, skins,
+  callout language) list the factions A-Z too. There's a switch in Settings, General: "Menus in A-Z order".
+- **Creative inventory:** the War Engine items are in A-Z order (Cavalier Egg ... War Plane).
+
 ## v6.9.3 (Indoor fights that actually happen, coalition orders, overlapping callouts)
 
 - **No more standing in the hallway.** Inside a building, a soldier who knows of the enemy on his floor within 30
