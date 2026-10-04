@@ -435,6 +435,7 @@ function bulletTick(b) {
     }
     if (rayStops(l.x, l.y, l.z)) { b.shotLog.block = true; b.shotLog.blockD = Math.hypot(l.x - b.shotLog.from.x, l.y - b.shotLog.from.y, l.z - b.shotLog.from.z); b.remove(); return; }
   }
+  if (SIM.bulletG || SIM.bulletK) { const k = SIM.bulletK ?? 1; b.vel.x *= k; b.vel.z *= k; b.vel.y = b.vel.y * k - (SIM.bulletG ?? 0); }   // (v7.3 test option: real projectile physics)
   if (SIM.tick - b.born > 60) b.remove();
 }
 

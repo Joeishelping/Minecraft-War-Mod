@@ -3180,6 +3180,62 @@ function hearIt(S, ent, at, t) { const q = S.known.get(ent.id); if (q && !q.hear
 // v7.0: gunfire is heard (64 blocks): the last second or two of shots, by faction
 const SHOTS = [];
 function noteShot(e) { try { const l = e.location; SHOTS.push({ id: e.id, f: Number(P(e, "war:faction") ?? 0), x: l.x, y: l.y, z: l.z, t: tick() }); while (SHOTS.length && tick() - SHOTS[0].t > 60) SHOTS.shift(); if (SHOTS.length > 400) SHOTS.splice(0, SHOTS.length - 400); } catch {} }
+// v7.3: ballistics, measured in the game, not assumed. The gun pack's bullets may drop (gravity) and slow down (drag):
+// a round aimed straight at a man in an upper window then hits the wall under it. Each bullet type's drop and drag are
+// measured from real rounds in flight (their speed 2 and 3 ticks after the shot); the aim is lifted to make the CURVED
+// flight meet the target, and the clear-flight check follows the curve, not a straight line.
+const BALL = new Map(); // bullet type -> { g, k, n }
+function ballOf(type) {                                            // (a type not measured yet: the pack's other bullets)
+  const B = BALL.get(type); if (B && B.n >= 2) return B;
+  let g = 0, k = 0, n = 0; for (const [t2, C] of BALL) if (t2 !== "ww:nbazooka_projectile" && type !== "ww:nbazooka_projectile" && C.n >= 2) { g += C.g * C.n; k += C.k * C.n; n += C.n; }
+  return n ? { g: g / n, k: k / n, n: 0 } : (B ?? { g: 0, k: 1, n: 0 });
+}
+function measureBall(b, type) {
+  const B0 = BALL.get(type); if (B0 && B0.n >= 40) return;
+  let v2;
+  system.runTimeout(() => { try { if (b.isValid) v2 = b.getVelocity(); } catch {} }, 2);
+  system.runTimeout(() => {
+    try {
+      if (!v2 || !b.isValid) return;
+      const v3 = b.getVelocity(), h2 = Math.hypot(v2.x, v2.z), h3 = Math.hypot(v3.x, v3.z);
+      if (h2 < 0.5) return;
+      const k = Math.min(1, Math.max(0.8, h3 / h2)), g = Math.min(0.2, Math.max(0, v2.y * k - v3.y));
+      const C = BALL.get(type) ?? { g: 0, k: 1, n: 0 };
+      C.g = (C.g * C.n + g) / (C.n + 1); C.k = (C.k * C.n + k) / (C.n + 1); C.n++; BALL.set(type, C);
+    } catch {}
+  }, 3);
+}
+// where a round fired from p with velocity v is, tick by tick, until it has flown `L` blocks across (the game's order:
+// move, then slow down and fall)
+function flightPath(p, v, L, B) {
+  const pts = [{ ...p }]; let x = p.x, y = p.y, z = p.z, vx = v.x, vy = v.y, vz = v.z, across = 0;
+  for (let i = 0; i < 80 && across < L; i++) {
+    x += vx; y += vy; z += vz; across = Math.hypot(x - p.x, z - p.z);
+    pts.push({ x, y, z });
+    vx *= B.k; vz *= B.k; vy = vy * B.k - B.g;
+  }
+  return pts;
+}
+// the height the round is at when it has flown `L` across, aimed along unit u at speed sp
+function heightAt(p, u, sp, L, B) {
+  const pts = flightPath(p, { x: u.x * sp, y: u.y * sp, z: u.z * sp }, L, B);
+  const a = pts[Math.max(0, pts.length - 2)], b = pts[pts.length - 1];
+  const da = Math.hypot(a.x - p.x, a.z - p.z), db = Math.hypot(b.x - p.x, b.z - p.z);
+  if (db < L - 0.01) return -1e9;                                    // (never gets there)
+  const f = db > da ? (L - da) / (db - da) : 1;
+  return a.y + (b.y - a.y) * f;
+}
+// the curved flight of this round is clear of blocks up to `L` across (a ray per two ticks of flight)
+function flightClear(dim, p, v, L, B) {
+  if (B.g < 0.002 && B.k > 0.998) {                                  // a straight round: one ray, L across
+    const n = Math.hypot(v.x, v.y, v.z) || 1, hz = Math.hypot(v.x, v.z) / n, f = hz > 0.05 ? L / hz : L;
+    return openNow(dim, p, { x: p.x + (v.x / n) * f, y: p.y + (v.y / n) * f, z: p.z + (v.z / n) * f });
+  }
+  const pts = flightPath(p, v, L, B);
+  let a = pts[0];
+  for (let i = 2; i < pts.length; i += 2) { if (!openNow(dim, a, pts[i])) return false; a = pts[i]; }
+  return a === pts[pts.length - 1] || openNow(dim, a, pts[pts.length - 1]);
+}
 function fireGun(e, spec, t, aim) {
   const h = headLoc(e), c0 = aim ?? chest(t);
   let c = c0;
@@ -3188,8 +3244,18 @@ function fireGun(e, spec, t, aim) {
   if (!openNow(e.dimension, mz, c0)) return false;                       // (v7.1: he must see him NOW, not just where he's heading)
   if (c !== c0 && !openNow(e.dimension, mz, c)) c = c0;
   let dx = c.x - h.x, dy = c.y - h.y, dz = c.z - h.z;
-  const l = Math.hypot(dx, dy, dz) || 1;
-  if (spec.bullet === "ww:nbazooka_projectile") dy += (l * 0.03 * l) / (spec.speed * 2); // lift for the rocket's drop
+  const l = Math.hypot(dx, dy, dz) || 1, Lh = Math.hypot(dx, dz);
+  const BL = ballOf(spec.bullet);
+  if (BL.n < 5 && spec.bullet === "ww:nbazooka_projectile") dy += (l * 0.03 * l) / (spec.speed * 2); // lift for the rocket's drop (until it's been measured)
+  else if (BL.g >= 0.002 || BL.k <= 0.998) {                           // v7.3: lift the aim so the curve meets him
+    const p0 = { x: h.x, y: h.y - 0.2, z: h.z };
+    for (let it = 0; it < 4; it++) {
+      const m = Math.hypot(dx, dy, dz) || 1, y = heightAt(p0, { x: dx / m, y: dy / m, z: dz / m }, spec.speed, Lh, BL);
+      if (y < -1e8) break;
+      const err = c.y - y; if (Math.abs(err) < 0.05) break;
+      dy += err;
+    }
+  }
   const n = Math.hypot(dx, dy, dz) || 1;
   const r = () => (Math.random() + Math.random() - 1) * spec.spread * 1.6;
   // v7.2: the round itself must have a clear flight. The spread is drawn first and the actual line of THIS round is
@@ -3201,15 +3267,15 @@ function fireGun(e, spec, t, aim) {
   for (let k = 0; k < 3 && !dir; k++) {
     const dv = { x: dx / n + r(), y: dy / n + r(), z: dz / n + r() };
     const fv = { x: h.x + dv.x * 0.9, y: h.y - 0.2 + dv.y * 0.9, z: h.z + dv.z * 0.9 };
-    const dl = Math.hypot(dv.x, dv.y, dv.z) || 1, reach = Math.max(0.5, l - 1.3);
-    if (openNow(e.dimension, mz, fv) && openNow(e.dimension, fv, { x: fv.x + (dv.x / dl) * reach, y: fv.y + (dv.y / dl) * reach, z: fv.z + (dv.z / dl) * reach })) { dir = dv; from = fv; }
+    const dl = Math.hypot(dv.x, dv.y, dv.z) || 1, reach = Math.max(0.5, Lh - 1.3);
+    if (openNow(e.dimension, mz, fv) && flightClear(e.dimension, fv, { x: dv.x / dl * spec.speed, y: dv.y / dl * spec.speed, z: dv.z / dl * spec.speed }, reach, BL)) { dir = dv; from = fv; }
   }
   if (!dir) { const g = gunState.get(e.id); if (g) g.coverMiss = (g.coverMiss ?? 0) + 1; return false; }
   { const g = gunState.get(e.id); if (g) g.coverMiss = 0; }
   try {
     const b = e.dimension.spawnEntity(spec.bullet, from);
     const pc = b.getComponent("minecraft:projectile");
-    if (pc) { pc.owner = e; pc.shoot({ x: dir.x * spec.speed, y: dir.y * spec.speed, z: dir.z * spec.speed }); }
+    if (pc) { pc.owner = e; pc.shoot({ x: dir.x * spec.speed, y: dir.y * spec.speed, z: dir.z * spec.speed }); if (Lh > 12) measureBall(b, spec.bullet); }
   } catch {}
   noteShot(e);                                                       // (v7.2: no more wallbang: a round only leaves the gun on a clear line)
   return true;
@@ -5330,7 +5396,7 @@ system.runInterval(() => {
         }
         if (S.plan === "assault" && S.ratio < 0.5) S.plan = "contact";
       }
-      try { buildingPlan(k, S, ours, known, now); planCheck(S, ours, now); } catch (err) { oops("building plan", err); }   // v7.0 (v7.1: checked)
+      try { buildingPlan(k, S, ours, known, now); if (S.bplan) assignJobs(S, S.bplan, ours); else S.jobs = undefined; planCheck(S, ours, now); } catch (err) { oops("building plan", err); }   // v7.0 (v7.1: checked)
       // key terrain: the highest nearby ground that sees the enemy
       if (!S.keyPt || now % 200 < 20) {
         let best, bh = -1e9;
@@ -5493,6 +5559,7 @@ function localReachBFS(dim, from, to, maxNodes) {
   }
   return false;
 }
+const PENDING = new Map(); // dest key -> { t, from, id }: routes being worked out right now (v7.3)
 function planPersonalTo(e, kind, dest, now) {
   const pr = { pts: undefined, idx: 0, kind, t: now, planning: true, dest: { x: dest.x, y: dest.y, z: dest.z } };
   personal.set(e.id, pr);
@@ -5502,7 +5569,12 @@ function planPersonalTo(e, kind, dest, now) {
     const sp = shortPath(e.dimension, e.location, dest);
     if (sp && sp.length > 1) { pr.planning = false; pr.pts = sp; return; }
   }
+  // v7.3: a squad mate near him is already working out a route to the same place: wait for that one and share it
+  // (twelve men each planning the same long way through a building swamped the planner; none finished in time)
+  const pk = `${e.dimension.id}|${Math.round(dest.x / 2)}|${Math.round(dest.y)}|${Math.round(dest.z / 2)}`, pd = PENDING.get(pk);
+  if (pd && now - pd.t < 400 && dist(pd.from, e.location) < 10 && pd.id !== e.id) { pr.waitKey = pk; return; }
   if (planJobs.length > 28) { pr.planning = false; pr.pts = undefined; pr.t = now - 10000; return; }   // planner busy: try again shortly
+  PENDING.set(pk, { t: now, from: { ...e.location }, id: e.id }); if (PENDING.size > 300) PENDING.clear();
   const dim = e.dimension;
   // v5.4: going for the enemy's floor, the route ends as soon as it's on that floor near him (the first room, not his feet)
   const gy = Math.floor(dest.y);
@@ -5511,7 +5583,13 @@ function planPersonalTo(e, kind, dest, now) {
   const Sq = squads.get(squadKey(e, sd(e)));
   const danger = bwOf(sd(e).faction).cov !== false && Sq?.known?.size && ["advance", "engage", "spot", "rally", "refuge", "exit", "settle"].includes(kind)
     ? [...Sq.known.values()].filter((q) => now - q.t < 300).slice(0, 4).map((q) => ({ x: q.x, y: q.y + 1.6, z: q.z })) : undefined;
-  planRoute(dim, e.location, dest, (pts, partial) => { pr.planning = false; pr.pts = pts; pr.idx = 0; if (pts && !partial) rememberRoute(dim, dest, pts); }, { max: Math.max(3000, Math.min(20000, Math.round(far * 300))), maxRadius: Math.min(90, far + 30), accept, danger });
+  const otherFloor = Number.isFinite(dest.y) && Math.abs(dest.y - e.location.y) > 2.5;
+  planRoute(dim, e.location, dest, (pts, partial) => {
+    PENDING.delete(pk);
+    // (v7.3: a route cut short that ends on the wrong floor is no route: it left the stormers standing under the enemy)
+    if (pts && partial && otherFloor && Math.abs(pts[pts.length - 1].y - dest.y) > 2) pts = undefined;
+    pr.planning = false; pr.pts = pts; pr.idx = 0; if (pts && !partial) rememberRoute(dim, dest, pts);
+  }, { max: Math.max(3000, Math.min(otherFloor ? 30000 : 20000, Math.round(far * (otherFloor ? 500 : 300)))), maxRadius: Math.min(90, far + (otherFloor ? 45 : 30)), accept, danger });
 }
 function brainMove(e, d, now, melee, anchor, leash) {
   const BW = squads.get(squadKey(e, d))?.bw ?? bwOf(d.faction);
@@ -6596,7 +6674,12 @@ function followPersonal(e, now) {
   const pr = personal.get(e.id);
   if (!pr) return undefined;
   const drop = () => { personal.delete(e.id); travelTo.delete(e.id); return undefined; };
-  if (pr.planning) { if (now - pr.t > 160) return drop(); return now - pr.t < 40 ? { g: "g_none", t: "t_mid", urgent: false } : undefined; }   // a short wait for the route; never frozen
+  if (pr.planning && pr.waitKey) {                                     // (v7.3: a mate's route to the same place)
+    const hit = cachedRoute(e.dimension, e.location, pr.dest);
+    if (hit) { pr.planning = false; pr.pts = hit; pr.waitKey = undefined; pr.t = now; }
+    else if (!PENDING.has(pr.waitKey) || now - pr.t > 400) { const k = pr.kind, d0 = pr.dest; personal.delete(e.id); PENDING.delete(pr.waitKey); planPersonalTo(e, k, d0, now); return { g: "g_none", t: "t_mid", urgent: false }; }
+  }
+  if (pr.planning) { if (now - pr.t > (["advance", "engage", "settle"].includes(pr.kind) ? 400 : 160)) return drop(); return now - pr.t < 40 ? { g: "g_none", t: "t_mid", urgent: false } : undefined; }   // a short wait for the route; never frozen (v7.3: a long one gets time)
   if (!pr.pts) return drop();
   const i = trackIdx(e.id, pr.pts, e.location);
   pr.idx = i;
@@ -6713,10 +6796,12 @@ function buildingPlan(k, S, ours, known, now) {
   if (!oc) { S.bplan = undefined; return; }
   S.roster = ours.filter((e) => GUNS.includes(sd(e).weapon) && !downed.has(e.id)).map((e) => e.id).sort();
   const inside = ours.filter((e) => isIndoors(e)).length / ours.length;
-  const holding = ours.filter((e) => ANCHORED.includes(sd(e).func)).length * 2 >= ours.length;
+  // (v7.3: whose house is it? A squad told to hold a spot inside it defends it; anyone else attacks it, even once he's
+  //  inside: the attackers who broke in took on the defenders' jobs, "covering the way in" by the door they came in by)
+  const homeIn = ours.filter((e) => { if (!ANCHORED.includes(sd(e).func)) return false; const a = anchorOf(e); return !!a && isIndoorsAt(dim, a.location); }).length * 2 >= ours.length;
   const B0 = S.bplan;
   if (!known.length) {                                                         // nobody about: set up the house before they come
-    if (inside >= 0.5 && holding && ours.length >= 2) { if (B0?.kind !== "garrison") S.bplan = { kind: "garrison", t: now, until: now + 2400, said: false, door: 0.25 + Math.random() * 0.1, attack: 0 }; return; }
+    if (inside >= 0.5 && homeIn && ours.length >= 2) { if (B0?.kind !== "garrison") S.bplan = { kind: "garrison", t: now, until: now + 2400, said: false, door: 0.25 + Math.random() * 0.1, attack: 0 }; return; }
     S.bplan = undefined; return;
   }
   const kIn = known.filter((q) => isIndoorsAt(dim, q)).length / known.length;
@@ -6726,11 +6811,11 @@ function buildingPlan(k, S, ours, known, now) {
   if (B0 && B0.kind !== "garrison" && now < B0.until && !((B0.kind === "sortie" || B0.kind === "assault") && S.ratio < 0.55)) return;
   const opts = [];
   const otherFloor = known.filter((q) => Math.abs(q.y - oc.y) > 2.5 && isIndoorsAt(dim, q)).length;
-  if (inside >= 0.5) {
+  if (homeIn && inside >= 0.5) {
     opts.push(["defend", 2.0]);
     if (bold && (S.ratio >= 1.4 || (S.ratio >= 1.0 && quiet > 900))) opts.push(["sortie", 0.2 + (S.ratio >= 1.8 ? 0.6 : 0) + (quiet > 900 ? 0.4 : 0)]);   // (out the door into their guns: only with the upper hand)
     if (bold && otherFloor && S.ratio >= 0.8) opts.push(["assault", 0.6 + (S.ratio >= 1.2 ? 0.7 : 0) + (quiet > 300 ? 0.5 : 0)]);
-  } else if (kIn >= 0.5) {
+  } else if (!homeIn && (kIn >= 0.5 || inside >= 0.5)) {
     opts.push(["attack", 2.0]);
     if (!bold || S.ratio < 0.6) opts.push(["contain", 1.5]);
   }
@@ -6811,11 +6896,11 @@ function stairGuardSpot(e, S, idx, now) {
 // the upper windows: a spot on a floor above the ground with a shot at the enemy (or, before anyone's seen, spread
 // over the upper floors)
 function overwatchSpot(e, S, now) {
-  const a = S.known?.size ? shotSpot(e, S, now) : undefined;
-  if (a) return a;
   const dim = e.dimension, cells = buildingCells(dim, e.location, 24);
+  const gy = cells.length ? Math.min(...cells.map((q) => q.y)) : -1e9, multi = cells.some((q) => q.y > gy + 2);
+  const a = S.known?.size ? shotSpot(e, S, now) : undefined;
+  if (a && (!multi || a.spot.y > gy + 2)) return a;                       // (v7.3: the UPPER windows: never a spot on the ground floor)
   if (!cells.length) return undefined;
-  const gy = Math.min(...cells.map((q) => q.y));
   const up = cells.filter((q) => q.y > gy + 2);
   const pool = up.length ? up : cells;
   const taken = [];
@@ -6913,31 +6998,66 @@ function assaultSpot(e, d, S, now) {
   if (ec.y > l.y + 2.5) {                                                   // they're upstairs: up every staircase at once
     const fy = Math.round(known.sort((a, b) => dist(a, ec) - dist(b, ec))[0].y);
     const mouths = stairMouths(dim, { x: ec.x, y: fy, z: ec.z }, 24).filter((m) => Math.abs(m.y - fy) < 1);
+    for (const m of stairMouths(dim, { x: l.x, y: fy, z: l.z }, 32)) if (Math.abs(m.y - fy) < 1 && !mouths.some((o) => flat(o, m) < 3)) mouths.push(m);   // (v7.3: and the stairs near HIM: in a big hall they're rarely by the enemy)
+    const fails = failSpots.get(e.id) ?? [];
+    mouths.sort((a, b) => (fails.some((f) => Math.hypot(f.x - a.x, f.z - a.z) < 2) ? 1 : 0) - (fails.some((f) => Math.hypot(f.x - b.x, f.z - b.z) < 2) ? 1 : 0));
     if (mouths.length) { const m = mouths[i % mouths.length]; return { spot: { x: m.x, y: m.y, z: m.z }, face: ec, kind: "advance" }; }
   }
   const q = known.sort((a, b) => dist(a, l) - dist(b, l))[0];
   return { spot: { x: q.x, y: q.y, z: q.z }, face: q, kind: "advance" };
 }
 const JOB_NOTE = { door: "covering the way in", stairs: "holding the stairhead", overwatch: "at the upper windows", assault: "storming the building", support: "covering the assault" };
+// v7.3: who does which job is decided for the whole squad at once, by where each man IS (the lowest men take the doors,
+// the next the stairheads, the rest the upper windows; outside the building, the men furthest back give covering fire
+// and the rest go in), and it STICKS: a new plan keeps every man on his job while that job still exists. Before, the
+// jobs were dealt out by an id order every 25-45 s, so men upstairs were sent down to the door and back, and men on
+// the ground floor were told "at the upper windows".
+function assignJobs(S, P0, ours) {
+  const gun = ours.filter((e) => GUNS.includes(sd(e).weapon) && !downed.has(e.id));
+  const n = gun.length, side = P0.kind === "attack" ? "att" : P0.kind === "garrison" || P0.kind === "defend" ? "def" : undefined;
+  if (!side) { S.jobs = undefined; return; }
+  const keep = S.jobSide === side ? S.jobs ?? new Map() : new Map();
+  const jobs = new Map();
+  const want = side === "def"
+    ? { door: n >= 3 ? Math.max(1, Math.round(n * (P0.door ?? 0.3))) : 0, stairs: n >= 4 ? Math.min(2, Math.max(1, Math.round(n * 0.15))) : 0 }
+    : { support: Math.max(0, n - Math.max(1, Math.round(n * (P0.attack ?? 0.6)))) };
+  const count = (j) => [...jobs.values()].filter((x) => x === j).length;
+  for (const e of gun) { const j = keep.get(e.id); if (j && (want[j] === undefined || count(j) < want[j])) jobs.set(e.id, j); }   // (sticky)
+  const free = gun.filter((e) => !jobs.has(e.id));
+  if (side === "def") {
+    free.sort((a, b) => a.location.y - b.location.y || (a.id < b.id ? -1 : 1));   // the lowest men to the doors, then the stairheads
+    for (const e of free) jobs.set(e.id, count("door") < want.door ? "door" : count("stairs") < want.stairs ? "stairs" : "overwatch");
+  } else {
+    const ec = S.enemyC ?? S.ourC;
+    free.sort((a, b) => (isIndoors(a) ? 1 : 0) - (isIndoors(b) ? 1 : 0) || flat(b.location, ec) - flat(a.location, ec));   // outside and furthest back: support
+    for (const e of free) jobs.set(e.id, !isIndoors(e) && count("support") < want.support ? "support" : "assault");
+  }
+  S.jobs = jobs; S.jobSide = side;
+}
+const JOB_GO = { door: "going to cover the way in", stairs: "going to hold the stairhead", overwatch: "going to the upper windows", assault: "storming the building", support: "moving to cover the assault" };
+function jobSpot(e, d, S, job, now) {
+  const ros = [...(S.jobs ?? new Map())].filter(([, j]) => j === job).map(([id]) => id).sort(), i = Math.max(0, ros.indexOf(e.id));
+  if (job === "door") return doorWatchSpot(e, S, i, now);
+  if (job === "stairs") return stairGuardSpot(e, S, i, now);
+  if (job === "overwatch") return overwatchSpot(e, S, now);
+  if (job === "support") return shotSpot(e, S, now);
+  if (job === "assault") return assaultSpot(e, d, S, now);
+  return undefined;
+}
 function buildingRole(e, d, now, S, B, t) {
   const P0 = S?.bplan;
   if (!P0 || !GUNS.includes(d.weapon) || d.func === "post" || d.retreat) return undefined;
   if (t?.isValid && canHit(e, t)) return undefined;                          // a shot: take it (the plan waits)
   let R = B.role;
+  const job = S.jobs?.get(e.id);
+  if (R && R.planT !== P0.t && job && R.job === job && R.spot && (R.fail ?? 0) < 2 && R.kind !== "advance") { R.planT = P0.t; R.t = Math.max(R.t, now - 300); }   // (same job under the new plan: same spot)
   if (!R || R.planT !== P0.t || (R.fail ?? 0) >= 2) {
-    let a;
+    let a, jb = job;
     const odd = (e.id.charCodeAt(e.id.length - 1) & 1) === 1;
-    const ros = S.roster ?? [], rk = Math.max(0, ros.indexOf(e.id)), n = ros.length;
-    let job;
-    if (P0.kind === "garrison" || P0.kind === "defend") {
-      const nDoor = n >= 3 ? Math.max(1, Math.round(n * (P0.door ?? 0.3))) : 0, nStair = n >= 4 ? Math.min(2, Math.max(1, Math.round(n * 0.15))) : 0;
-      if (rk < nDoor) { a = doorWatchSpot(e, S, rk, now); job = "door"; }
-      else if (rk < nDoor + nStair) { a = stairGuardSpot(e, S, rk - nDoor, now); job = "stairs"; }
-      if (!a) { a = overwatchSpot(e, S, now); job = "overwatch"; }
-    } else if (P0.kind === "attack") {
-      const nAssault = Math.max(1, Math.round(n * (P0.attack ?? 0.6)));
-      if (rk >= n - nAssault || isIndoors(e)) { a = assaultSpot(e, d, S, now); job = "assault"; }
-      else { a = shotSpot(e, S, now); job = "support"; if (!a) { a = assaultSpot(e, d, S, now); job = "assault"; } }
+    if (jb) {
+      a = jobSpot(e, d, S, jb, now);
+      if (!a && jb === "support") { a = assaultSpot(e, d, S, now); jb = "assault"; }
+      if (!a && (jb === "door" || jb === "stairs")) { a = overwatchSpot(e, S, now); jb = "overwatch"; }
     }
     else if (P0.kind === "windows") a = shotSpot(e, S, now);
     else if (P0.kind === "secure") a = secureSpot(e, S, now);
@@ -6945,7 +7065,7 @@ function buildingRole(e, d, now, S, B, t) {
     else if (P0.kind === "sortie") a = odd || S.ratio >= 1.6 ? assaultSpot(e, d, S, now) : shotSpot(e, S, now);   // half go, half cover them from the windows
     else if (P0.kind === "assault") a = assaultSpot(e, d, S, now);
     if (!a) { const crowd = nearbyCombatants(e.dimension.id, e.location, 1.8).filter((o) => o.typeId === SOLDIER && o.id !== e.id && !downed.has(o.id)).length; if (crowd >= 1 && isIndoors(e)) a = secureSpot(e, S, now); }   // (nothing for him to do and on top of a mate: spread out)
-    R = { planT: P0.t, t: now, spot: a?.spot, face: a?.face, kind: a?.kind ?? "engage", fail: 0, job };
+    R = { planT: P0.t, t: now, spot: a?.spot, face: a?.face, kind: a?.kind ?? "engage", fail: 0, job: jb };
     B.role = R;
     if (R.spot) claimSpot(e, R.spot, now);
   }
@@ -6956,13 +7076,19 @@ function buildingRole(e, d, now, S, B, t) {
   if (flat(R.spot, l) < 1.4 && Math.abs(R.spot.y - l.y) < 1.2) {
     if (R.kind === "advance") { B.role = { ...R, spot: undefined }; return undefined; }   // got there: the fight takes over
     if (R.face) turnTo(e, R.face, 20);
+    R.t = now;                                                                 // (on his spot: no time-out)
     note(e, R.job ? JOB_NOTE[R.job] : BPLANS[P0.kind]); return { g: "g_none", t: "t_mid", urgent: false };
   }
-  if (now - R.t > 500) { R.fail++; R.t = now; failSpots.set(e.id, [...(failSpots.get(e.id) ?? []), { x: R.spot.x, z: R.spot.z, t: now }].slice(-6)); B.role = undefined; return undefined; }
-  note(e, R.job ? JOB_NOTE[R.job] : BPLANS[P0.kind]);
+  if (now - R.t > 600) { R.fail++; R.t = now; failSpots.set(e.id, [...(failSpots.get(e.id) ?? []), { x: R.spot.x, z: R.spot.z, t: now }].slice(-6)); B.role = R.fail >= 2 ? undefined : { ...R, planT: -1 }; return undefined; }
   const cur = travelTo.get(e.id);
-  if (!personal.has(e.id) || !cur || flat(cur, R.spot) > 1.5 || Math.abs(cur.y - R.spot.y) > 1.5) { travelTo.set(e.id, { ...R.spot }); planPersonalTo(e, R.kind, R.spot, now); }
-  return followPersonal(e, now) ?? { g: "g_none", t: "t_mid", urgent: false };
+  if (!personal.has(e.id) || !cur || flat(cur, R.spot) > 1.5 || Math.abs(cur.y - R.spot.y) > 1.5) {
+    if (R.planned && now - R.planned < 60) R.miss = (R.miss ?? 0) + 1;             // (the last route to it came to nothing at once)
+    if ((R.miss ?? 0) >= 3) { failSpots.set(e.id, [...(failSpots.get(e.id) ?? []), { x: R.spot.x, z: R.spot.z, t: now }].slice(-6)); B.role = { ...R, planT: -1, fail: (R.fail ?? 0) + 1, miss: 0 }; note(e, "looking for a way"); return undefined; }
+    R.planned = now; travelTo.set(e.id, { ...R.spot }); planPersonalTo(e, R.kind, R.spot, now);
+  }
+  const mv = followPersonal(e, now);
+  if (personal.get(e.id)?.planning) note(e, "working out the way"); else note(e, R.job ? JOB_GO[R.job] : BPLANS[P0.kind]);   // (v7.3: what he's actually doing)
+  return mv ?? { g: "g_none", t: "t_mid", urgent: false };
 }
 // v7.1: the stalemate breaker. The squad knows where the enemy is (seen or heard), nobody in it has fired for 15 s, and
 // he's free to use judgment: he goes to the nearest of them along a real route (doors, stairs, round the building),
@@ -7523,7 +7649,7 @@ function cachedRoute(dim, from, dest) {
     if (now - c.t > 400) { routeCache.splice(k, 1); continue; }
     if (c.dim !== dim.id || r3(c.goal, { x: dest.x, y: Number.isFinite(dest.y) ? dest.y : c.goal.y, z: dest.z }) > 3) continue;
     const i = nearestIdx(c.pts, from, 0, c.pts.length);
-    if (r3(c.pts[i], from) > 3 || c.pts[i].climb) continue;
+    if (r3(c.pts[i], from) > 5 || c.pts[i].climb) continue;             // (v7.3: 5, was 3: squad mates a few steps apart share it)
     if (!localReach(dim, from, c.pts[i])) continue;
     return c.pts.slice(i);
   }

@@ -16,7 +16,7 @@ const runDir = path.join(here, `run_${process.pid}`);
 fs.mkdirSync(runDir, { recursive: true });
 fs.cpSync(scriptsDir, runDir, { recursive: true });
 // expose the add-on's internals to the scenarios (appended to the copy only)
-const HOOK = ["show", "sortPerm", "shotAt", "canHit", "aimAt", "closeEnemy", "friendlyInLine", "bangCount", "wallbang", "WALLBANG", "perchSpot", "safeSpot", "dangerNear", "voiceMenu", "callout", "warTable", "eggUse", "getRel", "relAt", "fires", "coalitions", "held", "holding", "stagger", "putDown", "allOf", "edgeFearT", "cleanupMenu", "purgeState", "gliders", "glideBan", "driveOn", "formMode", "tightAt", "combatLock", "routeProgress", "getLearned", "learned", "generals", "planRoute", "BW", "BW_F", "HEAD_K", "medicMove", "shakenMove", "waterExit", "followPersonal", "spreadMove", "combatMove", "engagement", "reinforceMove", "patrolSweep", "marker", "think", "routeOf", "lookahead", "queuedBehind", "climbing", "laneOf", "trackIdx", "giveOrder", "startMarch", "giveFunction", "setupSoldier", "sd", "perc", "squads", "getMarches", "personal", "downed", "goDown", "marker", "gunState", "brain", "notes", "setRelPair", "travel", "isDowned"];
+const HOOK = ["BALL", "entrances", "doorWatchSpot", "buildingCells", "show", "sortPerm", "shotAt", "canHit", "aimAt", "closeEnemy", "friendlyInLine", "bangCount", "wallbang", "WALLBANG", "perchSpot", "safeSpot", "dangerNear", "voiceMenu", "callout", "warTable", "eggUse", "getRel", "relAt", "fires", "coalitions", "held", "holding", "stagger", "putDown", "allOf", "edgeFearT", "cleanupMenu", "purgeState", "gliders", "glideBan", "driveOn", "formMode", "tightAt", "combatLock", "routeProgress", "getLearned", "learned", "generals", "planRoute", "BW", "BW_F", "HEAD_K", "medicMove", "shakenMove", "waterExit", "followPersonal", "spreadMove", "combatMove", "engagement", "reinforceMove", "patrolSweep", "marker", "think", "routeOf", "lookahead", "queuedBehind", "climbing", "laneOf", "trackIdx", "giveOrder", "startMarch", "giveFunction", "setupSoldier", "sd", "perc", "squads", "getMarches", "personal", "downed", "goDown", "marker", "gunState", "brain", "notes", "setRelPair", "travel", "isDowned"];
 if (opt.thinkdbg) { const f = path.join(runDir, "main.js"); fs.writeFileSync(f, fs.readFileSync(f, "utf8").replace("    // how far each stationary order may leave its spot to fight", "    if (globalThis.__thinkDbg) globalThis.__thinkDbg(e, engaged, cu, d);\n    // how far each stationary order may leave its spot to fight")); }
 fs.appendFileSync(path.join(runDir, "main.js"), `\nglobalThis.__war = {};\n${HOOK.map((n) => `try { globalThis.__war.${n} = ${n}; } catch {}`).join("\n")}\n`);
 loadDefs(path.join(root, "War Engine BP"));
@@ -25,6 +25,7 @@ loadDefs(path.join(root, "War Engine BP"));
 // many times slower than V8), harsh=1 corner-cutting walking with knockback, loadR=N land unloads N blocks from players
 if (opt.slow) { const real = Date.now.bind(Date), t0 = real(), K = Number(opt.slow); Date.now = () => t0 + (real() - t0) * K; }
 if (opt.harsh) SIM.harsh = true;
+if (opt.g) SIM.bulletG = Number(opt.g); if (opt.k) SIM.bulletK = Number(opt.k);
 if (opt.loadR) SIM.loadR = Number(opt.loadR);
 if (opt.simR) SIM.simR = Number(opt.simR);
 if (opt.bedrock) { const real = Date.now.bind(Date), t0 = real(); Date.now = () => t0 + (real() - t0) * 15; SIM.harsh = true; SIM.loadR = Number(opt.loadR ?? 160); SIM.simR = Number(opt.simR ?? 64); }
@@ -879,6 +880,7 @@ const S = {
     const blind = (f) => { const a = SIM.shots.filter((x) => x.t >= t0 && x.owner?.props?.get("war:faction") === f); return a.length ? +(a.filter((x) => x.blind).length / a.length).toFixed(2) : 0; };
     const blk = (f) => { const a = SIM.shots.filter((x) => x.t >= t0 && x.owner?.props?.get("war:faction") === f); return a.length ? +(a.filter((x) => x.block).length / a.length).toFixed(2) : 0; };
     const shortB = (f) => { const a = SIM.shots.filter((x) => x.t >= t0 && x.owner?.props?.get("war:faction") === f); return a.length ? +(a.filter((x) => x.block && (x.tgtD === undefined || x.blockD < x.tgtD - 0.8)).length / a.length).toFixed(2) : 0; };
+    if (opt.ball) console.error("BALL", JSON.stringify([...W.BALL]));
     report({ GT: opt.gt ? GT : undefined, wallShare: { def: blk(2), att: blk(1) }, coverHit: { def: shortB(2), att: shortB(1) }, hitShare: { def: +(shotStats(2, t0).hit / Math.max(1, shotStats(2, t0).shots)).toFixed(2), att: +(shotStats(1, t0).hit / Math.max(1, shotStats(1, t0).shots)).toFixed(2) }, blindShare: { def: blind(2), att: blind(1) }, blindWhy: (() => { const a = SIM.shots.filter((x) => x.t >= t0 && x.blind); return { n: a.length, wb: a.filter((x) => x.wb).length, supp: a.filter((x) => x.supp).length, at: a.filter((x) => (x.typeId ?? "").includes("bazooka")).length }; })(), mode: opt.mode ?? "out", attUpMax, firstAttUp, firstBreach, defGroundAtBreach, defGround400, ticks: SIM.tick - t0, defUp: def.filter((e) => e.isValid && !W.isDowned(e)).length, attUp: att.filter((e) => e.isValid && !W.isDowned(e)).length, firstDef, firstAtt, defShots: shotStats(2, t0).shots, attShots: shotStats(1, t0).shots, defsDownstairs: defDown, defBunch: +(bunch / Math.max(1, bunchN)).toFixed(2), stairs: { west: stairUse.west.size, east: stairUse.east.size }, defNotes: top(dn), attNotes: top(an) });
   },
   // v7.0: patrol / roam inside the two-storey hall (no enemy): how much of the building do they cover, which floors
@@ -1169,6 +1171,43 @@ const S = {
       if (team.filter((e) => e.isValid && okFn(e)).length >= need) arrived = SIM.tick - t0;
     }
     report({ mode, n: N, arrivedTicks: arrived, there: team.filter((e) => e.isValid && okFn(e)).length, firstMove, stillPerMan: +(pauses / N).toFixed(1), final: team.slice(0, 12).map((e) => `${Math.round(e._loc.x)},${Math.round(e._loc.y)},${Math.round(e._loc.z)}`), notes: Object.fromEntries(Object.entries(M.notes).sort((a, b) => b[1] - a[1]).slice(0, 8)), ...callsPerTick(SIM.tick) });
+  },
+  // v7.3: a big three-storey hall like the test map: rooms on the ground floor (partition walls with doorways), one
+  // staircase at the back up to the first floor, another at the far side up to the second; windows on every floor.
+  // Defenders hold the upper floors, attackers come from outside. Reports who got upstairs, who piled up at the door.
+  async bigSiege() {
+    SIM.bounds = { x0: -20, x1: 80, z0: -60, z1: 50, y0: -8, y1: 40 };
+    fill(-20, -4, -60, 80, -1, 50, "grass_block");
+    fill(0, 0, 0, 47, 18, 29, "stone_bricks"); fill(1, 0, 1, 46, 17, 28, "air");
+    fill(1, 6, 1, 46, 6, 28, "oak_planks"); fill(1, 12, 1, 46, 12, 28, "oak_planks");
+    fill(16, 0, 1, 16, 5, 28, "stone_bricks"); fill(32, 0, 1, 32, 5, 28, "stone_bricks");          // ground floor rooms
+    for (const x of [16, 32]) for (const z of [8, 20]) { setBlock(x, 0, z, "air"); setBlock(x, 1, z, "air"); }
+    for (let i = 0; i < 6; i++) setBlock(40 + i, i, 26, "oak_stairs"); fill(40, 6, 26, 45, 6, 26, "air"); fill(39, 6, 26, 39, 6, 26, "air");   // stairs 1: back right, ground -> 1st
+    for (let i = 0; i < 6; i++) setBlock(3 + i, 7 + i - 1 + 0, 3, "oak_stairs"); fill(3, 12, 3, 8, 12, 3, "air"); fill(2, 12, 3, 2, 12, 3, "air");   // stairs 2: front left, 1st -> 2nd
+    for (const x of [23, 24]) { setBlock(x, 0, 0, "air"); setBlock(x, 1, 0, "air"); }               // the front door (middle room)
+    for (const x of [4, 10, 20, 28, 36, 42]) { setBlock(x, 8, 0, "air"); setBlock(x, 14, 0, "air"); }   // windows front, both upper floors
+    spawnPlayer({ x: 24, y: 0, z: -40 });
+    W.setRelPair(1, 2, "1", false);
+    const def = []; for (let i = 0; i < 10; i++) def.push(soldier(2, { x: 6 + i * 3.5 + 0.5, y: i < 6 ? 7 : 13, z: 10.5 + (i % 3) * 3 }, ["rifle", "smg", "semi", "mg"][i % 4], 1, "hold"));
+    const att = []; for (let i = 0; i < 12; i++) att.push(soldier(1, { x: 16 + i + 0.5, y: 0, z: -35.5 - (i % 2) * 2 }, ["rifle", "smg", "semi", "mg"][i % 4]));
+    step(40);
+    if (opt.ddbg) { const e = def[0]; const cells = W.buildingCells(e.dimension, e.location, 24); console.error("cells", cells.length, "ys", [...new Set(cells.map((q) => q.y))], "ents", JSON.stringify(W.entrances(e.dimension, e.location)), "spot", JSON.stringify(W.doorWatchSpot(e, W.squads.get("2:1") ?? { }, 0, SIM.tick))); }
+    await order(1, { x: 24, y: 0, z: -12 }, "hold");
+    const t0 = SIM.tick, an = {}, dn = {}; let attUpMax = 0, firstUp = -1, pileMax = 0, inMax = 0;
+    const inB = (e) => e._loc.x > 0.5 && e._loc.x < 47 && e._loc.z > 0.5 && e._loc.z < 29;
+    for (let t = 0; t < Number(opt.ticks ?? 4800); t += 10) {
+      step(10);
+      const A = att.filter((e) => e.isValid && !W.isDowned(e)), D = def.filter((e) => e.isValid && !W.isDowned(e));
+      for (const [L, N] of [[A, an], [D, dn]]) for (const e of L) { const n = W.notes.get(e.id); if (n && SIM.tick - n.t < 20) { const k = n.text.replace(/\d+/g, "#") + (e._loc.y > 5 ? "@up" : "@gf"); N[k] = (N[k] ?? 0) + 1; } }
+      const up = A.filter((e) => inB(e) && e._loc.y > 5.5).length; attUpMax = Math.max(attUpMax, up); if (up && firstUp < 0) firstUp = SIM.tick - t0;
+      inMax = Math.max(inMax, A.filter(inB).length);
+      pileMax = Math.max(pileMax, A.filter((e) => inB(e) && e._loc.y < 1 && Math.hypot(e._loc.x - 23.5, e._loc.z - 1) < 5).length);
+      if (opt.trace && SIM.tick % Number(opt.trace) === 0) console.error("T", SIM.tick, "D", D.map((e) => `${e._loc.x.toFixed(0)},${e._loc.y.toFixed(0)},${e._loc.z.toFixed(0)}:${(W.notes.get(e.id)?.text ?? "").slice(0, 16)}`).join(" | "), "\n   A", A.map((e) => `${e._loc.x.toFixed(0)},${e._loc.y.toFixed(0)},${e._loc.z.toFixed(0)}:${(W.notes.get(e.id)?.text ?? "").slice(0, 16)}`).join(" | "));
+      if (opt.jdbg && SIM.tick % 100 === 0) { const S2 = [...W.squads].filter(([k]) => k.startsWith("2"))[0]?.[1]; console.error("J", SIM.tick, S2?.bplan?.kind, JSON.stringify([...(S2?.jobs ?? [])].map(([id, j]) => j)), def.map((e) => { const B = W.brain.get(e.id); return `${e._loc.y.toFixed(0)}:${B?.role?.job ?? "-"}:${B?.role?.spot ? "S" : "_"}`; }).join(" ")); }
+      if (!D.length || !A.length) break;
+    }
+    const top = (N) => Object.fromEntries(Object.entries(N).sort((a, b) => b[1] - a[1]).slice(0, 10));
+    report({ ticks: SIM.tick - t0, attLeft: att.filter((e) => e.isValid && !W.isDowned(e)).length, defLeft: def.filter((e) => e.isValid && !W.isDowned(e)).length, attUpMax, firstUp, inMax, pileMax, attNotes: top(an), defNotes: top(dn) });
   },
   async big() {
     const N = Number(opt.n ?? 100);

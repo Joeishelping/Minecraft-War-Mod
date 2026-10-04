@@ -1,5 +1,38 @@
 # War Engine changelog
 
+## v7.3 (Bullets drop, attackers go up the stairs, every man knows his job)
+
+- **No more bullet marks around the windows.** The gun pack's bullets fall and slow down in flight. A round aimed
+  straight at a man in an upper window dipped and hit the wall under it, which is the pattern in your screenshots.
+  The test simulator fired perfectly straight bullets, so that check passed there and failed in your game. Now:
+  - Each bullet type's drop and drag are measured from real rounds in flight, a few ticks after the shot.
+  - The aim is lifted so the curved flight meets the man.
+  - The clear-path check follows the curve, not a straight line.
+  - Guns not measured yet use the values of the ones that are.
+  - In the simulator with dropping bullets, rounds hitting cover in front of the target went from up to 31% to
+    about 0–2%.
+- **Attackers who break in go upstairs instead of piling up at the door.** Every man worked out his own long route
+  through the rooms and up the stairs, all at the same time. The route planner couldn't finish any of them before
+  they gave up and asked again, so they stood still saying "storming the building". Also, a route cut short ended
+  on the ground floor right under the enemy. Now:
+  - Men heading the same way share one route.
+  - Long routes get time to finish.
+  - A route that can't reach the enemy's floor isn't followed.
+  - The stairs nearest the attacker count too, not only those nearest the enemy.
+  - In a big three-floor hall test, the first attacker is upstairs in about 35 s instead of 90.
+- **Attackers no longer take the defenders' jobs.** Once most of an attacking squad was inside, it decided it was
+  the defender ("covering the way in" by the door it came in by). Now the side is decided by the order: a squad
+  told to hold a spot inside the building defends it; everyone else attacks it.
+- **Jobs stick and fit where each man is.** Jobs used to be dealt out by a fixed list every 25–45 s, so men went up
+  and down, and men downstairs said "at the upper windows". Now:
+  - The lowest men cover the doors, the next the stairheads, the rest the upper windows (attackers: the men
+    furthest back give covering fire, the rest go in).
+  - A man keeps his job and his spot through new plans; if someone falls, another man takes over his job.
+  - "Upper windows" is never a ground-floor spot.
+- **The labels over their heads tell the truth.** On the way: "going to the upper windows", "going to cover the way
+  in", "working out the way" (while the route is planned), "looking for a way" (when the route failed and he's
+  picking another). "At the upper windows" only once he is there.
+
 ## v7.2 (Every man marches on his own, a round needs a clear flight, a house is held like a house)
 
 - **Squads no longer stall on long orders.** In earlier versions nobody in a march walked his own route. A shared
