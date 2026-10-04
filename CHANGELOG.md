@@ -1,5 +1,28 @@
 # War Engine changelog
 
+## v7.4 (Shot diagnostics, a safer bullet-drop measurement, windows that are windows)
+
+- **New: Settings → "Shot diagnostics".** Turn it on and every round the soldiers fire is drawn: green sparkles along
+  where the round really flies, and a flame where it was aimed. Every 5 seconds the chat shows:
+  - how many shots the soldiers fired;
+  - how many rounds were fired by a soldier but NOT by this add-on's aiming (the gun pack's own script, or the game's
+    own attack), shown in red if there are any;
+  - the bullet drop the soldiers measured.
+
+  If marks on a wall have no green trail leading to them, the add-on's aiming didn't fire them.
+- **Safer bullet-drop measurement.** v7.3 measured drop from the bullet's reported speed. The gun pack may not report
+  speed the way the game does, which could lift the aim too high (your marks high above the windows). Now:
+  - Drop is measured from where the round actually is, 2 and 4 ticks after the shot.
+  - A measurement is only believed if it predicts those positions to within half a block.
+  - Rounds that fit no measurement are counted, and while most rounds don't fit, the aim stays straight.
+  - The aim is never lifted more than about 6° above the man.
+- **"Watching from a window" means a real window.** A man only takes that job at a spot with a real opening (a hole,
+  glass, a pane, bars) at head height right beside him, with wall below or above it and open sky beyond. Windows on
+  the side facing the enemy are preferred, and spots with a shot first. No such spot: he's "in reserve" and goes
+  where the fight is. The label used to say "at the upper windows" for men nowhere near one.
+- **Roles that move.** In a fight, a man at a window with no shot from it for 10 s leaves it ("moving to the fight")
+  to find a shot or close in. Men covering the doors and stairheads stay: waiting is their job.
+
 ## v7.3 (Bullets drop, attackers go up the stairs, every man knows his job)
 
 - **No more bullet marks around the windows.** The gun pack's bullets fall and slow down in flight. A round aimed

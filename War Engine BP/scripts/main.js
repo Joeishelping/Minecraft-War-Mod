@@ -2466,7 +2466,8 @@ async function warTable(player, pre) {
       .toggle("Armbands showing each soldier's type", { defaultValue: !!setting("bands", true) })
       .toggle("§cReset what every faction has learned", { defaultValue: false })
       .toggle("Menus in A-Z order", { defaultValue: !!setting("abc", true) })
-      .dropdown("Radio messages", ["Off", "Important only", "Everything"], { defaultValueIndex: Number(setting("radio", 1)) });
+      .dropdown("Radio messages", ["Off", "Important only", "Everything"], { defaultValueIndex: Number(setting("radio", 1)) })
+      .toggle("Shot diagnostics (draw every shot's path, count shots not fired by the soldiers' aim)", { defaultValue: !!setting("diag", false) });
     const sr = await show(sf, player);
     if (!sr || sr.canceled || !sr.formValues) return;
     sdp(world, "war:set_capture", sr.formValues[0] === 0 ? "neutral" : "surrender");
@@ -2486,6 +2487,7 @@ async function warTable(player, pre) {
     if (sr.formValues[13]) { learned = {}; saveLearned(); player.sendMessage("§eEvery faction's learned tactics were reset to the defaults."); }
     sdp(world, "war:set_abc", !!sr.formValues[14]);
     sdp(world, "war:set_radio", Number(sr.formValues[15] ?? 1));
+    sdp(world, "war:set_diag", !!sr.formValues[16]);
     player.sendMessage("§aSettings saved.");
     return warTable(player, 5);
     player.sendMessage("§aSettings saved.");
@@ -3180,36 +3182,80 @@ function hearIt(S, ent, at, t) { const q = S.known.get(ent.id); if (q && !q.hear
 // v7.0: gunfire is heard (64 blocks): the last second or two of shots, by faction
 const SHOTS = [];
 function noteShot(e) { try { const l = e.location; SHOTS.push({ id: e.id, f: Number(P(e, "war:faction") ?? 0), x: l.x, y: l.y, z: l.z, t: tick() }); while (SHOTS.length && tick() - SHOTS[0].t > 60) SHOTS.shift(); if (SHOTS.length > 400) SHOTS.splice(0, SHOTS.length - 400); } catch {} }
+// v7.4: shot diagnostics (Settings -> "Shot diagnostics"). Every round this add-on fires is drawn: green sparkles along
+// where the round REALLY flies, a flame where it was aimed. Rounds a soldier fires that this add-on did NOT fire (the gun
+// pack's own script, the game's own ranged attack) are counted, and every 5 s you're told: shots fired, rounds not ours,
+// and the bullet drop the soldiers measured. If the marks on a wall have no green trail to them, it wasn't us.
+const OURS = new Set();
+let diagOurs = 0, diagForeign = 0, diagTraced = 0, diagSec = -1;
+const diagOn = () => !!setting("diag", false);
+function traceShot(b, aim) {
+  const s = Math.floor(tick() / 20); if (s !== diagSec) { diagSec = s; diagTraced = 0; }
+  if (++diagTraced > 12) return;
+  try { b.dimension.spawnParticle("minecraft:basic_flame_particle", aim); } catch {}
+  for (let k = 1; k <= 12; k++) system.runTimeout(() => { try { if (b.isValid) b.dimension.spawnParticle("minecraft:villager_happy", b.location); } catch {} }, k);
+}
+world.afterEvents.entitySpawn.subscribe((ev) => {
+  const b = ev.entity; let id;
+  try { id = b.typeId; } catch { return; }
+  if (!id.startsWith("ww:") || !id.includes("projectile")) return;
+  const bid = b.id;
+  system.run(() => {
+    try {
+      if (OURS.has(bid)) { OURS.delete(bid); diagOurs++; return; }
+      const o = b.isValid ? b.getComponent("minecraft:projectile")?.owner : undefined;
+      if (o?.typeId === SOLDIER) diagForeign++;
+    } catch {}
+  });
+});
+system.runInterval(() => {
+  if (OURS.size > 2000) OURS.clear();
+  if (!diagOn()) { diagOurs = 0; diagForeign = 0; return; }
+  const bl = [...BALL].filter(([t]) => t !== "ww:nbazooka_projectile").map(([, C]) => C);
+  const n = bl.reduce((t, C) => t + C.n, 0), bad = bl.reduce((t, C) => t + (C.bad ?? 0), 0);
+  const g = n ? bl.reduce((t, C) => t + C.g * C.n, 0) / n : 0, k = n ? bl.reduce((t, C) => t + C.k * C.n, 0) / n : 1;
+  const txt = `§eShots (5 s): §f${diagOurs} by the soldiers' aim, §${diagForeign ? "c" : "f"}${diagForeign} NOT by it§e | bullet drop ${g.toFixed(3)}/tick, drag ${k.toFixed(3)} (${n} fit, ${bad} unfit${bad > n / 2 && bad ? ": aiming straight" : ""})`;
+  for (const p of world.getAllPlayers()) { try { p.sendMessage(txt); } catch {} }
+  diagOurs = 0; diagForeign = 0;
+}, 100);
 // v7.3: ballistics, measured in the game, not assumed. The gun pack's bullets may drop (gravity) and slow down (drag):
 // a round aimed straight at a man in an upper window then hits the wall under it. Each bullet type's drop and drag are
 // measured from real rounds in flight (their speed 2 and 3 ticks after the shot); the aim is lifted to make the CURVED
 // flight meet the target, and the clear-flight check follows the curve, not a straight line.
-const BALL = new Map(); // bullet type -> { g, k, n }
+const BALL = new Map(); // bullet type -> { g, k, n, bad }
 function ballOf(type) {                                            // (a type not measured yet: the pack's other bullets)
   const B = BALL.get(type); if (B && B.n >= 2) return B;
   let g = 0, k = 0, n = 0; for (const [t2, C] of BALL) if (t2 !== "ww:nbazooka_projectile" && type !== "ww:nbazooka_projectile" && C.n >= 2) { g += C.g * C.n; k += C.k * C.n; n += C.n; }
   return n ? { g: g / n, k: k / n, n: 0 } : (B ?? { g: 0, k: 1, n: 0 });
 }
-function measureBall(b, type) {
+// v7.4: measured from where the round actually IS (not from its speed, which the gun pack may not report the way the
+// game does): its position 2 and 4 ticks after the shot, against the flight the drop/drag model predicts. Only a
+// model that fits those positions to within half a block is believed; rounds that fit no model at all (moved by the
+// pack's own script, say) count as "unfit", and while most rounds are unfit the aim stays straight.
+function measureBall(b, type, p0, v0) {
   const B0 = BALL.get(type); if (B0 && B0.n >= 40) return;
-  let v2;
-  system.runTimeout(() => { try { if (b.isValid) v2 = b.getVelocity(); } catch {} }, 2);
-  system.runTimeout(() => {
-    try {
-      if (!v2 || !b.isValid) return;
-      const v3 = b.getVelocity(), h2 = Math.hypot(v2.x, v2.z), h3 = Math.hypot(v3.x, v3.z);
-      if (h2 < 0.5) return;
-      const k = Math.min(1, Math.max(0.8, h3 / h2)), g = Math.min(0.2, Math.max(0, v2.y * k - v3.y));
-      const C = BALL.get(type) ?? { g: 0, k: 1, n: 0 };
-      C.g = (C.g * C.n + g) / (C.n + 1); C.k = (C.k * C.n + k) / (C.n + 1); C.n++; BALL.set(type, C);
-    } catch {}
-  }, 3);
+  const seen = [];
+  for (const tk of [2, 4]) system.runTimeout(() => {
+    try { if (!b.isValid) return; const l = b.location; seen.push({ tk, x: l.x, y: l.y, z: l.z }); } catch { return; }
+    if (seen.length < 2) return;
+    let best, be = 1e9;
+    for (let gi = 0; gi <= 12; gi++) for (let ki = 0; ki <= 10; ki++) for (const off of [-1, 0, 1]) {
+      const g = gi * 0.01, k = 1 - ki * 0.005;
+      const path = flightPath(p0, v0, 1e9, { g, k }, 8);
+      let err = 0; for (const q of seen) { const pp = path[Math.max(0, Math.min(path.length - 1, q.tk + off))]; err = Math.max(err, Math.hypot(pp.x - q.x, pp.y - q.y, pp.z - q.z)); }
+      if (err < be) { be = err; best = { g, k }; }
+    }
+    const C = BALL.get(type) ?? { g: 0, k: 1, n: 0, bad: 0 };
+    if (!best || be > 0.5) { C.bad = (C.bad ?? 0) + 1; BALL.set(type, C); return; }
+    C.g = (C.g * C.n + best.g) / (C.n + 1); C.k = (C.k * C.n + best.k) / (C.n + 1); C.n++; BALL.set(type, C);
+  }, tk);
 }
+const ballBelieved = (B) => !B.bad || (B.n ?? 0) >= (B.bad ?? 0) * 2;
 // where a round fired from p with velocity v is, tick by tick, until it has flown `L` blocks across (the game's order:
 // move, then slow down and fall)
-function flightPath(p, v, L, B) {
+function flightPath(p, v, L, B, maxT = 80) {
   const pts = [{ ...p }]; let x = p.x, y = p.y, z = p.z, vx = v.x, vy = v.y, vz = v.z, across = 0;
-  for (let i = 0; i < 80 && across < L; i++) {
+  for (let i = 0; i < maxT && across < L; i++) {
     x += vx; y += vy; z += vz; across = Math.hypot(x - p.x, z - p.z);
     pts.push({ x, y, z });
     vx *= B.k; vz *= B.k; vy = vy * B.k - B.g;
@@ -3245,7 +3291,7 @@ function fireGun(e, spec, t, aim) {
   if (c !== c0 && !openNow(e.dimension, mz, c)) c = c0;
   let dx = c.x - h.x, dy = c.y - h.y, dz = c.z - h.z;
   const l = Math.hypot(dx, dy, dz) || 1, Lh = Math.hypot(dx, dz);
-  const BL = ballOf(spec.bullet);
+  const BL0 = ballOf(spec.bullet), BL = ballBelieved(BL0) ? BL0 : { g: 0, k: 1, n: 0 };
   if (BL.n < 5 && spec.bullet === "ww:nbazooka_projectile") dy += (l * 0.03 * l) / (spec.speed * 2); // lift for the rocket's drop (until it's been measured)
   else if (BL.g >= 0.002 || BL.k <= 0.998) {                           // v7.3: lift the aim so the curve meets him
     const p0 = { x: h.x, y: h.y - 0.2, z: h.z };
@@ -3255,6 +3301,7 @@ function fireGun(e, spec, t, aim) {
       const err = c.y - y; if (Math.abs(err) < 0.05) break;
       dy += err;
     }
+    dy = Math.min(dy, c.y - h.y + Lh * 0.1);                         // (never more than ~6 degrees over the man: a bad measurement can't send rounds over the roof)
   }
   const n = Math.hypot(dx, dy, dz) || 1;
   const r = () => (Math.random() + Math.random() - 1) * spec.spread * 1.6;
@@ -3275,7 +3322,12 @@ function fireGun(e, spec, t, aim) {
   try {
     const b = e.dimension.spawnEntity(spec.bullet, from);
     const pc = b.getComponent("minecraft:projectile");
-    if (pc) { pc.owner = e; pc.shoot({ x: dir.x * spec.speed, y: dir.y * spec.speed, z: dir.z * spec.speed }); if (Lh > 12) measureBall(b, spec.bullet); }
+    if (pc) {
+      const v0 = { x: dir.x * spec.speed, y: dir.y * spec.speed, z: dir.z * spec.speed };
+      OURS.add(b.id); pc.owner = e; pc.shoot(v0);
+      if (Lh > 12) measureBall(b, spec.bullet, from, v0);
+      if (diagOn()) traceShot(b, c);
+    }
   } catch {}
   noteShot(e);                                                       // (v7.2: no more wallbang: a round only leaves the gun on a clear line)
   return true;
@@ -5444,7 +5496,7 @@ function fireAtPoint(e, spec, p) {
   try {
     const b = e.dimension.spawnEntity(spec.bullet, from);
     const pc = b.getComponent("minecraft:projectile");
-    if (pc) { pc.owner = e; pc.shoot({ x: dir.x * spec.speed, y: dir.y * spec.speed, z: dir.z * spec.speed }); }
+    if (pc) { OURS.add(b.id); pc.owner = e; pc.shoot({ x: dir.x * spec.speed, y: dir.y * spec.speed, z: dir.z * spec.speed }); if (diagOn()) traceShot(b, p); }
   } catch {}
   noteShot(e);                                                       // (v7.1: no wallbang from covering fire: only real aimed shots)
   for (const o of nearbyCombatants(e.dimension.id, p, 4)) if (o.typeId === SOLDIER) suppB.set(o.id, Math.min(30, (suppB.get(o.id) ?? 0) + 1));
@@ -6893,29 +6945,48 @@ function stairGuardSpot(e, S, idx, now) {
   }
   return best ? { spot: best, face: head, n: mouths.length } : undefined;
 }
-// the upper windows: a spot on a floor above the ground with a shot at the enemy (or, before anyone's seen, spread
-// over the upper floors)
+// v7.4: a REAL window: right beside the spot (1-2 blocks), at head height, an opening (air, glass, a pane, bars)
+// with open sky beyond it. Returns the point just outside it, or undefined.
+const SEE_THRU = (b) => !!b && (b.isAir || passable(b) || b.typeId.includes("glass") || b.typeId.includes("pane") || b.typeId.includes("bars"));
+function windowAt(dim, q) {
+  const solid = (b) => !!b && !SEE_THRU(b);
+  for (const [dx, dz] of [[1, 0], [-1, 0], [0, 1], [0, -1]]) for (const r of [1, 2, 3]) {
+    try {
+      const x = q.x + dx * r, z = q.z + dz * r;
+      const head = tBlock(dim, x, q.y + 1, z);
+      if (!SEE_THRU(head)) break;                                        // a wall straight ahead: no window this way
+      const sill = tBlock(dim, x, q.y, z), lintel = tBlock(dim, x, q.y + 2, z);
+      if (!(solid(sill) || solid(lintel) || !(sill?.isAir || passable(sill)))) continue;   // open floor: look further
+      const out = { x: x + dx, y: q.y + 1, z: z + dz }, far = { x: x + dx * 3, y: q.y, z: z + dz * 3 };
+      if (SEE_THRU(tBlock(dim, out.x, out.y, out.z)) && !isIndoorsAt(dim, far)) return { x: x + dx * 6, y: q.y + 1, z: z + dz * 6 };
+      break;
+    } catch { break; }
+  }
+  return undefined;
+}
+// the upper windows: a spot by a real window on a floor above the ground, with a shot at the enemy if there is one;
+// spread over the windows (and the sides of the building), never a ground-floor spot, never a blank wall
 function overwatchSpot(e, S, now) {
   const dim = e.dimension, cells = buildingCells(dim, e.location, 24);
-  const gy = cells.length ? Math.min(...cells.map((q) => q.y)) : -1e9, multi = cells.some((q) => q.y > gy + 2);
-  const a = S.known?.size ? shotSpot(e, S, now) : undefined;
-  if (a && (!multi || a.spot.y > gy + 2)) return a;                       // (v7.3: the UPPER windows: never a spot on the ground floor)
   if (!cells.length) return undefined;
-  const up = cells.filter((q) => q.y > gy + 2);
-  const pool = up.length ? up : cells;
+  const gy = Math.min(...cells.map((q) => q.y)), multi = cells.some((q) => q.y > gy + 2);
+  const pool = cells.filter((q) => (!multi || q.y > gy + 2) && !onWayThrough(dim, q) && !claimedByOther(q, e.id, now) && !failedNear(e, q, now));
   const taken = [];
   for (const [id, B] of brain) if (id !== e.id && B.role?.spot && now - B.role.t < 600) taken.push(B.role.spot);
-  let best, bs = -1e9;
-  for (let i = 0; i < Math.min(40, pool.length); i++) {
+  const known = S.known?.size ? [...S.known.values()].filter((q) => q.ent?.isValid && !downed.has(q.ent.id)).slice(0, 3) : [];
+  let best, bs = -1e9, checks = 0;
+  for (let i = 0; i < Math.min(60, pool.length) && checks < 30; i++) {
     const q = pool[Math.floor(Math.random() * pool.length)];
-    if (claimedByOther(q, e.id, now) || onWayThrough(dim, q)) continue;
+    const out = windowAt(dim, q); if (!out) continue;
+    checks++;
     let near = 99; for (const t of taken) if (Math.abs(t.y - q.y) < 2.5) near = Math.min(near, Math.hypot(t.x - q.x, t.z - q.z));
-    let view = 0;                                                              // a window: open air within 2 blocks that isn't under a roof
-    for (const [dx, dz] of [[2, 0], [-2, 0], [0, 2], [0, -2]]) { const o = { x: q.x + dx, y: q.y, z: q.z + dz }; try { const b = tBlock(dim, o.x, o.y + 1, o.z); if (b && (b.isAir || passable(b)) && !isIndoorsAt(dim, o)) view = 3; } catch {} }
-    const sc = Math.min(near, 6) + view - flat(q, e.location) * 0.05;
-    if (sc > bs) { bs = sc; best = q; }
+    let shot = 0, face = out;
+    for (const k of known) if (clearShot(dim, { x: q.x, y: q.y + 1.6, z: q.z }, { x: k.x, y: k.y + 1.3, z: k.z })) { shot = 6; face = k; break; }
+    const toward = S.enemyC ? -Math.hypot(out.x - S.enemyC.x, out.z - S.enemyC.z) * 0.05 : 0;   // (the side facing them)
+    const sc = shot + Math.min(near, 6) + toward - flat(q, e.location) * 0.04;
+    if (sc > bs) { bs = sc; best = { spot: q, face }; }
   }
-  return best ? { spot: best, face: S.enemyC } : undefined;
+  return best;
 }
 // v7.1: a plan is only reported once the men are actually carrying it out (half of them have their part and are on it);
 // one nobody can carry out (no spot with a shot, no way up) is dropped within 10 s for another
@@ -7006,7 +7077,7 @@ function assaultSpot(e, d, S, now) {
   const q = known.sort((a, b) => dist(a, l) - dist(b, l))[0];
   return { spot: { x: q.x, y: q.y, z: q.z }, face: q, kind: "advance" };
 }
-const JOB_NOTE = { door: "covering the way in", stairs: "holding the stairhead", overwatch: "at the upper windows", assault: "storming the building", support: "covering the assault" };
+const JOB_NOTE = { door: "covering the way in", stairs: "holding the stairhead", overwatch: "watching from a window", assault: "storming the building", support: "covering the assault", reserve: "in reserve" };
 // v7.3: who does which job is decided for the whole squad at once, by where each man IS (the lowest men take the doors,
 // the next the stairheads, the rest the upper windows; outside the building, the men furthest back give covering fire
 // and the rest go in), and it STICKS: a new plan keeps every man on his job while that job still exists. Before, the
@@ -7034,7 +7105,7 @@ function assignJobs(S, P0, ours) {
   }
   S.jobs = jobs; S.jobSide = side;
 }
-const JOB_GO = { door: "going to cover the way in", stairs: "going to hold the stairhead", overwatch: "going to the upper windows", assault: "storming the building", support: "moving to cover the assault" };
+const JOB_GO = { door: "going to cover the way in", stairs: "going to hold the stairhead", overwatch: "going to a window", assault: "storming the building", support: "moving to cover the assault", reserve: "joining the reserve" };
 function jobSpot(e, d, S, job, now) {
   const ros = [...(S.jobs ?? new Map())].filter(([, j]) => j === job).map(([id]) => id).sort(), i = Math.max(0, ros.indexOf(e.id));
   if (job === "door") return doorWatchSpot(e, S, i, now);
@@ -7058,6 +7129,7 @@ function buildingRole(e, d, now, S, B, t) {
       a = jobSpot(e, d, S, jb, now);
       if (!a && jb === "support") { a = assaultSpot(e, d, S, now); jb = "assault"; }
       if (!a && (jb === "door" || jb === "stairs")) { a = overwatchSpot(e, S, now); jb = "overwatch"; }
+      if (!a && jb === "overwatch") { jb = "reserve"; a = undefined; }    // (v7.4: no real window for him: the reserve, who go where the fight is)
     }
     else if (P0.kind === "windows") a = shotSpot(e, S, now);
     else if (P0.kind === "secure") a = secureSpot(e, S, now);
@@ -7069,8 +7141,14 @@ function buildingRole(e, d, now, S, B, t) {
     B.role = R;
     if (R.spot) claimSpot(e, R.spot, now);
   }
-  if (!R.spot) return undefined;
+  if (!R.spot) { if (R.job === "reserve" && !S.known.size) note(e, JOB_NOTE.reserve); return undefined; }
   const l = e.location;
+  // (v7.4: committed to moving, not to a spot: a man at a window with no shot from it for 10 s in a fight goes and finds
+  //  one (the brain's shot-seeking and closing-in take over); the door and stairhead men stay: waiting IS their job)
+  if (S.known.size && (R.job === "overwatch" || R.job === "support") && flat(R.spot, l) < 1.4 && Math.abs(R.spot.y - l.y) < 1.2) {
+    if (now - (gunState.get(e.id)?.lastShot ?? -999) < 60 || (t?.isValid && canHit(e, t))) R.idleT = now; else R.idleT ??= now;
+    if (now - R.idleT > 200) { B.role = { ...R, planT: R.planT, spot: undefined, job: "reserve" }; S.jobs?.set(e.id, "reserve"); note(e, "moving to the fight"); return undefined; }
+  }
   // (v7.2: the enemy's got in on his floor: the door men and anyone without a shot go and fight them there)
   if (S.known.size && (R.job === "door" || R.job === "overwatch") && [...S.known.values()].some((q) => Math.abs(q.y - l.y) < 2.5 && dist(q, l) < 25 && isIndoorsAt(e.dimension, q))) return undefined;
   if (flat(R.spot, l) < 1.4 && Math.abs(R.spot.y - l.y) < 1.2) {
