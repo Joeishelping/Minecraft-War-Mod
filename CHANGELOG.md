@@ -1,5 +1,38 @@
 # War Engine changelog
 
+## v9.0 (Smoke, dragging the wounded, ambushes, breaching doors)
+
+New things soldiers do on their own, each checked in the simulator and on a real Bedrock server.
+
+- **Smoke screens.**
+  - Riflemen carry a smoke canister (another after 2 min). A squad throws one at most every 25 s: before an assault
+    or a flank over open ground, before the run to a held building's door, when pinned down in the open, to cover a
+    man going out for a wounded mate, and when a man breaks and runs.
+  - The cloud (about 7 blocks across and 4 high, ~22 s) really blocks sight. Nobody can see, aim or shoot through
+    it, and two men a step apart inside it still see each other.
+  - It's a new particle in the resource pack.
+- **Dragging the wounded.**
+  - A man down where the enemy can see him, with no medic coming, is reached by the nearest squad mate. He pops
+    smoke if he has it, puts pressure on the wound (the bleed-out timer stops), drags him back to a spot the enemy
+    can't see, and gives ~5 s of first aid. The wounded man gets back up, weak.
+  - One rescue per squad at a time (two for 8 or more). No rescue for a man nearly bled out, and a squad losing
+    the fight doesn't send men out far.
+- **Ambushes.**
+  - A squad that sees the enemy first (no enemy aware of it, nobody shooting at it, nobody within 14 blocks) lies
+    in wait: no shot, no shout.
+  - It springs when most of the squad has a man in its sights, when the enemy notices, shoots or comes within 10
+    blocks, or after 6 s. Then every rifle opens up in the same second.
+- **Breaching.**
+  - Attackers going through a doorway into a floor the enemy holds stack up beside it (3 men, or 6 s at most).
+  - One throws a grenade into the room, never with a friend in blast range. When it goes off they go in together.
+- **Saved data and stability.**
+  - The busiest soldier records are kept in memory and saved together at most every 30 s. Orders, being down and
+    falling back are still saved at once, so a reload never brings back an old state.
+  - Placing a marker in an unloaded chunk no longer throws an error.
+  - The waypoint registry drops soldiers not seen for an hour of play instead of growing forever, and a record
+    unused since v8.2 is deleted.
+  - Unused code removed.
+
 ## v8.2 (The crash, the lag, the false "out of range", committing in building fights)
 
 Everything below was found and checked on a real Bedrock server.
