@@ -6905,6 +6905,7 @@ function followPersonal(e, now) {
   // a fight on the way: errands are dropped (the brain fights); moving up to the enemy, he stops to take a clear shot
   const t = perc.get(e.id)?.threat;
   if (t?.isValid && ["patrol", "reinforce", "regroup"].includes(pr.kind)) return drop();
+  if ((pr.kind === "advance" || pr.kind === "engage") && stackAtDoor(e, pr, i, now)) { pr.hold = now + 25; pr.progT = now; note(e, "stacking up at the door"); return { g: "g_none", t: "t_mid", urgent: false }; }   // (v9.0)
   if ((pr.kind === "advance" || pr.kind === "engage") && stackAtStairs(e, pr, i, now)) { pr.hold = now + 25; pr.progT = now; note(e, "stacking up at the stairs"); return { g: "g_none", t: "t_mid", urgent: false }; }   // (v6.9.2)
   if (t?.isValid && (pr.kind === "advance" || pr.kind === "engage")) {
     if (shotAt(e, sd(e), t, now) && !tightAt(e.dimension, pr.pts, i, e.location)) { pr.hold = now + 30; pr.progT = now; note(e, "firing on the way"); return { g: "g_none", t: "t_mid", urgent: false }; }   // (never stops on the stairs: the men behind need them)
@@ -8204,9 +8205,10 @@ system.runInterval(() => {
       if (tight || ahead < 0 || onPassage(e)) stepping.add(e.id);         // (v7.2: the edge guard watches only men where there's an edge to mind)
       if (tight) {
         const g = gliders.get(e.id);
-        if (!remote && stackAtStairs(e, { pts }, i, now)) {           // (v6.9.2: the enemy's up there: gather at the foot, then all go)
+        const atDoor = !remote && stackAtDoor(e, { pts }, i, now);       // (v9.0: they're in there: stack at the door, frag in, all go)
+        if (atDoor || (!remote && stackAtStairs(e, { pts }, i, now))) {   // (v6.9.2: the enemy's up there: gather at the foot, then all go)
           gliders.set(e.id, { pts, k: g && g.pts === pts ? g.k : glideStart(pts, i, e.location), t: now, paused: true, wait: 0, blocked: 0 });
-          myMarker(e, e.location); note(e, "stacking up at the stairs");
+          myMarker(e, e.location); note(e, atDoor ? "stacking up at the door" : "stacking up at the stairs");
           continue;
         }
         const queued = queuedBehind(e, pts, i);
@@ -9418,6 +9420,66 @@ system.runInterval(() => {
   }
 }, 2);
 
+// ---- the door: attackers about to go into a building the enemy holds on that floor stack up beside the way in (up
+// to 3 of them, or 6 s), the first with a grenade throws it into the room at the nearest of them, and when it's gone
+// off they all go in together. One grenade per man for this (another after 2 min); never with a friend in the room.
+const doorStack = new Map(); // "squad|door cell" -> { t0, frag, go }
+const breachFragUsed = new Map();
+function stackAtDoor(e, pr, i, now) {
+  const d = sd(e), S = squads.get(squadKey(e, d)), l = e.location;
+  if (!S?.known?.size || (S.n ?? 0) < 2 || isIndoors(e) || !GUNS.includes(d.weapon)) return false;
+  let door = -1;
+  for (let k = Math.max(i, 1); k < Math.min(pr.pts.length, i + 5); k++) if (isIndoorsAt(e.dimension, pr.pts[k]) && !isIndoorsAt(e.dimension, pr.pts[k - 1])) { door = k; break; }
+  if (door < 0) return false;
+  const p = pr.pts[door];
+  if (flat(p, l) > 4 || Math.abs(p.y - l.y) > 1.5) return false;
+  const inside = [...S.known.values()].filter((q) => Math.abs(q.y - p.y) < 2.5 && flat(q, p) < 16 && isIndoorsAt(e.dimension, q));
+  if (!inside.length) return false;
+  const key = `${squadKey(e, d)}|${Math.floor(p.x)}|${Math.floor(p.y)}|${Math.floor(p.z)}`;
+  let st = doorStack.get(key);
+  if (!st || now - st.t0 > 900) { st = { t0: now, frag: 0, go: 0 }; doorStack.set(key, st); if (doorStack.size > 200) doorStack.clear(); }
+  if (st.go && now >= st.go) return now - st.go > 200 ? (st.t0 = now - 901, false) : false;   // going in (a stack long gone: a fresh one next time)
+  if (st.go) { note(e, "waiting for the grenade"); return true; }
+  const mates = nearbyCombatants(e.dimension.id, l, 5).filter((o) => o.typeId === SOLDIER && !downed.has(o.id) && Number(P(o, "war:faction")) === d.faction && sd(o).squad === d.squad);   // (him included)
+  if (mates.length < Math.min(3, S.n) && now - st.t0 < 120) return true;   // gathering
+  // the stack's ready: a grenade in first (one man, one throw), then go when it's gone off
+  if (!st.frag) {
+    st.frag = now;
+    const q = inside.sort((a, b) => flat(a, p) - flat(b, p))[0];
+    const thrower = mates.find((o) => now - (breachFragUsed.get(o.id) ?? -99999) > 2400 && GUNS.includes(sd(o).weapon));
+    const tgt = { x: p.x + Math.max(-8, Math.min(8, q.x - p.x)), y: q.y, z: p.z + Math.max(-8, Math.min(8, q.z - p.z)) };
+    const friendIn = nearbyCombatants(e.dimension.id, tgt, NADE.safe).some((o) => (o.typeId === SOLDIER || o.typeId === "minecraft:player") && isFriendly(d.faction, factionOf(o)) && !downed.has(o.id));
+    if (thrower && !friendIn && flat(tgt, p) >= 2) {
+      breachFragUsed.set(thrower.id, now);
+      const T = lobGrenade(thrower, tgt);
+      st.go = now + T + NADE.fuse + 4;
+      v9stat("breachFrag");
+      note(thrower, "grenade in the door");
+      radio(thrower, "grenade in, then we go", true);
+      return true;
+    }
+  }
+  st.go = now; v9stat("breachGo");
+  callout(e, "Go, go, go!", { event: true });
+  radio(e, "going in", true);
+  return false;
+}
+// a grenade lobbed to a spot (the same as a Demolition man's: the arc, the fuse, the warning, the blast)
+function lobGrenade(e, at) {
+  const dim = e.dimension, from = headLoc(e), dd = Math.max(2, dist(at, e.location)), T = Math.round(10 + dd * 0.9);
+  const g = walkableNear(dim, at.x, at.z, at.y) ?? at, by = e;
+  turnTo(e, g, 180);
+  callout(e, "Grenade!", { event: true });
+  try { dim.playSound("random.bow", from, { volume: 0.6, pitch: 0.6 }); } catch {}
+  for (let k = 1; k <= T; k += 2) system.runTimeout(() => {
+    try { const u = k / T, h = Math.max(1.5, dd * 0.2); dim.spawnParticle("minecraft:basic_smoke_particle", { x: from.x + (g.x - from.x) * u, y: from.y + (g.y + 0.3 - from.y) * u + 4 * h * u * (1 - u), z: from.z + (g.z - from.z) * u }); } catch {}
+  }, k);
+  system.runTimeout(() => {
+    try { dim.playSound("random.fuse", g, { volume: 0.8, pitch: 1.4 }); } catch {}
+    liveNades.push({ dim, at: { x: g.x, y: g.y, z: g.z }, boom: tick() + NADE.fuse, by });
+  }, T);
+  return T;
+}
 // ---- ambushes. A squad that sees the enemy before the enemy sees it (no man of theirs aware of us, nobody shooting
 // at us, nobody closer than 14 blocks) lies in wait: no shot and no shout until it's sprung. It's sprung when most of
 // the squad has a man in its sights, when the enemy notices, shoots, or gets within 10 blocks, or after 6 s: then
@@ -9480,7 +9542,7 @@ system.runInterval(() => {
     const live = new Set();
     for (const t of [SOLDIER, HOUND]) for (const e of allOf(t)) live.add(e.id);
     for (const p of world.getAllPlayers()) live.add(p.id);
-    for (const m of [smokeUsed, dragCool, firedAt, lastPos, noiseFrom, noiseT, alertUntil, modeMemo, propSync, mountedAt, wetTrack, swimGiveUp, breakCool, recentHits, wetMemo, medicCall, lastHp, buildBudget, shotAtPlayer, doorLook, hopT, settleT, flinchT, edgeFearT, kiteT, fleeFire, lastUse, hurtBy, perc, brain, gunState, notes, sweep, marchWatch, forceGlide, glideBan, aimedBy, hpMemo]) {
+    for (const m of [breachFragUsed, smokeUsed, dragCool, firedAt, lastPos, noiseFrom, noiseT, alertUntil, modeMemo, propSync, mountedAt, wetTrack, swimGiveUp, breakCool, recentHits, wetMemo, medicCall, lastHp, buildBudget, shotAtPlayer, doorLook, hopT, settleT, flinchT, edgeFearT, kiteT, fleeFire, lastUse, hurtBy, perc, brain, gunState, notes, sweep, marchWatch, forceGlide, glideBan, aimedBy, hpMemo]) {
       if (!m?.size) continue;
       for (const k of [...m.keys()]) if (typeof k === "string" && k.length > 3 && !k.includes(":") && !live.has(k)) m.delete(k);
     }
