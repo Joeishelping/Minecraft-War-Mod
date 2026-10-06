@@ -4,6 +4,11 @@
 
 New things soldiers do on their own, each checked in the simulator and on a real Bedrock server.
 
+Real server (BDS 1.26.52), v9.0 against v8.2: **9 of 10 checks** (8 before). Attackers reach the big hall's upper floor
+in 46 s (118 s in v8.2; the target is 60 s): smoke on the approach and a grenade through the door before going in.
+Still 0 shots at men nobody could see and 0 into cover, both marches and the castle legs arrive, no script errors.
+The one still failing: a 90 v 90's first 30 s runs at ~10 ticks a second.
+
 - **Smoke screens.**
   - Riflemen carry a smoke canister (another after 2 min). A squad throws one at most every 25 s: before an assault
     or a flank over open ground, before the run to a held building's door, when pinned down in the open, to cover a
