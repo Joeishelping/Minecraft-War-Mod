@@ -221,21 +221,61 @@ const DPC = new Map(); // entity id ("@world" for the world) -> Map(key -> value
 const dpMap = (h) => { const id = h === world ? "@world" : h.id; let m = DPC.get(id); if (!m) { m = new Map(); DPC.set(id, m); } return m; };
 // v5.6: bookkeeping that only matters while the world runs (stuck checks, pace rolls, heal timers) never touches the
 // game's storage at all
-const TRANSIENT = new Set(["p_war:firing", "p_war:aiming", "p_war:pose", "war:lp", "war:lpt", "war:pace", "war:pacet", "war:selfheal", "war:stuck", "war:calm", "war:readout", "war:healt", "war:covert"]);
+const TRANSIENT = new Set(["war:st", "p_war:firing", "p_war:aiming", "p_war:pose", "war:lp", "war:lpt", "war:pace", "war:pacet", "war:selfheal", "war:stuck", "war:calm", "war:readout", "war:healt", "war:covert"]);
+// (only records whose being up to 30 s old after a reload is harmless: the waypoint he was walking to, the march he was
+//  catching up, his own markers, who hit him last. His orders, being down, falling back and his entity properties are
+//  written at once: an old copy of those would bring back a state he'd left.)
+const LAZY = new Set(["war:goal", "war:catchup", "war:hurt", "war:mymk", "war:fmk"]);
+const lazyKey = (k) => LAZY.has(k);
 function gdp(h, k) {
   const m = dpMap(h);
   if (m.has(k)) return m.get(k);
   if (TRANSIENT.has(k)) return undefined;
-  const v = h.getDynamicProperty(k);
+  let v;
+  if (h !== world && lazyKey(k)) {                                   // (v9.0: the packed record first, then the old single one)
+    let pk = m.get("\u0000lz");
+    if (pk === undefined) { try { const raw = h.getDynamicProperty("war:lz"); pk = typeof raw === "string" ? JSON.parse(raw) : null; } catch { pk = null; } m.set("\u0000lz", pk); }
+    if (pk && Object.prototype.hasOwnProperty.call(pk, k)) { v = pk[k] === null ? undefined : pk[k]; m.set(k, v); return v; }
+  }
+  v = h.getDynamicProperty(k);
   m.set(k, v);
   return v;
 }
+// v9.0: the busiest per-soldier records (his state groups, the waypoint he's walking to, the march he's catching up,
+// who hurt him last) change many times a second in a battle. Bedrock saves ALL of an entity's properties again on
+// every single write (a 90 v 90 measured 31 MB a minute; the game warns at 10), so these are kept in memory and
+// written to the world at most once every 30 s per soldier. A reload loses at most the last 30 s of where he was
+// walking to, which the march picks up again anyway. (Measured on a real server: with these writes switched off the
+// warning went away; with the world's own writes switched off it stayed.)
+const lazyDirty = new Map(); // entity id -> { h, keys: Set, t }
 function sdp(h, k, v) {
   const m = dpMap(h);
   if (m.has(k) && m.get(k) === v && (v === undefined || typeof v !== "object")) return;
+  if (h !== world && lazyKey(k)) {
+    m.set(k, v && typeof v === "object" ? { ...v } : v);
+    let L = lazyDirty.get(h.id); if (!L) { L = { h, keys: new Set(), t: tick() }; lazyDirty.set(h.id, L); }
+    L.keys.add(k);
+    return;
+  }
   if (!TRANSIENT.has(k)) h.setDynamicProperty(k, v);
   m.set(k, v && typeof v === "object" ? { ...v } : v);
 }
+system.runInterval(() => {
+  const now = tick();
+  let n = 0;
+  for (const [id, L] of lazyDirty) {
+    if (now - L.t < 600) continue;
+    lazyDirty.delete(id);
+    try {                                                            // one write per soldier: every busy record packed together
+      if (!L.h.isValid) continue;
+      const m = dpMap(L.h), pk = { ...(m.get("\u0000lz") ?? {}) };
+      for (const k of L.keys) { const v = m.get(k); pk[k] = v === undefined ? null : v; }
+      m.set("\u0000lz", pk);
+      L.h.setDynamicProperty("war:lz", JSON.stringify(pk));
+    } catch {}
+    if (++n >= 40) break;                                            // (spread out: a few dozen soldiers a second at most)
+  }
+}, 20);
 system.runInterval(() => { for (const id of [...DPC.keys()]) if (id !== "@world" && !world.getEntity(id)) DPC.delete(id); }, 1200);
 const dist = (a, b) => Math.hypot(a.x - b.x, a.y - b.y, a.z - b.z);
 const flat = (a, b) => Math.hypot(a.x - b.x, a.z - b.z);
@@ -468,7 +508,8 @@ function makeWaypoint(dim, loc, reuse = true) {
     const near = dim.getEntities({ type: WAYPOINT, location: loc, maxDistance: 2.5, excludeTags: ["war_mine"] })[0];   // never someone's personal marker
     if (near && slotOf(near)) return slotOf(near);
   }
-  const m = dim.spawnEntity(WAYPOINT, loc);
+  let m;
+  try { m = dim.spawnEntity(WAYPOINT, loc); } catch { return 0; }   // (v9.0: a spot in an unloaded chunk: no marker, the caller tries again later)
   allOfCache.delete(WAYPOINT);                                   // v5.3: the next claim this tick sees this marker too (no shared numbers)
   try { m.addEffect("invisibility", 20000000, { showParticles: false }); } catch {}
   const s = claimSlot(m);
@@ -487,9 +528,11 @@ function setGoal(e, slot) {
 const SLOT_KEYS = ["war:goal", "war:home", "war:mwp", "war:chargegoal", "war:ordergoal", "war:catchup", "war:mymk", "war:fmk"];
 let slotRefs = null; // soldier id -> [slots] (last known, kept while he's out of range)
 function getRefs() { if (!slotRefs) slotRefs = getJSON(world, "war:slotrefs", {}); return slotRefs; }
+const refSeen = new Map(); // soldier id -> tick he was last seen this session
 function noteRefs(e) {
   const r = SLOT_KEYS.map((k) => Number(gdp(e, k) ?? 0)).filter((x) => x > 0);
   getRefs()[e.id] = [...new Set(r)];
+  refSeen.set(e.id, tick());
 }
 function usedSlots() {
   const used = new Set();
@@ -512,8 +555,13 @@ function gcWaypoints(soldiers) {
       if (!used.has(slotOf(m)) && now - born > 30000) m.remove();
     } catch {}
   }
-  setJSON(world, "war:slotrefs", getRefs());
+  // (v9.0: a soldier not seen for an hour of play is gone for good, or so far away his old waypoints don't matter: his
+  //  entry goes, so the list doesn't grow with every soldier the world has ever had)
+  const now2 = tick(), refs = getRefs();
+  for (const id of Object.keys(refs)) { if (!refSeen.has(id)) refSeen.set(id, now2); else if (now2 - refSeen.get(id) > 72000) { delete refs[id]; refSeen.delete(id); } }
+  setJSON(world, "war:slotrefs", refs);
 }
+system.runTimeout(() => { try { if (world.getDynamicProperty("war:slotseen") !== undefined) world.setDynamicProperty("war:slotseen", undefined); } catch {} }, 100);   // (v9.0: a record nothing has used since v8.2)
 function nearestFlag(dim, loc, pred, maxD = 300) {
   let best, bd = maxD;
   for (const f of allOf(FLAG)) {
@@ -1431,16 +1479,6 @@ function reloadBar(v, st) {
   const filled = Math.round((1 - left / total) * 10);
   return `§c${name} §f${"█".repeat(filled)}§8${"█".repeat(10 - filled)} §f${Math.ceil(left / 20)}s`;
 }
-// where the shot will land, shown as a marker in the world
-function tankAim(v, pilot) {
-  const look = pilot.getViewDirection(), f = fwdFromYaw(v.getRotation().y), loc = v.location;
-  const ly = Math.max(-0.15, Math.min(0.3, look.y)), lh = Math.hypot(look.x, look.z) || 1;
-  const dir = { x: (look.x / lh) * Math.sqrt(1 - ly * ly), y: ly, z: (look.z / lh) * Math.sqrt(1 - ly * ly) };
-  const from = { x: loc.x + f.x * 4.2, y: loc.y + 1.5, z: loc.z + f.z * 4.2 };
-  let hit;
-  try { const b = v.dimension.getBlockFromRay(from, dir, { maxDistance: 100, includeLiquidBlocks: false, includePassableBlocks: false }); if (b) hit = { x: b.block.location.x + b.faceLocation.x, y: b.block.location.y + b.faceLocation.y, z: b.block.location.z + b.faceLocation.z }; } catch {}
-  return hit;
-}
 function bombAim(v, nv) {
   const dim = v.dimension;
   let p = { x: v.location.x, y: v.location.y - 1.2, z: v.location.z };
@@ -1549,7 +1587,6 @@ function blockedAhead(v, dir, reach, heights) {
   }
   return false;
 }
-function yawOf(d) { return (Math.atan2(-d.x, d.z) * 180) / Math.PI; }
 function turnToward(cur, want, maxStep) {
   const diff = ((want - cur + 540) % 360) - 180;
   return cur + Math.max(-maxStep, Math.min(maxStep, diff));
@@ -3110,16 +3147,6 @@ function isTargetFor(e, d, o) {
   if (["skeleton", "stray", "pillager", "witch", "blaze", "bogged"].some((k) => id.includes(k))) return dd <= 20;   // shooting at us
   return dd <= 9;                                                                      // anything hostile this close is a danger
 }
-function pickTarget(e, d, spec) {
-  const eye = headLoc(e);
-  let best, bd = spec.sight + 0.01;
-  for (const o of nearbyCombatants(e.dimension.id, e.location, spec.sight)) {
-    if (!isTargetFor(e, d, o)) continue;
-    const dd = dist(o.location, e.location);
-    if (dd < bd && clearShot(e.dimension, eye, chest(o))) { bd = dd; best = o; }
-  }
-  return best;
-}
 // Is a friendly (or ally) in or near the line of fire?
 function friendlyInLine(e, d, from, to, target) {
   const dx = to.x - from.x, dy = to.y - from.y, dz = to.z - from.z, L = Math.hypot(dx, dy, dz) || 1;
@@ -3693,7 +3720,6 @@ const aimedBy = new Map();     // target id -> Set(soldier ids whose threat he i
 system.runInterval(() => { for (const [id, set] of [...aimedBy]) { for (const sid of [...set]) if (perc.get(sid)?.threat?.id !== id) set.delete(sid); if (!set.size) aimedBy.delete(id); } }, 100);
 const squadTarget = new Map(); // "faction:squad" -> { id, t }
 const lastPos = new Map();     // combatant id -> {x,y,z,t}  (to tell moving from still)
-const P1 = () => perc;         // (debug handle)
 function pstate(e) {
   let s = perc.get(e.id);
   if (!s) { s = { seen: new Map(), threat: undefined, threatT: 0, lastSeen: undefined, lostT: 0, noise: undefined, noiseT: -999, alert: "calm", searchUntil: 0, pursue: 0 }; perc.set(e.id, s); }
@@ -4149,71 +4175,12 @@ function walkableNear(dim, x, z, refY) {
   }
   return undefined;
 }
-function hazardBetween(dim, a, b, allowWater = false) {
-  const n = Math.max(4, Math.ceil(Math.hypot(b.x - a.x, b.z - a.z)));
-  for (let i = 1; i < n; i++) {
-    const t = i / n, x = a.x + (b.x - a.x) * t, z = a.z + (b.z - a.z) * t;
-    const g = walkableNear(dim, x, z, a.y + (b.y - a.y) * t);       // is there walkable ground (a bridge counts)?
-    if (g) continue;
-    if (allowWater) {
-      try { const w = dim.getBlock({ x, y: Math.floor(a.y + (b.y - a.y) * t) - 1, z }); if (w && w.typeId.includes("water")) continue; } catch {}
-    }
-    return true;
-  }
-  return false;
-}
-function findGate(dim, from, dest) {
-  const fx = dest.x - from.x, fz = dest.z - from.z, l = Math.hypot(fx, fz) || 1;
-  let best, bd = 1e9;
-  for (let dx = -8; dx <= 8; dx++) for (let dz = -8; dz <= 8; dz++) for (const dy of [0, 1]) {
-    if ((dx * fx + dz * fz) / l < -2) continue; // only ahead-ish
-    try {
-      const b = dim.getBlock({ x: from.x + dx, y: Math.floor(from.y) + dy, z: from.z + dz });
-      if (!b || !(b.typeId.includes("door") || b.typeId.includes("fence_gate"))) continue;
-      const dd = Math.hypot(dest.x - (from.x + dx), dest.z - (from.z + dz));
-      if (dd < bd) { bd = dd; best = { x: Math.floor(from.x + dx) + 0.5, y: Math.floor(from.y) + dy, z: Math.floor(from.z + dz) + 0.5 }; }
-    } catch {}
-  }
-  return best;
-}
-function nextStage(dim, from, dest, m) {
-  const dry = nextStageInner(dim, from, dest, { ...m, wet: false });
-  if (dry) return dry;
-  return nextStageInner(dim, from, dest, { ...m, wet: true }); // no dry way: crossing water is allowed
-}
-function nextStageInner(dim, from, dest, m) {
-  const L = Math.hypot(dest.x - from.x, dest.z - from.z) || 1;
-  const base = Math.atan2(dest.z - from.z, dest.x - from.x);
-  const step = Math.min(16, L);
-  let best;
-  for (const a of [0, 20, -20, 40, -40, 60, -60, 85, -85]) {
-    const ang = base + ((a + (m.detour ?? 0)) * Math.PI) / 180;
-    for (const st of [step, step * 0.6]) {
-      const w = walkableNear(dim, from.x + Math.cos(ang) * st, from.z + Math.sin(ang) * st, from.y);
-      if (!w || hazardBetween(dim, from, w, !!m.wet)) continue;
-      const score = Math.hypot(dest.x - w.x, dest.z - w.z) + Math.abs(w.y - from.y) * 1.5;
-      if (!best || score < best.score) best = { ...w, score };
-    }
-    if (best && a === 0) break; // straight ahead works
-  }
-  return best;
-}
 const SHAPES = {
   column: [[0, 0], [0, -1], [0, -2], [0, -3], [0, -4], [0, -5]],
   line: [[-0.5, 0], [0.5, 0], [-1.5, 0], [1.5, 0], [-2.5, 0], [2.5, 0]],
   wedge: [[0, 0], [-1, -1], [1, -1], [-2, -2], [2, -2], [0, -2]],
   skirmish: [[-1.5, 0], [1.5, 0], [-3, -1], [3, -1], [-4.5, -1.5], [4.5, -1.5]],
 };
-function chooseShape(dim, pos, heading, members, now) {
-  const rx = -Math.sin(heading), rz = Math.cos(heading);
-  let width = 1;
-  for (const side of [1, -1]) for (let k = 1; k <= 4; k++) { if (!walkableNear(dim, pos.x + rx * k * side, pos.z + rz * k * side, pos.y)) break; width++; }
-  if (width < 5) return "column";                                                   // narrow: street, bridge, path
-  const underFire = members.some((e) => now - (hurtBy.get(e.id)?.t ?? -999) < 100);
-  if (underFire) return "skirmish";                                                 // spread out under fire
-  const enemyKnown = members.some((e) => perc.get(e.id)?.alert === "combat");
-  return enemyKnown ? "wedge" : "line";                                            // wedge toward a known enemy
-}
 function placeLanes(m, dim, center, heading, shape) {
   if (isIndoorsAt(dim, center)) {
     // indoors: on the march, single file along the route behind the guide (never all on one spot); on arrival,
@@ -4983,8 +4950,6 @@ const isPlate = (b) => !!b && TI(b.typeId).plate;
 // v5.3: blocks a soldier can open himself on the way (wooden trapdoors, fence gates); the route follower opens them
 const OPENABLE_ID = (id) => TI(id).openableId;
 const isOpenable = (b) => !!b && TI(b.typeId).openable;
-// fences, walls and fence gates are 1.5 high: nobody steps up onto them, so they are never a floor
-const isTall = (b) => !!b && TI(b.typeId).tall;
 const pathable = (b) => passable(b) || isOpenable(b);
 // a real floor: solid under the feet (a ladder counts: he can stand on its top rung); not a plant, torch, open trapdoor or fence
 const isFloor = (b) => { if (!b || b.isAir || b.isLiquid) return false; const t = TI(b.typeId); return !t.tall && !(t.trap && b.open) && (!t.pass || t.climb) && !t.leaves && !t.hazard; };

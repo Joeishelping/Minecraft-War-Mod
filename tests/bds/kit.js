@@ -63,6 +63,37 @@ function kitArrow(e, spec, from, v) {
 const KS = {};
 const Y = 100;
 function floorAt(x0, z0, x1, z1) { kfill(x0, Y - 1, z0, x1, Y - 1, z1, "stone"); kfill(x0, Y, z0, x1, Y + 20, z1, "air"); }
+// how Bedrock counts "MB of dynamic properties saved": N writes of a small value, to the world or to one soldier
+KS.dpbench = async (o, ox, oz) => {
+  const N = Number(o.n ?? 1000), who = o.on === "soldier" ? kitSoldier(1, { x: ox + 0.5, y: Y, z: oz + 0.5 }, "rifle", "hold") : world;
+  await kitWait(1300);                                                         // (a clean minute first)
+  const pad = "x".repeat(Number(o.size ?? 1));
+  for (let i = 0; i < N; i++) who.setDynamicProperty("war:bench", pad + (i % 10));
+  await kitWait(1300);
+  try { who.setDynamicProperty("war:bench", undefined); } catch {}
+  return { on: o.on ?? "world", n: N, size: who === world ? world.getDynamicPropertyTotalByteCount() : who.getDynamicPropertyTotalByteCount() };
+};
+// many soldiers, each changing one small value once a second for a minute (no AI: they're held)
+KS.dpmany = async (o, ox, oz) => {
+  const N = Number(o.n ?? 180), men = [];
+  floorAt(ox - 60, oz - 90, ox + 60, oz + 90);
+  for (let i = 0; i < N; i++) men.push(kitSoldier(1, { x: ox + (i % 20) * 3 - 30 + 0.5, y: Y, z: oz - 60 + Math.floor(i / 20) * 3 + 0.5 }, "rifle", "hold"));
+  await kitWait(1300);
+  for (let s = 0; s < 60; s++) { for (const e of men) { try { e.setDynamicProperty("war:bench", String(s % 10)); } catch {} } await kitWait(20); }
+  await kitWait(200);
+  return { n: N };
+};
+// entities that move but whose properties never change: is their whole record saved again when they move?
+KS.dpmove = async (o, ox, oz) => {
+  const N = Number(o.n ?? 180), men = [], pad = "x".repeat(Number(o.size ?? 2000));
+  floorAt(ox - 60, oz - 90, ox + 60, oz + 90);
+  for (let i = 0; i < N; i++) { const e = ow().spawnEntity("minecraft:armor_stand", { x: ox + (i % 20) * 3 - 30 + 0.5, y: Y, z: oz - 60 + Math.floor(i / 20) * 3 + 0.5 }); e.setDynamicProperty("war:pad", pad); men.push(e); }
+  await kitWait(1300);
+  for (let t = 0; t < 1200; t++) { const dx = t % 2 ? 0.1 : -0.1; for (const e of men) { try { const l = e.location; e.teleport({ x: l.x + dx, y: l.y, z: l.z }); } catch {} } await kitWait(1); }
+  await kitWait(200);
+  for (const e of men) { try { e.remove(); } catch {} }
+  return { n: N };
+};
 KS.siege = async (o, ox, oz) => {
   floorAt(ox - 20, oz - 50, ox + 60, oz + 40);
   const B = (x0, y0, z0, x1, y1, z1, b) => kfill(ox + x0, Y + y0, oz + z0, ox + x1, Y + y1, oz + z1, b);
@@ -286,7 +317,8 @@ system.afterEvents.scriptEventReceive.subscribe((ev) => {
       await kitWait(20);
       globalThis.__v9 = {};
       const res = await KS[name](o, ox, oz);
-      console.warn(`WARTEST ${JSON.stringify({ scenario: name, args: o, ...res, v9: globalThis.__v9, errors: ERRS.size })}`);
+      const dpSize = {}; try { const sizes = allOf(SOLDIER).map((e) => e.getDynamicPropertyTotalByteCount()); dpSize.soldierAvg = Math.round(sizes.reduce((t, v) => t + v, 0) / Math.max(1, sizes.length)); dpSize.soldierMax = Math.max(0, ...sizes); dpSize.world = world.getDynamicPropertyTotalByteCount(); const big = allOf(SOLDIER)[0]; if (big) dpSize.keys = big.getDynamicPropertyIds().map((k) => `${k}:${String(big.getDynamicProperty(k) ?? "").length}`).sort((x, y) => Number(y.split(":").pop()) - Number(x.split(":").pop())).slice(0, 8); const wk = world.getDynamicPropertyIds().map((k) => `${k}:${String(world.getDynamicProperty(k) ?? "").length}`).sort((x, y) => Number(y.split(":").pop()) - Number(x.split(":").pop())).slice(0, 8); dpSize.worldKeys = wk; } catch (err) { dpSize.err = String(err); }
+      console.warn(`WARTEST ${JSON.stringify({ scenario: name, args: o, ...res, v9: globalThis.__v9, dpSize, errors: ERRS.size, errList: [...ERRS].slice(0, 3) })}`);
     } catch (err) { console.warn(`WARTEST ${JSON.stringify({ scenario: name, args: o, crash: String(err), stack: String(err?.stack ?? "").slice(0, 300) })}`); }
     finally {
       for (const e of allOf(SOLDIER)) { try { e.remove(); } catch {} }
@@ -316,9 +348,9 @@ system.run(() => {
 });
 // dynamic-property writes, by key: count and bytes (the server warns above 10 MB a minute)
 const DPSTAT = new Map(); let dpWrapped = false;
-function dpWrap(obj) { const proto = Object.getPrototypeOf(obj), f = proto.setDynamicProperty; if (!f || f.__kit) return; const w = function (k, v) { const r = DPSTAT.get(k) ?? { n: 0, b: 0 }; r.n++; r.b += v === undefined ? 0 : typeof v === "string" ? v.length : 8; DPSTAT.set(k, r); return f.call(this, k, v); }; w.__kit = true; proto.setDynamicProperty = w; }
+function dpWrap(obj) { const proto = Object.getPrototypeOf(obj), f = proto.setDynamicProperty; if (!f || f.__kit) return; const w = function (k, v) { const ty = this === world ? "W" : String(this.typeId ?? "?").replace("war:", ""); const r = DPSTAT.get(`${ty}/${k}`) ?? { n: 0, b: 0 }; r.n++; r.b += v === undefined ? 0 : typeof v === "string" ? v.length : 8; DPSTAT.set(`${ty}/${k}`, r); return f.call(this, k, v); }; w.__kit = true; proto.setDynamicProperty = w; }
 system.runInterval(() => { if (dpWrapped) return; try { dpWrap(world); const s = allOf(SOLDIER)[0] ?? allOf(WAYPOINT)[0]; if (s) { dpWrap(s); dpWrapped = true; } } catch {} }, 20);
-globalThis.__dpReport = () => { const a = [...DPSTAT].sort((x, y) => y[1].b - x[1].b).slice(0, 12).map(([k, r]) => `${k}:${r.n}x/${(r.b / 1024).toFixed(0)}KB`); DPSTAT.clear(); return a; };
+globalThis.__dpReport = () => { const a = [...DPSTAT].sort((x, y) => y[1].n - x[1].n).slice(0, 16).map(([k, r]) => `${k}:${r.n}x/${(r.b / 1024).toFixed(0)}KB`); DPSTAT.clear(); return a; };
 // entity events (component group swaps) and teleports, counted
 const EVSTAT = new Map(); let evWrapped = false;
 system.runInterval(() => { if (evWrapped) return; try { const s = allOf(SOLDIER)[0]; if (!s) return; const proto = Object.getPrototypeOf(s); for (const fn of ["triggerEvent", "teleport", "applyImpulse", "clearVelocity", "addTag", "removeTag", "setProperty"]) { const f = proto[fn]; if (!f || f.__kit) continue; const w = function (...a) { let k = fn === "triggerEvent" ? `ev:${String(a[0]).split(":").pop().replace(/[0-9]+$/, "#")}` : fn; if (fn === "teleport") { const ln = (new Error().stack ?? "").split("\n").slice(2, 4).map((x) => (x.match(/main\.js:(\d+)/) ?? [])[1]).join("<"); k = `tp@${ln}${this.typeId === SOLDIER ? "" : ":mk"}`; } EVSTAT.set(k, (EVSTAT.get(k) ?? 0) + 1); return f.apply(this, a); }; w.__kit = true; proto[fn] = w; } evWrapped = true; } catch {} }, 20);
