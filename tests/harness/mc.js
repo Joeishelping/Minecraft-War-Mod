@@ -18,7 +18,7 @@ export function seed(n) { rs = n >>> 0 || 1; }
 Math.random = () => { rs ^= rs << 13; rs >>>= 0; rs ^= rs >>> 17; rs ^= rs << 5; rs >>>= 0; return rs / 4294967296; };
 
 // ---------------------------------------------------------------- blocks
-const PASS = ["short_grass", "tall_grass", "fern", "flower", "torch", "carpet", "pressure_plate", "ladder", "vine", "button", "sign", "rail"];
+const PASS = ["short_grass", "tall_grass", "fern", "flower", "torch", "carpet", "pressure_plate", "ladder", "vine", "button", "sign", "rail", "web"];
 const k3 = (x, y, z) => `${x},${y},${z}`;
 export function rayExact(from, to) {                           // (the harness's own line-of-sight: exact, not the game's ray)
   const dx = to.x - from.x, dy = to.y - from.y, dz = to.z - from.z, L = Math.hypot(dx, dy, dz) || 1;

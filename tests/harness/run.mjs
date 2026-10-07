@@ -16,7 +16,7 @@ const runDir = path.join(here, `run_${process.pid}`);
 fs.mkdirSync(runDir, { recursive: true });
 fs.cpSync(scriptsDir, runDir, { recursive: true });
 // expose the add-on's internals to the scenarios (appended to the copy only)
-const HOOK = ["BALL", "entrances", "doorWatchSpot", "buildingCells", "show", "sortPerm", "shotAt", "canHit", "aimAt", "closeEnemy", "friendlyInLine", "bangCount", "wallbang", "WALLBANG", "perchSpot", "safeSpot", "dangerNear", "voiceMenu", "callout", "warTable", "eggUse", "getRel", "relAt", "fires", "coalitions", "held", "holding", "stagger", "putDown", "allOf", "edgeFearT", "cleanupMenu", "purgeState", "gliders", "glideBan", "driveOn", "formMode", "tightAt", "combatLock", "routeProgress", "getLearned", "learned", "generals", "planRoute", "BW", "BW_F", "HEAD_K", "medicMove", "shakenMove", "waterExit", "followPersonal", "spreadMove", "combatMove", "engagement", "reinforceMove", "patrolSweep", "marker", "think", "routeOf", "lookahead", "queuedBehind", "climbing", "laneOf", "trackIdx", "giveOrder", "startMarch", "giveFunction", "setupSoldier", "sd", "perc", "squads", "getMarches", "personal", "downed", "goDown", "marker", "gunState", "brain", "notes", "setRelPair", "travel", "isDowned"];
+const HOOK = ["isoSurrender", "setRelPair", "warFlagPlaced", "BALL", "entrances", "doorWatchSpot", "buildingCells", "show", "sortPerm", "shotAt", "canHit", "aimAt", "closeEnemy", "friendlyInLine", "bangCount", "wallbang", "WALLBANG", "perchSpot", "safeSpot", "dangerNear", "voiceMenu", "callout", "warTable", "eggUse", "getRel", "relAt", "fires", "coalitions", "held", "holding", "stagger", "putDown", "allOf", "edgeFearT", "cleanupMenu", "purgeState", "gliders", "glideBan", "driveOn", "formMode", "tightAt", "combatLock", "routeProgress", "getLearned", "learned", "generals", "planRoute", "BW", "BW_F", "HEAD_K", "medicMove", "shakenMove", "waterExit", "followPersonal", "spreadMove", "combatMove", "engagement", "reinforceMove", "patrolSweep", "marker", "think", "routeOf", "lookahead", "queuedBehind", "climbing", "laneOf", "trackIdx", "giveOrder", "startMarch", "giveFunction", "setupSoldier", "sd", "perc", "squads", "getMarches", "personal", "downed", "goDown", "marker", "gunState", "brain", "notes", "setRelPair", "travel", "isDowned"];
 if (opt.thinkdbg) { const f = path.join(runDir, "main.js"); fs.writeFileSync(f, fs.readFileSync(f, "utf8").replace("    // how far each stationary order may leave its spot to fight", "    if (globalThis.__thinkDbg) globalThis.__thinkDbg(e, engaged, cu, d);\n    // how far each stationary order may leave its spot to fight")); }
 fs.appendFileSync(path.join(runDir, "main.js"), `\nglobalThis.__war = {};\n${HOOK.map((n) => `try { globalThis.__war.${n} = ${n}; } catch {}`).join("\n")}\n`);
 loadDefs(path.join(root, "War Engine BP"));
@@ -140,6 +140,41 @@ const report = (o) => { if (opt.voices) console.error((SIM.voices ?? []).join("\
 
 // ---------------------------------------------------------------- scenarios
 const S = {
+  // v9.1: cobwebs. A wall across the way with a doorway full of cobweb; mode=detour also a clear gap 15 blocks aside.
+  // With the gap they go round (no man in a cobweb); with only the cobweb they still get through (it's not a wall).
+  async webs() {
+    SIM.bounds = { x0: -60, x1: 60, z0: -20, z1: 100, y0: -10, y1: 30 };
+    fill(-60, 0, 40, 60, 3, 41, "stone_bricks");
+    fill(-1, 0, 40, 1, 1, 41, "web");
+    if (opt.mode === "detour") fill(14, 0, 40, 15, 1, 41, "air");
+    spawnPlayer({ x: 0, y: 0, z: -10 });
+    for (let i = 0; i < 6; i++) soldier(1, { x: (i % 3) * 2 - 2 + 0.5, y: 0, z: Math.floor(i / 3) * 2 + 0.5 }, "rifle");
+    step(20);
+    await order(1, { x: 0, y: 0, z: 80 });
+    let inWeb = 0, arrived = -1; const t0 = SIM.tick;
+    for (let t = 0; t < Number(opt.ticks ?? 2400) && arrived < 0; t += 5) {
+      step(5);
+      for (const e of alive(1)) { const l = e._loc; if (MC.idAt(l.x, l.y + 0.1, l.z).includes("web") || MC.idAt(l.x, l.y + 1.1, l.z).includes("web")) inWeb++; }
+      if (alive(1).filter((e) => e._loc.z > 70).length >= 5) arrived = SIM.tick - t0;
+    }
+    report({ mode: opt.mode ?? "only", arrivedTicks: arrived, there: alive(1).filter((e) => e._loc.z > 70).length, webSamples: inWeb });
+  },
+  // v9.1: a man who surrenders stays surrendered: the enemy leaves, the war ends, his side raises its flag again
+  async surrenderStays() {
+    SIM.bounds = { x0: -40, x1: 40, z0: -40, z1: 40, y0: -10, y1: 30 };
+    spawnPlayer({ x: 0, y: 0, z: -30 });
+    const man = soldier(1, { x: 0.5, y: 0, z: 0.5 }, "rifle");
+    const foes = []; for (let i = 0; i < 5; i++) foes.push(soldier(2, { x: -4 + i * 2 + 0.5, y: 0, z: 8.5 }, "rifle"));
+    step(20);
+    W.isoSurrender(man, 2);
+    const at = {};
+    at.start = !!W.sd(man).surr;
+    for (const f of foes) f.remove();
+    step(800); at.enemyGone = !!W.sd(man).surr;                  // (before: rejoined 20 s after the enemy left)
+    W.setRelPair(1, 2, "0", false); step(200); at.peace = !!W.sd(man).surr;   // (before: rejoined when the war ended)
+    W.warFlagPlaced(1); step(200); at.flagRaised = !!W.sd(man).surr;        // (before: rejoined when his side raised its flag)
+    report({ surrendered: at, shooting: W.gunState.get(man.id)?.lastShot ?? -1 });
+  },
   async load() { step(40); report({ ok: SIM.errors.length === 0 }); },
 
   // a squad on the top floor ordered out of the building to a point outside: down two 1-wide staircases and a door

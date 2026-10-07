@@ -746,9 +746,8 @@ function think(e) {
   const parked = gdp(e, "war:ordergoal");
   if (parked !== undefined) d.goal = Number(parked);
   if (d.surr) {
-    // resume when the war with the captor is over
-    if (!isHostile(d.faction, d.surr)) resume(e);
-    else setGroups(e, { w: "w_none", t: "t_off", g: "g_post", s: "s_1", d: "d_off", r: "r_off" });
+    // (v9.1: a man who surrendered stays surrendered, war or peace, until a player of his own faction comes for him)
+    setGroups(e, { w: "w_none", t: "t_off", g: "g_post", s: "s_1", d: "d_off", r: "r_off" });
     return;
   }
   const riding = isRiding(e);
@@ -1440,7 +1439,6 @@ function warFlagPlaced(f) {
   if (list.length) say(`${factionLabel(f)} §fraised its war flag again. §cThe war resumes.`);
   delete store[f];
   setJSON(world, "war:withdrawn", store);
-  for (const e of allOf(SOLDIER)) { try { if (Number(P(e, "war:faction")) === f && gdp(e, "war:surr")) resume(e); } catch {} }
   for (const e of [...allOf(SOLDIER), ...allOf(HOUND)]) { try { applyRelations(e); } catch {} }
 }
 
@@ -4151,8 +4149,9 @@ function TI(id) {
     tall: id.includes("fence") || /_wall$/.test(id) || id.endsWith(":cobblestone_wall"),
     trap, leaves: id.includes("leaves"), hazard: HAZARD.some((h) => id.includes(h)), water: id.includes("water"),
     stairs: id.includes("stairs") || id.includes("slab"),
+    web: id === "minecraft:web" || id.endsWith("cobweb"),
   };
-  t.pass = t.woodDoor || t.plantish;
+  t.pass = t.woodDoor || t.plantish || t.web;   // (v9.1: a cobweb can be walked through, slowly: routes go round it if they can)
   TYPE_INFO.set(id, t);
   return t;
 }
@@ -4996,7 +4995,8 @@ function cellAt(job, x, z, refY) {
         }
       } catch {}  // natural rock overhead: underground
       const hatchBelow = job.step === 1 && floor.typeId.includes("trapdoor") && isClimb(tBlock(dim, bx, y - 2, bz));     // standing on a hatch over a ladder: can go down
-      found = { x, z, y, w: false, shore, cave, ledge, open: job.step === 1 && (isOpenable(feet) || isOpenable(head) || isWoodDoor(feet)) && !isClimb(feet), climb: job.step === 1 && (isClimb(floor) || hatchBelow) }; break;   // standing on top of a ladder: can climb down
+      const web = TI(feet.typeId).web || TI(head.typeId).web;
+      found = { x, z, y, w: false, shore, cave, ledge, web, open: job.step === 1 && (isOpenable(feet) || isOpenable(head) || isWoodDoor(feet)) && !isClimb(feet), climb: job.step === 1 && (isClimb(floor) || hatchBelow) }; break;   // standing on top of a ladder: can climb down
     }
   } catch { job.cells.set(key, { unloaded: true }); job.hitUnloaded = true; return null; }  // unloaded: can't plan through it
   job.cells.set(key, found ?? { miss: Math.floor(refY) });
@@ -5045,6 +5045,7 @@ function stepCost(a, b, diag, job) {
   if (b.ledge) base += 1.2;                                      // keep away from the edge of a drop
   if (b.open) base += 0.5;                                       // a trapdoor / gate to open: fine, but not for nothing
   if (b.cave) base += 8 * (job?.step ?? 1);                     // caves are traps: only if there's truly no open route
+  if (b.web) base += 25 * (job?.step ?? 1);                     // v9.1: a cobweb (crawling through it): round it unless that's 25 blocks longer
   return base;
 }
 class Heap {
@@ -5664,6 +5665,7 @@ function standAt(dim, x, y, z, now = tick()) {
   STAND.set(k, { v, t: now });
   return v;
 }
+const webAt = (dim, x, y, z) => { try { return TI(tBlock(dim, x + 0.5, y, z + 0.5)?.typeId ?? "").web || TI(tBlock(dim, x + 0.5, y + 1, z + 0.5)?.typeId ?? "").web; } catch { return false; } };
 // v5.9: a walk in a straight line, a block at a time, up or down at most one block per step (most spots in the open)
 function straightReach(dim, from, to, endOk = false) {
   const L = flat(from, to);
@@ -5673,6 +5675,7 @@ function straightReach(dim, from, to, endOk = false) {
   for (let k = 1; k <= n; k++) {
     const x = Math.floor(from.x + ((to.x - from.x) * k) / n), z = Math.floor(from.z + ((to.z - from.z) * k) / n);
     if (dangerNear(dim, { x: x + 0.5, y, z: z + 0.5 }) && !(endOk && k === n)) return false;   // v6.2: past an edge / lava: not a walk for Minecraft (v6.9: but a perch at the end is)
+    if (webAt(dim, x, y, z)) return false;                                      // (v9.1: a cobweb on the line: not a walk, a route)
     if (standAt(dim, x, y, z, now)) continue;
     if (standAt(dim, x, y + 1, z, now)) {                                       // a step up: room over his head to jump it
       const px = from.x + ((to.x - from.x) * (k - 1)) / n, pz = from.z + ((to.z - from.z) * (k - 1)) / n;
@@ -5701,7 +5704,7 @@ function shortPath(dim, from, to, maxNodes = 700) {
     for (const [dx, dz] of [[1, 0], [-1, 0], [0, 1], [0, -1]]) for (const dy of [0, 1, -1, -2]) {
       const nx = x + dx, nz = z + dz, ny = y + dy, k = rk(nx, ny, nz);
       if (par.has(k) || Math.abs(nx - sx) > 15 || Math.abs(nz - sz) > 15) continue;
-      if (!standAt(dim, nx, ny, nz, now)) continue;
+      if (!standAt(dim, nx, ny, nz, now) || webAt(dim, nx, ny, nz)) continue;   // (v9.1: short moves don't crawl through cobwebs; a real route can)
       if (dy === 1) { try { if (!passable(tBlock(dim, x + 0.5, y + 2, z + 0.5))) continue; } catch { continue; } }
       par.set(k, rk(x, y, z)); q.push([nx, ny, nz]); break;
     }
@@ -6787,6 +6790,7 @@ async function captiveMenu(p, e) {
   const friendly = isFriendly(pf, ef);
   if (isPow(e)) {
     const pw = pows.get(e.id);
+    if (friendly && pf !== ef) { p.onScreenDisplay.setActionBar("§7A prisoner. Only his own side can free him."); return; }
     if (friendly) { const r = await show(new ActionFormData().title("Captured comrade").button("Free and rearm him"), p); if (r && !r.canceled && r.selection === 0) { freePow(e, true); p.onScreenDisplay.setActionBar("§aFreed and rearmed."); } return; }
     const r = await show(new ActionFormData().title("Prisoner").button(pw.mode === "jail" ? "Follow me" : "Imprison (stay here)").button("Release (goes home unarmed)").button("§cKill"), p);
     if (!r || r.canceled || r.selection === undefined || !e.isValid) return;
@@ -8300,7 +8304,8 @@ system.runInterval(() => {
 
 // ---- surrender when cut off (War Table -> Settings -> General): alone (no friend within 12 blocks) in a fight with
 // 5+ enemies around, or 3+ while badly hurt. Hands up: nobody shoots him. An enemy player right-clicks to take him
-// prisoner; a friendly player right-click frees him; if the enemy moves on, he rejoins his unit.
+// prisoner; only a player of his own faction can bring him back (v9.1: before, he also rejoined once the enemy moved
+// on, or the war ended, or his faction raised its flag again: a surrender is now a surrender).
 function isoSurrender(e, captor) {
   for (const k of [...provoked.keys()]) if (k.endsWith(`:${e.id}`)) provoked.delete(k);   // no longer a target for anyone
   personal.delete(e.id); travelTo.delete(e.id); drill.delete(e.id);
@@ -8309,23 +8314,12 @@ function isoSurrender(e, captor) {
   radio(e, "one of ours was cut off and surrendered", true);
   updateName(e);
 }
-function isoRelease(e, d) {
-  const since = Number(gdp(e, "war:surrIso") ?? 0);
-  if (!since || Date.now() - since < 20000) return;                       // (flag-capture surrenders keep the old rules)
-  for (const o of nearbyCombatants(e.dimension.id, e.location, 16)) {
-    if (o.id === e.id || isMob(o) || VEHICLES.includes(o.typeId)) continue;
-    if (o.typeId === SOLDIER && (downed.has(o.id) || pows.has(o.id))) continue;
-    if (isHostile(d.faction, factionOf(o))) return;
-  }
-  sdp(e, "war:surrIso", undefined);
-  resume(e);
-}
 system.runInterval(() => {
   const on = !!setting("isosurr", true), now = tick();
   for (const e of allOf(SOLDIER)) {
     try {
       const d = sd(e);
-      if (d.surr) { isoRelease(e, d); continue; }
+      if (d.surr) continue;                                                 // (v9.1: he stays that way until his own side comes for him)
       if (!on || !d.faction || downed.has(e.id) || pows.has(e.id) || isRiding(e) || d.div === "guard" || d.func === "escort") continue;
       if (!perc.get(e.id)?.threat && now - Number(gdp(e, "war:hurt") ?? -9999) > 200) continue;
       let friends = 0, foes = 0, nearest, nd = 1e9;
@@ -8346,13 +8340,14 @@ system.runInterval(() => {
 }, 60);
 world.afterEvents.playerInteractWithEntity.subscribe((ev) => {
   const e = ev.target, p = ev.player;
-  if (e?.typeId !== SOLDIER || !gdp(e, "war:surrIso") || pows.has(e.id)) return;
+  if (e?.typeId !== SOLDIER || !gdp(e, "war:surr") || pows.has(e.id)) return;   // (v9.1: any surrendered man, cut off or at a lost flag)
   if ((ev.beforeItemStack ?? ev.itemStack)?.typeId === "war:unit_wand") return;
   system.run(() => {
     try {
       if (!e.isValid) return;
       const f = Number(P(e, "war:faction")), pf = playerFaction(p);
-      if (isFriendly(pf, f)) { sdp(e, "war:surrIso", undefined); resume(e); p.onScreenDisplay.setActionBar("§aHe's back with us."); return; }
+      if (pf && pf === f) { sdp(e, "war:surrIso", undefined); resume(e); p.onScreenDisplay.setActionBar("§aHe's back with us."); return; }
+      if (!isHostile(pf, f)) { p.onScreenDisplay.setActionBar("§7He's surrendered. Only his own side can bring him back."); return; }
       sdp(e, "war:surr", 0); sdp(e, "war:surrIso", undefined);
       makePow(e, p); applyRelations(e);
       p.onScreenDisplay.setActionBar("§aTaken prisoner. He follows you at a distance.");
