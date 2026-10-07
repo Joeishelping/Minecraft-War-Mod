@@ -956,7 +956,7 @@ function throwerKite(e, d, now) {
   return false;
 }
 function molotov(e, d, now) {
-  if (downed.has(e.id) || d.surr) return;
+  if (downed.has(e.id) || d.surr || SAFE.has(e.id)) return;
   if (throwerKite(e, d, now)) return;
   let n = Number(gdp(e, "war:molo") ?? MOLO.max);
   if (n < MOLO.max && now - Number(gdp(e, "war:molor") ?? now) > MOLO.refill) { n++; sdp(e, "war:molo", n); sdp(e, "war:molor", n < MOLO.max ? now : undefined); }
@@ -966,7 +966,7 @@ function molotov(e, d, now) {
   // the best target in reach: the enemy with the most enemies packed around him (a bottle on a crowd)
   let t, bs = -1e9;
   for (const c of nearSnap(e.dimension.id, e.location, MOLO.rMax)) {
-    if (c.down || !c.f || !isHostile(d.faction, c.f) || !c.e.isValid || downed.has(c.id) || c.dd < MOLO.rMin) continue;
+    if (c.down || !c.f || !isHostile(d.faction, c.f) || !c.e.isValid || downed.has(c.id) || c.dd < MOLO.rMin || SAFE.has(c.id)) continue;
     let pack = 0; for (const q of nearSnap(e.dimension.id, c, MOLO.radius + 0.5)) if (!q.down && q.f && isHostile(d.faction, q.f)) pack++;
     const sc = pack * 3 - c.dd * 0.1;
     if (sc > bs) { bs = sc; t = c.e; }
@@ -1031,7 +1031,7 @@ const THROW_RANGE = 20;
 const squadNade = new Map();
 const liveNades = []; // { dim, at, boom, by }
 function grenade(e, d, now) {
-  if (downed.has(e.id) || d.surr) return;
+  if (downed.has(e.id) || d.surr || SAFE.has(e.id)) return;
   if (throwerKite(e, d, now)) return;
   let n = Number(gdp(e, "war:nade") ?? NADE.max);
   if (n < NADE.max && now - Number(gdp(e, "war:nader") ?? now) > NADE.refill) { n++; sdp(e, "war:nade", n); sdp(e, "war:nader", n < NADE.max ? now : undefined); }
@@ -1040,7 +1040,7 @@ function grenade(e, d, now) {
   if (now < (squadNade.get(sq) ?? 0)) return;
   let t, bs = -1e9;
   for (const c of nearSnap(e.dimension.id, e.location, NADE.rMax)) {
-    if (c.down || !c.f || !isHostile(d.faction, c.f) || !c.e.isValid || downed.has(c.id) || c.dd < NADE.rMin) continue;
+    if (c.down || !c.f || !isHostile(d.faction, c.f) || !c.e.isValid || downed.has(c.id) || c.dd < NADE.rMin || SAFE.has(c.id)) continue;
     let pack = 0; for (const q of nearSnap(e.dimension.id, c, 3.5)) if (!q.down && q.f && isHostile(d.faction, q.f)) pack++;
     const sc = pack * 3 - c.dd * 0.1;
     if (sc > bs) { bs = sc; t = c.e; }
@@ -2204,7 +2204,7 @@ async function giveOrderInner(player, cfg, given) {
   let slot, spotCenter, march;
   if (order === "charge") {
     const pt = chargePoint(player, cfg);
-    if (!pt) { player.onScreenDisplay.setActionBar("§cCouldn't find that position."); return; }
+    if (!pt) { player.onScreenDisplay.setActionBar(cfg.target === 1 ? "§cNo enemy war flag within 400 blocks. §7(Only flags of factions you're at war with count; rally flags don't.)" : "§cCouldn't find that position."); return; }
     let dest = pt;
     if ("slot" in pt) { const fl = marker(pt.slot); dest = fl ? { x: fl.location.x, y: fl.location.y, z: fl.location.z } : undefined; }
     const cxz = pool.reduce((a, e) => ({ x: a.x + e.location.x / pool.length, y: a.y + e.location.y / pool.length, z: a.z + e.location.z / pool.length }), { x: 0, y: 0, z: 0 });
@@ -2410,11 +2410,12 @@ async function placeFlag(player) {
 // ================================================================ War Table
 async function warTable(player, pre) {
   const af = new ActionFormData().title("War Table").body(`Your faction: ${factionLabel(playerFaction(player))}`)
-    .button("Join a faction").button("Leave my faction").button("Diplomacy").button("Name factions").button("Name squads").button("Settings").button("Coalitions").button("War archive").button("Test battle").button("Cleanup / repair");
+    .button("Join a faction").button("Leave my faction").button("Diplomacy").button("Name factions").button("Name squads").button("Settings").button("Coalitions").button("War archive").button("Test battle").button("Cleanup / repair").button("Neutral zones");
   const r = pre !== undefined ? { selection: pre, canceled: false } : await show(af, player);
   if (!r || r.canceled || r.selection === undefined) return;
   if (r.selection === 8) { await testBattle(player); return; }
   if (r.selection === 9) { await cleanupMenu(player); return; }
+  if (r.selection === 10) { await zoneMenu(player); return; }
   const pickFaction = async (title) => {
     const jf = new ActionFormData().title(title);
     for (const l of factionList()) jf.button(l);
@@ -3131,6 +3132,7 @@ function playerFair(p) {
 }
 function isTargetFor(e, d, o) {
   if (o.id === e.id) return false;
+  if (SAFE.size && (SAFE.has(o.id) || SAFE.has(e.id)) && !isMob(o)) return false;   // (v9.1: a neutral zone: nobody fights in or into it; a zombie is still a zombie)
   if (o.typeId === SOLDIER && (downed.has(o.id) || pows.has(o.id))) return false;   // nobody shoots the downed or prisoners
   if (d.weapon === "at" && (VEHICLES.includes(o.typeId) || d.div !== "grenadier")) return VEHICLES.includes(o.typeId) && isHostile(d.faction, vehicleFaction(o));   // (v6.9.1: the Demolition bazooka fires at men too)
   if (d.weapon === "at" && isMob(o)) return false;                    // (v6.9.3: never a rocket at a zombie or a creeper: only the enemy's army)
@@ -3299,6 +3301,7 @@ function hittable(o, shooter) {
   try {
     if (!o?.isValid || o.id === shooter.id || NOT_HITTABLE.includes(o.typeId) || o.typeId.includes("projectile")) return false;
     if (o.typeId === SOLDIER && (downed.has(o.id) || pows.has(o.id))) return false;     // (a round never finishes off the wounded)
+    if (SAFE.has(o.id) && !isMob(shooter)) return false;                               // (v9.1: nor lands on anyone in a neutral zone)
     if (o.typeId === "minecraft:player") return playerFair(o);
     return !!o.getComponent("minecraft:health");
   } catch { return false; }
@@ -5485,7 +5488,7 @@ system.runInterval(() => {
       for (const e of ours) { const fa = firedAt.get(e.id); if (fa && now - fa.t < 40) { const o = world.getEntity(fa.by); if (o?.isValid && !downed.has(o.id)) hearIt(S, o, o.location, now - 20); } }
       // (v8.2: a player in creative or spectator mode is never an enemy the squad knows about: heard or seen, he isn't
       //  hunted, grenaded or given covering fire; before, only the aimed shot skipped him)
-      for (const [id, kk] of [...S.known]) if (!kk.ent.isValid || now - kk.t > 300 || downed.has(id) || pows.has(id) || (kk.ent.typeId === "minecraft:player" && !playerFair(kk.ent))) S.known.delete(id);
+      for (const [id, kk] of [...S.known]) if (!kk.ent.isValid || SAFE.has(id) || now - kk.t > 300 || downed.has(id) || pows.has(id) || (kk.ent.typeId === "minecraft:player" && !playerFair(kk.ent))) S.known.delete(id);
       const known = [...S.known.values()];
       const oc = { x: 0, y: 0, z: 0 }; for (const e of ours) { oc.x += e.location.x; oc.y += e.location.y; oc.z += e.location.z; }
       oc.x /= ours.length; oc.y /= ours.length; oc.z /= ours.length; S.ourC = oc;
@@ -9493,6 +9496,71 @@ function ambushQuiet(e) {
   try { const S = squads.get(squadKey(e, sd(e))); return !!S?.amb && tick() < S.amb.until; } catch { return false; }
 }
 
+// ================================================================ v9.1: neutral zones
+// An area (a circle, every height) where nobody fights: think of a UN building. Anyone standing inside it (soldier,
+// war dog, player) can't be targeted by soldiers and doesn't target anyone; a stray round doesn't land on him there;
+// no grenade goes in or comes out; squads don't hunt men who are inside. Mobs (zombies...) are still fought.
+// War Table -> Neutral zones: add one where you stand (name, radius), show the borders, remove one.
+const SAFE = new Set();     // ids of everyone inside a zone right now (updated twice a second)
+let ZONES = null;           // [{ id, name, dim, x, z, r }]
+const getZones = () => (ZONES ??= getJSON(world, "war:zones", []));
+const saveZones = () => setJSON(world, "war:zones", ZONES ?? []);
+function zoneAt(dimId, loc) { for (const z of getZones()) if (z.dim === dimId && Math.hypot(loc.x - z.x, loc.z - z.z) <= z.r) return z; return undefined; }
+system.runInterval(() => {
+  try {
+    if (!getZones().length) { if (SAFE.size) { for (const id of SAFE) { try { world.getEntity(id)?.removeTag("war_safe"); } catch {} } SAFE.clear(); } return; }
+    const now = new Set();
+    for (const e of [...allOf(SOLDIER), ...allOf(HOUND), ...world.getAllPlayers()]) {
+      try { if (zoneAt(e.dimension.id, e.location)) now.add(e.id); } catch {}
+    }
+    for (const id of SAFE) if (!now.has(id)) { SAFE.delete(id); try { world.getEntity(id)?.removeTag("war_safe"); } catch {} }
+    for (const id of now) if (!SAFE.has(id)) {
+      SAFE.add(id);
+      try {
+        const e = world.getEntity(id); e?.addTag("war_safe");
+        const st = gunState.get(id); if (st) { st.target = undefined; st.supp = undefined; }
+        const ps = perc.get(id); if (ps) ps.threat = undefined;
+      } catch {}
+    }
+  } catch (err) { oops("neutral zones", err); }
+}, 10);
+// the border, drawn in particles for a while (from the menu)
+function showZone(z, dim, ticks = 200) {
+  const n = Math.max(24, Math.min(120, Math.round(z.r * 2)));
+  for (let t = 0; t < ticks; t += 20) system.runTimeout(() => {
+    for (let i = 0; i < n; i++) {
+      const a = (i / n) * Math.PI * 2, x = z.x + Math.cos(a) * z.r, zz = z.z + Math.sin(a) * z.r;
+      const g = walkableNear(dim, x, zz, z.y ?? 64);
+      try { dim.spawnParticle("minecraft:villager_happy", { x, y: (g?.y ?? z.y ?? 64) + 0.6, z: zz }); } catch {}
+    }
+  }, t);
+}
+async function zoneMenu(player) {
+  const zones = getZones(), here = player.dimension.id;
+  const af = new ActionFormData().title("Neutral zones").body(zones.length ? `${zones.length} zone${zones.length === 1 ? "" : "s"}. Nobody fights inside one.` : "No zones yet. Nobody fights inside one (soldiers, war dogs, players). Mobs are still fought.");
+  const opts = [["add", "Add a zone here"]];
+  if (zones.some((z) => z.dim === here)) opts.push(["show", "Show the borders (10 s)"]);
+  for (const z of zones) opts.push([`del:${z.id}`, `§cRemove: §r${z.name} §8(r ${z.r}${z.dim !== here ? ", other dimension" : `, ${Math.round(Math.hypot(player.location.x - z.x, player.location.z - z.z))} away`})`]);
+  for (const o of opts) af.button(o[1]);
+  const r = await show(af, player);
+  if (!r || r.canceled || r.selection === undefined) return;
+  const pick = opts[r.selection][0];
+  if (pick === "show") { for (const z of zones) if (z.dim === here) showZone(z, player.dimension); return; }
+  if (pick.startsWith("del:")) {
+    const id = pick.slice(4), z = zones.find((q) => q.id === id);
+    ZONES = zones.filter((q) => q.id !== id); saveZones();
+    if (z) { say(`§7Neutral zone §f${z.name}§7 removed.`); chronLog(`${player.name} removed the neutral zone ${z.name}.`); }
+    return;
+  }
+  const mf = new ModalFormData().title("New neutral zone").textField("Name", "UN building", { defaultValue: `Neutral zone ${zones.length + 1}` }).slider("Radius (blocks)", 4, 128, { valueStep: 4, defaultValue: 24 });
+  const mr = await show(mf, player);
+  if (!mr || mr.canceled || !mr.formValues) return;
+  const l = player.location, z = { id: `${Date.now().toString(36)}${Math.floor(Math.random() * 1296).toString(36)}`, name: String(mr.formValues[0]).trim().slice(0, 32) || `Neutral zone ${zones.length + 1}`, dim: here, x: Math.round(l.x * 2) / 2, y: Math.floor(l.y), z: Math.round(l.z * 2) / 2, r: Number(mr.formValues[1]) };
+  ZONES = [...zones, z]; saveZones();
+  say(`§aNeutral zone §f${z.name}§a set up ${placeName(player.dimension, l)} (radius ${z.r}). Nobody fights inside it.`);
+  chronLog(`${player.name} set up the neutral zone ${z.name} ${placeName(player.dimension, l)}.`);
+  showZone(z, player.dimension);
+}
 // ================================================================ v8.2: memory housekeeping
 // Bedrock gives scripts a fixed amount of memory and stops the game when it's used up ("Exceeded scripting memory
 // limit"). Every per-soldier record is dropped once that soldier is gone (dead, removed, unloaded for good), checked

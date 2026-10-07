@@ -357,7 +357,7 @@ export function navPath(from, to, maxNodes = 900) {
   while (k) { const [x, y, z] = k.split(",").map(Number); pts.push({ x: x + 0.5, y, z: z + 0.5 }); k = came.get(k); }
   return pts.reverse();
 }
-const hostileTo = (a, b) => { for (const t of a.tags) if (t.startsWith("war_h") && b.tags.has(`war_f${t.slice(5)}`)) return true; return false; };
+const hostileTo = (a, b) => { if (a.tags.has("war_safe") || b.tags.has("war_safe")) return false; for (const t of a.tags) if (t.startsWith("war_h") && b.tags.has(`war_f${t.slice(5)}`)) return true; return false; };
 function los(a, b) {
   const h = a.getHeadLocation(), c = { x: b._loc.x, y: b._loc.y + 1.2, z: b._loc.z };
   const dx = c.x - h.x, dy = c.y - h.y, dz = c.z - h.z, L = Math.hypot(dx, dy, dz) || 1;

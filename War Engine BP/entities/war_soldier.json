@@ -1424,6 +1424,18 @@
                     "test": "is_family",
                     "subject": "other",
                     "value": "player"
+                  },
+                  {
+                    "test": "has_tag",
+                    "subject": "other",
+                    "operator": "!=",
+                    "value": "war_safe"
+                  },
+                  {
+                    "test": "has_tag",
+                    "subject": "self",
+                    "operator": "!=",
+                    "value": "war_safe"
                   }
                 ]
               },
@@ -2004,6 +2016,18 @@
                         "value": "war_vehicle"
                       }
                     ]
+                  },
+                  {
+                    "test": "has_tag",
+                    "subject": "other",
+                    "operator": "!=",
+                    "value": "war_safe"
+                  },
+                  {
+                    "test": "has_tag",
+                    "subject": "self",
+                    "operator": "!=",
+                    "value": "war_safe"
                   }
                 ]
               },
@@ -2593,6 +2617,18 @@
                     "test": "is_family",
                     "subject": "other",
                     "value": "player"
+                  },
+                  {
+                    "test": "has_tag",
+                    "subject": "other",
+                    "operator": "!=",
+                    "value": "war_safe"
+                  },
+                  {
+                    "test": "has_tag",
+                    "subject": "self",
+                    "operator": "!=",
+                    "value": "war_safe"
                   }
                 ]
               },
@@ -3173,6 +3209,18 @@
                         "value": "war_vehicle"
                       }
                     ]
+                  },
+                  {
+                    "test": "has_tag",
+                    "subject": "other",
+                    "operator": "!=",
+                    "value": "war_safe"
+                  },
+                  {
+                    "test": "has_tag",
+                    "subject": "self",
+                    "operator": "!=",
+                    "value": "war_safe"
                   }
                 ]
               },
@@ -3762,6 +3810,18 @@
                     "test": "is_family",
                     "subject": "other",
                     "value": "player"
+                  },
+                  {
+                    "test": "has_tag",
+                    "subject": "other",
+                    "operator": "!=",
+                    "value": "war_safe"
+                  },
+                  {
+                    "test": "has_tag",
+                    "subject": "self",
+                    "operator": "!=",
+                    "value": "war_safe"
                   }
                 ]
               },
@@ -4342,6 +4402,18 @@
                         "value": "war_vehicle"
                       }
                     ]
+                  },
+                  {
+                    "test": "has_tag",
+                    "subject": "other",
+                    "operator": "!=",
+                    "value": "war_safe"
+                  },
+                  {
+                    "test": "has_tag",
+                    "subject": "self",
+                    "operator": "!=",
+                    "value": "war_safe"
                   }
                 ]
               },
@@ -4931,6 +5003,18 @@
                     "test": "is_family",
                     "subject": "other",
                     "value": "player"
+                  },
+                  {
+                    "test": "has_tag",
+                    "subject": "other",
+                    "operator": "!=",
+                    "value": "war_safe"
+                  },
+                  {
+                    "test": "has_tag",
+                    "subject": "self",
+                    "operator": "!=",
+                    "value": "war_safe"
                   }
                 ]
               },
@@ -5511,6 +5595,18 @@
                         "value": "war_vehicle"
                       }
                     ]
+                  },
+                  {
+                    "test": "has_tag",
+                    "subject": "other",
+                    "operator": "!=",
+                    "value": "war_safe"
+                  },
+                  {
+                    "test": "has_tag",
+                    "subject": "self",
+                    "operator": "!=",
+                    "value": "war_safe"
                   }
                 ]
               },
@@ -6100,6 +6196,18 @@
                     "test": "is_family",
                     "subject": "other",
                     "value": "player"
+                  },
+                  {
+                    "test": "has_tag",
+                    "subject": "other",
+                    "operator": "!=",
+                    "value": "war_safe"
+                  },
+                  {
+                    "test": "has_tag",
+                    "subject": "self",
+                    "operator": "!=",
+                    "value": "war_safe"
                   }
                 ]
               },
@@ -6680,6 +6788,18 @@
                         "value": "war_vehicle"
                       }
                     ]
+                  },
+                  {
+                    "test": "has_tag",
+                    "subject": "other",
+                    "operator": "!=",
+                    "value": "war_safe"
+                  },
+                  {
+                    "test": "has_tag",
+                    "subject": "self",
+                    "operator": "!=",
+                    "value": "war_safe"
                   }
                 ]
               },
@@ -7269,6 +7389,18 @@
                     "test": "is_family",
                     "subject": "other",
                     "value": "player"
+                  },
+                  {
+                    "test": "has_tag",
+                    "subject": "other",
+                    "operator": "!=",
+                    "value": "war_safe"
+                  },
+                  {
+                    "test": "has_tag",
+                    "subject": "self",
+                    "operator": "!=",
+                    "value": "war_safe"
                   }
                 ]
               },
@@ -7849,6 +7981,18 @@
                         "value": "war_vehicle"
                       }
                     ]
+                  },
+                  {
+                    "test": "has_tag",
+                    "subject": "other",
+                    "operator": "!=",
+                    "value": "war_safe"
+                  },
+                  {
+                    "test": "has_tag",
+                    "subject": "self",
+                    "operator": "!=",
+                    "value": "war_safe"
                   }
                 ]
               },
@@ -8438,6 +8582,18 @@
                     "test": "is_family",
                     "subject": "other",
                     "value": "player"
+                  },
+                  {
+                    "test": "has_tag",
+                    "subject": "other",
+                    "operator": "!=",
+                    "value": "war_safe"
+                  },
+                  {
+                    "test": "has_tag",
+                    "subject": "self",
+                    "operator": "!=",
+                    "value": "war_safe"
                   }
                 ]
               },
@@ -9018,6 +9174,18 @@
                         "value": "war_vehicle"
                       }
                     ]
+                  },
+                  {
+                    "test": "has_tag",
+                    "subject": "other",
+                    "operator": "!=",
+                    "value": "war_safe"
+                  },
+                  {
+                    "test": "has_tag",
+                    "subject": "self",
+                    "operator": "!=",
+                    "value": "war_safe"
                   }
                 ]
               },
@@ -9607,6 +9775,18 @@
                     "test": "is_family",
                     "subject": "other",
                     "value": "player"
+                  },
+                  {
+                    "test": "has_tag",
+                    "subject": "other",
+                    "operator": "!=",
+                    "value": "war_safe"
+                  },
+                  {
+                    "test": "has_tag",
+                    "subject": "self",
+                    "operator": "!=",
+                    "value": "war_safe"
                   }
                 ]
               },
@@ -10187,6 +10367,18 @@
                         "value": "war_vehicle"
                       }
                     ]
+                  },
+                  {
+                    "test": "has_tag",
+                    "subject": "other",
+                    "operator": "!=",
+                    "value": "war_safe"
+                  },
+                  {
+                    "test": "has_tag",
+                    "subject": "self",
+                    "operator": "!=",
+                    "value": "war_safe"
                   }
                 ]
               },
@@ -10774,6 +10966,18 @@
                     "test": "is_family",
                     "subject": "other",
                     "value": "war_vehicle"
+                  },
+                  {
+                    "test": "has_tag",
+                    "subject": "other",
+                    "operator": "!=",
+                    "value": "war_safe"
+                  },
+                  {
+                    "test": "has_tag",
+                    "subject": "self",
+                    "operator": "!=",
+                    "value": "war_safe"
                   }
                 ]
               },

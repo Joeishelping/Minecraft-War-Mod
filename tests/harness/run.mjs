@@ -16,7 +16,7 @@ const runDir = path.join(here, `run_${process.pid}`);
 fs.mkdirSync(runDir, { recursive: true });
 fs.cpSync(scriptsDir, runDir, { recursive: true });
 // expose the add-on's internals to the scenarios (appended to the copy only)
-const HOOK = ["isoSurrender", "setRelPair", "warFlagPlaced", "BALL", "entrances", "doorWatchSpot", "buildingCells", "show", "sortPerm", "shotAt", "canHit", "aimAt", "closeEnemy", "friendlyInLine", "bangCount", "wallbang", "WALLBANG", "perchSpot", "safeSpot", "dangerNear", "voiceMenu", "callout", "warTable", "eggUse", "getRel", "relAt", "fires", "coalitions", "held", "holding", "stagger", "putDown", "allOf", "edgeFearT", "cleanupMenu", "purgeState", "gliders", "glideBan", "driveOn", "formMode", "tightAt", "combatLock", "routeProgress", "getLearned", "learned", "generals", "planRoute", "BW", "BW_F", "HEAD_K", "medicMove", "shakenMove", "waterExit", "followPersonal", "spreadMove", "combatMove", "engagement", "reinforceMove", "patrolSweep", "marker", "think", "routeOf", "lookahead", "queuedBehind", "climbing", "laneOf", "trackIdx", "giveOrder", "startMarch", "giveFunction", "setupSoldier", "sd", "perc", "squads", "getMarches", "personal", "downed", "goDown", "marker", "gunState", "brain", "notes", "setRelPair", "travel", "isDowned"];
+const HOOK = ["getZones", "SAFE", "isHostile", "nearestFlag", "P", "slotOf", "setP", "claimSlot", "FLAG", "isoSurrender", "setRelPair", "warFlagPlaced", "BALL", "entrances", "doorWatchSpot", "buildingCells", "show", "sortPerm", "shotAt", "canHit", "aimAt", "closeEnemy", "friendlyInLine", "bangCount", "wallbang", "WALLBANG", "perchSpot", "safeSpot", "dangerNear", "voiceMenu", "callout", "warTable", "eggUse", "getRel", "relAt", "fires", "coalitions", "held", "holding", "stagger", "putDown", "allOf", "edgeFearT", "cleanupMenu", "purgeState", "gliders", "glideBan", "driveOn", "formMode", "tightAt", "combatLock", "routeProgress", "getLearned", "learned", "generals", "planRoute", "BW", "BW_F", "HEAD_K", "medicMove", "shakenMove", "waterExit", "followPersonal", "spreadMove", "combatMove", "engagement", "reinforceMove", "patrolSweep", "marker", "think", "routeOf", "lookahead", "queuedBehind", "climbing", "laneOf", "trackIdx", "giveOrder", "startMarch", "giveFunction", "setupSoldier", "sd", "perc", "squads", "getMarches", "personal", "downed", "goDown", "marker", "gunState", "brain", "notes", "setRelPair", "travel", "isDowned"];
 if (opt.thinkdbg) { const f = path.join(runDir, "main.js"); fs.writeFileSync(f, fs.readFileSync(f, "utf8").replace("    // how far each stationary order may leave its spot to fight", "    if (globalThis.__thinkDbg) globalThis.__thinkDbg(e, engaged, cu, d);\n    // how far each stationary order may leave its spot to fight")); }
 fs.appendFileSync(path.join(runDir, "main.js"), `\nglobalThis.__war = {};\n${HOOK.map((n) => `try { globalThis.__war.${n} = ${n}; } catch {}`).join("\n")}\n`);
 loadDefs(path.join(root, "War Engine BP"));
@@ -174,6 +174,35 @@ const S = {
     W.setRelPair(1, 2, "0", false); step(200); at.peace = !!W.sd(man).surr;   // (before: rejoined when the war ended)
     W.warFlagPlaced(1); step(200); at.flagRaised = !!W.sd(man).surr;        // (before: rejoined when his side raised its flag)
     report({ surrendered: at, shooting: W.gunState.get(man.id)?.lastShot ?? -1 });
+  },
+  // v9.1: "Charge POS -> nearest enemy war flag": they go to the flag
+  async toFlag() {
+    SIM.bounds = { x0: -40, x1: 40, z0: -20, z1: 120, y0: -10, y1: 30 };
+    spawnPlayer({ x: 0, y: 0, z: -10 });
+    for (let i = 0; i < 6; i++) soldier(1, { x: (i % 3) * 2 - 2 + 0.5, y: 0, z: Math.floor(i / 3) * 2 + 0.5 }, "rifle");
+    W.setRelPair(1, 2, "1", false);                              // (at war: the flag is an enemy's)
+    const fl = overworld.spawnEntity(W.FLAG, { x: 10.5, y: 0, z: 90.5 });
+    W.setP(fl, "war:faction", 2); W.setP(fl, "war:rally", false); W.claimSlot(fl);
+    step(20);
+    if (opt.dbg) console.error("DBG hostile", W.isHostile(1, 2), "flagF", W.P(fl, "war:faction"), "slot", W.slotOf(fl), "nearest", !!W.nearestFlag(overworld, player.location, () => true, 400), "valid", fl.isValid);
+    await order(1, { x: 0, y: 0, z: 0 }, "hold", { target: 1 });
+    let arrived = -1; const t0 = SIM.tick;
+    for (let t = 0; t < 2400 && arrived < 0; t += 10) { step(10); if (alive(1).filter((e) => Math.hypot(e._loc.x - 10.5, e._loc.z - 90.5) < 8).length >= 5) arrived = SIM.tick - t0; }
+    report({ arrivedTicks: arrived, near: alive(1).filter((e) => Math.hypot(e._loc.x - 10.5, e._loc.z - 90.5) < 8).length, msgs: SIM.log.slice(-3) });
+  },
+  // v9.1: neutral zones. mode=both: both squads inside; mode=half: one inside, one outside; mode=none: no zone
+  async zones() {
+    SIM.bounds = { x0: -60, x1: 60, z0: -60, z1: 60, y0: -10, y1: 30 };
+    spawnPlayer({ x: 0, y: 0, z: -50 });
+    W.setRelPair(1, 2, "1", false);
+    for (let i = 0; i < 4; i++) soldier(1, { x: i * 2 - 3 + 0.5, y: 0, z: -7.5 }, "rifle");
+    for (let i = 0; i < 4; i++) soldier(2, { x: i * 2 - 3 + 0.5, y: 0, z: 7.5 }, "rifle");
+    const mode = opt.mode ?? "both";
+    if (mode === "both") W.getZones().push({ id: "t", name: "test", dim: "minecraft:overworld", x: 0, y: 0, z: 0, r: 20 });
+    if (mode === "half") W.getZones().push({ id: "t", name: "test", dim: "minecraft:overworld", x: 0, y: 0, z: 14, r: 10 });
+    step(600);
+    const hurt = [1, 2].map((f) => alive(f).filter((e) => (e.getComponent("minecraft:health")?.currentValue ?? 1) < (e.getComponent("minecraft:health")?.effectiveMax ?? 1) || W.isDowned(e)).length);
+    report({ mode, shots: SIM.shots.length, hurt, safe: W.SAFE.size, hp: [1, 2].map((f) => alive(f).map((e) => { const h = e.getComponent("minecraft:health"); return `${h?.currentValue}/${h?.effectiveMax}`; }).join(" ")) });
   },
   async load() { step(40); report({ ok: SIM.errors.length === 0 }); },
 
