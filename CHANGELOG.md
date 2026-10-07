@@ -1,5 +1,52 @@
 # War Engine changelog
 
+## v9.1 (Grenades that work, smoke and rescues with reasons, the right weapon, stairs, riding, vehicles, neutral zones)
+
+Checked in the simulator (all 10 acceptance checks pass) and on a real Bedrock server.
+
+- **Grenades now hurt.**
+  - A soldier's grenade never went off: the game refused him as the explosion's source and the error was swallowed.
+  - Men near a live grenade take a moment to notice it, then dive clear. In tests some got away and some were
+    caught.
+- **Smoke only when it makes sense.**
+  - The squad has to have seen the enemy, the fight has to be 5 s old, and they have to be under fire. No more
+    smoke the moment they spawn.
+  - "Pinned down" means most of the squad suppressed for 3 s running.
+  - Men fire short bursts into smoke where an enemy was last seen (not snipers, never with a friend in the way).
+- **Rescues don't get men killed for nothing.**
+  - Nobody runs to a wounded man while enemies who can see him are firing: smoke first if he has it, else he waits
+    for a lull.
+  - A rescuer shot at on the way goes back to cover.
+- **The right weapon.**
+  - Guns jam rarely; while the jam clears he draws his pistol, or his sword if an enemy is within 5 blocks.
+  - A rifleman or gunner reloading with an enemy close draws his pistol.
+  - The sword comes out only when his gun is the wrong tool at arm's length (a long gun, jammed or reloading).
+    SMGs, pistols, semi-autos and shotguns keep shooting up close.
+- **Stairs and "working out the way".**
+  - Short trips use a fast route search.
+  - Staircases are learned from routes and reused, so trips to another floor are put together at once.
+  - The first search for a floor gets priority, and anyone waiting switches to the learned stairs.
+  - Short orders (40 blocks) give each man his own route instead of a slow march.
+  - Reserves move up to the fight; an "advancing" man with no point picks the nearest enemy.
+- **Cobwebs.** Routes go round them, and through only if there's no other way. Before, a cobweb was a wall to the
+  planner, and short walks went straight into it.
+- **Surrender.** It lasts until a player of his own faction rescues him (right-click). He no longer rejoins when the
+  enemy leaves, the war ends or his flag goes up again. The same rule covers prisoners.
+- **Go-to-flag** checked working. When there's no enemy war flag in reach, it now says so.
+- **Neutral zones** (War Table → Neutral zones). An area where nobody fights: think of a UN building.
+- **Riding.**
+  - Soldiers ride saddled horses, donkeys, mules, camels and pigs, and boats; never this add-on's vehicles.
+  - New army orders "Mount up" and "Dismount".
+  - Your followers mount up when you ride and get off when you do.
+- **New vehicles.**
+  - Transport Truck: 10 seats, troops visible in the back.
+  - Coast Guard Gunboat: 8 seats, a bow machine gun (a soldier in the gun seat fires it on his own).
+  - Transport Helicopter: 8 seats, a door gun. It hovers: W/S fly, the mouse steers, looking up or down climbs or
+    descends. It crashes on a hard landing or a wall.
+- **Stability.**
+  - Placing a marker in an unloaded chunk no longer throws.
+  - The waypoint registry stays under the save-size cap.
+
 ## v9.0 (Smoke, dragging the wounded, ambushes, breaching doors)
 
 New things soldiers do on their own, each checked in the simulator and on a real Bedrock server.
