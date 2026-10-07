@@ -33,7 +33,8 @@ system.runInterval(() => { TICK_NOW = system.currentTick; const t = Date.now(); 
 
 // ================================================================ constants
 const SOLDIER = "war:soldier", HOUND = "war:hound", WAYPOINT = "war:waypoint", FLAG = "war:flag";
-const VEHICLES = ["war:boat", "war:plane", "war:tank"];
+const VEHICLES = ["war:boat", "war:plane", "war:tank", "war:truck", "war:gunboat", "war:heli"];   // (v9.2: truck, Coast Guard gunboat, helicopter)
+const WATERCRAFT = ["war:boat", "war:gunboat"], MG_SEAT = ["war:gunboat", "war:heli"];
 const NF = 40, NSLOT = 1600;   // (v6.6: 40 factions, was 20)
 // Marker numbers are two-part (row x column, 40 x 40 = 1600). A soldier and his marker share a row tag
 // and a column tag, so each soldier checks only 80 conditions for 1600 possible markers.
@@ -877,7 +878,8 @@ function think(e) {
     // its own (straight at a building, off the route) and override their orders: it stays off for them.
     if (GUNS.includes(d.weapon)) { want.t = "t_off"; want.r = "r_off"; }
     // a gunner with an enemy right on top of him fights hand-to-hand, then goes back to shooting
-    if (GUNS.includes(d.weapon) && d.weapon !== "at" && !calm && closeEnemy(e, d, 2.5)) { want.w = "w_melee"; want.t = "t_short"; want.r = "r_on"; }
+    // (v9.2: by what makes sense: see chooseArm. The sword only when the gun is the wrong tool at that range)
+    if (GUNS.includes(d.weapon) && (!calm || ARM.has(e.id))) { if (chooseArm(e, d, now, calm) === "blade") { want.w = "w_melee"; want.t = "t_short"; want.r = "r_on"; } }
   }
   for (const f of WarAPI.hooks.think) { try { f(e, d, want, now); } catch {} }   // extensions may adjust the decision
   // v6.2: standing on a bridge / ledge / wall-top edge and not being carried along a route: Minecraft's own walking is
@@ -1079,16 +1081,23 @@ system.runInterval(() => {
     try {
       if (now >= G.boom) {
         liveNades.splice(i, 1);
-        const o = { breaksBlocks: false, causesFire: false };
-        if (G.by?.isValid) o.source = G.by;
-        G.dim.createExplosion(G.at, NADE.power, o);
+        // (v9.2: through explode(): the game refuses a soldier as an explosion's source, and that error used to be
+        //  swallowed here, so a soldier's grenade never went off at all. explode() retries without one and deals the
+        //  add-on's own blast damage)
+        explode(G.dim, G.at, NADE.power, { breaksBlocks: false, causesFire: false, source: G.by?.isValid ? G.by : undefined });
         continue;
       }
       G.dim.spawnParticle("minecraft:basic_smoke_particle", { x: G.at.x, y: G.at.y + 0.2, z: G.at.z });
-      for (const c of nearSnap(G.dim.id, G.at, 4.5)) {               // a live grenade at his feet: get away from it
+      for (const c of nearSnap(G.dim.id, G.at, 5.5)) {               // a live grenade at his feet: get away from it
         if (c.type !== SOLDIER || c.down || held.has(c.id) || !c.e.isValid || now - Number(fleeFire.get(c.id) ?? -99) < 15) continue;
+        G.seen ??= new Map();                                            // (v9.2: each man needs a moment to notice it: 0.3-0.8 s)
+        if (!G.seen.has(c.id)) G.seen.set(c.id, now + 6 + Math.floor(Math.random() * 11));
+        if (now < G.seen.get(c.id)) continue;
         fleeFire.set(c.id, now);
         const l = c.e.location, dx = l.x - G.at.x, dz = l.z - G.at.z, L = Math.hypot(dx, dz) || 1;
+        // (v9.2: a dive first: the route below takes a moment, and a grenade doesn't wait; before, most men hadn't
+        //  moved a block by the time it went off)
+        if (!isRiding(c.e)) { try { c.e.applyImpulse({ x: (dx / L) * 0.42, y: 0.22, z: (dz / L) * 0.42 }); } catch {} }
         const out = walkableNear(c.e.dimension, G.at.x + (dx / L) * 6, G.at.z + (dz / L) * 6, l.y);
         if (out && !dangerNear(c.e.dimension, out)) { planPersonalTo(c.e, "settle", out, now); note(c.e, "getting away from a grenade"); }
       }
@@ -1420,7 +1429,7 @@ world.afterEvents.entityHitEntity.subscribe((ev) => {
     return;
   }
   if (VEHICLES.includes(t.typeId) || t.typeId === NEST) {
-    const item = { "war:boat": "war:boat_item", "war:plane": "war:plane_item", "war:tank": "war:tank_item", "war:mg_nest": "war:mg_nest_item" }[t.typeId];
+    const item = { "war:boat": "war:boat_item", "war:plane": "war:plane_item", "war:tank": "war:tank_item", "war:mg_nest": "war:mg_nest_item", "war:truck": "war:truck_item", "war:gunboat": "war:gunboat_item", "war:heli": "war:heli_item" }[t.typeId];
     if (mainhand(p) !== item) return;
     const riders = t.getComponent("minecraft:rideable")?.getRiders() ?? [];
     if (riders.length) { p.onScreenDisplay.setActionBar("§cEveryone has to get out first."); return; }
@@ -1473,6 +1482,9 @@ const HUD = {
   "war:plane": "§7W/S speed · mouse steer · left-click bomb · §fslot 9: bombsight§7 · baton menu",
   "war:tank": "§7W/S drive · mouse turn · left-click fire · baton menu",
   "war:boat": "§7W/S row · mouse steer · baton menu",
+  "war:truck": "§7W/S drive · mouse steer · baton menu",
+  "war:gunboat": "§7W/S throttle · mouse steer · gunner (2nd seat, or you): left-click the MG · baton menu",
+  "war:heli": "§7W/S fly · mouse steer · look up/down: climb/descend · door gun: left-click · baton menu",
 };
 const RELOAD = { "war:plane": 160, "war:tank": 60 }; // ticks: bomb 8 s, cannon 3 s
 function reloadBar(v, st) {
@@ -1568,7 +1580,7 @@ const fireRequests = new Map(); // player id -> tick of last left-click
 const mountedAt = new Map(); // player id -> tick he got into a vehicle
 world.afterEvents.playerSwingStart.subscribe((ev) => {
   const v = myVehicle(ev.player) ?? (ridingNest(ev.player) ? ev.player.getComponent("minecraft:riding")?.entityRidingOn : undefined);
-  if (!v || v.typeId === "war:boat") return;
+  if (!v || v.typeId === "war:boat" || v.typeId === "war:truck") return;
   const src = String(ev.swingSource ?? "");
   if (src && !["Attack", "None", "Mine"].includes(src)) return;            // entering (Interact), using items etc. never fire
   if (tick() - (mountedAt.get(ev.player.id) ?? -999) < 20) return;          // first second in the seat: ignore
@@ -1674,13 +1686,13 @@ function drive(v) {
   const prevRiders = riderCache.get(v.id) ?? [];
   for (const r of riders) if (r.typeId === "minecraft:player" && !prevRiders.includes(r.id)) { mountedAt.set(r.id, tick()); fireRequests.delete(r.id); }
   riderCache.set(v.id, riders.map((r) => r.id));
-  if (v.typeId !== "war:boat") {
+  if (!WATERCRAFT.includes(v.typeId)) {
     const loc0 = v.location;
     let wet = false;
-    try { wet = !!v.dimension.getBlock({ x: loc0.x, y: loc0.y + (v.typeId === "war:tank" ? 1.0 : 0.3), z: loc0.z })?.typeId.includes("water"); } catch {}
+    try { wet = !!v.dimension.getBlock({ x: loc0.x, y: loc0.y + (v.typeId === "war:tank" || v.typeId === "war:truck" ? 1.0 : 0.3), z: loc0.z })?.typeId.includes("water"); } catch {}
     if (wet) { // deep water: tanks flood, planes ditch
-      say(`§7A ${v.typeId === "war:plane" ? "war plane" : "tank"} went into the water ${placeName(v.dimension, loc0)}.`);
-      if (v.typeId === "war:plane") { crashPlane(v, riders); return; }
+      say(`§7A ${{ "war:plane": "war plane", "war:heli": "helicopter", "war:truck": "truck" }[v.typeId] ?? "tank"} went into the water ${placeName(v.dimension, loc0)}.`);
+      if (v.typeId === "war:plane" || v.typeId === "war:heli") { crashPlane(v, riders); return; }
       for (const r of riders) killReal(r);
       const dim0 = v.dimension; vstate.delete(v.id); riderCache.delete(v.id);
       try { v.remove(); } catch {}
@@ -1694,12 +1706,12 @@ function drive(v) {
   }
   const players = riders.filter((r) => r.typeId === "minecraft:player");
   const pilot = players[0];
-  const gunner = v.typeId === "war:tank" ? players[1] ?? pilot : pilot; // 2nd player in a tank aims and fires
+  const gunner = v.typeId === "war:tank" || MG_SEAT.includes(v.typeId) ? players[1] ?? pilot : pilot; // 2nd player in a tank aims and fires (v9.2: and mans the gunboat's / helicopter's MG)
   const st = vstate.get(v.id) ?? { speed: 0, last: v.location, cd: 0, age: 0, dir: undefined };
   st.age++;
   const loc = v.location, vel = v.getVelocity();
   const ground = solidAt(v.dimension, { x: loc.x, y: loc.y - 0.2, z: loc.z });
-  if (pilot && st.age % 5 === 0 && v.typeId !== "war:plane") {
+  if (pilot && st.age % 5 === 0 && v.typeId !== "war:plane" && v.typeId !== "war:heli") {
     const bar = reloadBar(v, st);
     const role = v.typeId === "war:tank" && gunner !== pilot ? `§7Driver · gunner: ${gunner.name}` : HUD[v.typeId] ?? "";
     try { pilot.onScreenDisplay.setActionBar(bar ? `${bar}\n${role}` : role); } catch {}
@@ -1709,6 +1721,8 @@ function drive(v) {
   const jump = gunner ? consumeFire(gunner) : false;
   if (gunner && gunner !== pilot) consumeFire(pilot); // the driver's clicks don't fire
 
+  if (MG_SEAT.includes(v.typeId) && jump && gunner) vehicleMG(v, gunner);   // (v9.2: the mounted MG: a burst per click)
+  if (v.typeId === "war:heli") { heliFly(v, st, pilot, riders, loc, ground); st.last = { x: loc.x, y: loc.y, z: loc.z }; st.dim = v.dimension.id; vstate.set(v.id, st); return; }
   if (v.typeId === "war:plane") {
     // ---- flight model: throttle, limited climb/turn, climbing costs speed, stall, ceiling, assists
     const mv = pilot ? pilot.inputInfo.getMovementVector() : { x: 0, y: 0 };
@@ -1781,7 +1795,7 @@ function drive(v) {
       crashPlane(v, riders); return;
     }
   } else {
-    const boat = v.typeId === "war:boat";
+    const boat = WATERCRAFT.includes(v.typeId);
     let target = { x: 0, z: 0 };
     if (pilot) {
       const mv = pilot.inputInfo.getMovementVector();
@@ -1789,17 +1803,17 @@ function drive(v) {
       v.setRotation({ x: 0, y: yaw });
       let inWater = false;
       if (boat) { try { inWater = !!v.dimension.getBlock({ x: loc.x, y: loc.y - 0.1, z: loc.z })?.isLiquid || !!v.dimension.getBlock(loc)?.isLiquid; } catch {} }
-      const max = boat ? (inWater ? 0.45 : 0.04) : 0.22;
+      const max = boat ? (inWater ? (v.typeId === "war:gunboat" ? 0.6 : 0.45) : 0.04) : v.typeId === "war:truck" ? 0.32 : 0.22;
       const f = fwdFromYaw(yaw);
       const sp = mv.y * (mv.y < 0 ? max * 0.5 : max);
       target = { x: f.x * sp, z: f.z * sp };
-      if (!boat && jump && st.cd <= tick()) {
+      if (v.typeId === "war:tank" && jump && st.cd <= tick()) {
         st.cd = tick() + RELOAD["war:tank"];
         fireShell(v, gunner);
       }
     }
     v.applyImpulse({ x: (target.x - vel.x) * 0.5, y: 0, z: (target.z - vel.z) * 0.5 });
-    if (!boat && st.age % 20 === 0) {
+    if (v.typeId === "war:tank" && st.age % 20 === 0) {
       for (const r of riders) { try { r.addEffect("invisibility", 45, { showParticles: false }); } catch {} } // crew is inside
     }
   }
@@ -1819,18 +1833,18 @@ function crashPlane(v, riders) {
 }
 world.afterEvents.entityDie.subscribe((ev) => {
   const v = ev.deadEntity;
-  if (v.typeId !== "war:plane" && v.typeId !== "war:tank") return;
+  if (!["war:plane", "war:tank", "war:truck", "war:gunboat", "war:heli"].includes(v.typeId)) return;
   let loc, dim;
   try { loc = v.location; dim = v.dimension; } catch {
     const st = vstate.get(v.id);
     if (!st) return;
     loc = st.last; dim = world.getDimension(st.dim ?? "overworld");
   }
-  if (v.typeId === "war:plane") {
+  if (v.typeId === "war:plane" || v.typeId === "war:heli") {
     for (const id of riderCache.get(v.id) ?? []) { try { world.getEntity(id)?.kill(); } catch {} }
   }
-  chronLog(`A ${v.typeId === "war:plane" ? "war plane was shot down" : "tank was destroyed"} ${placeName(dim, loc)}.`);
-  explode(dim, loc, v.typeId === "war:plane" ? 5 : 3, { breaksBlocks: !!setting("blockdmg", true), causesFire: v.typeId === "war:plane" });
+  chronLog(`A ${{ "war:plane": "war plane was shot down", "war:heli": "helicopter was shot down", "war:truck": "truck was destroyed", "war:gunboat": "gunboat was sunk" }[v.typeId] ?? "tank was destroyed"} ${placeName(dim, loc)}.`);
+  explode(dim, loc, v.typeId === "war:plane" || v.typeId === "war:heli" ? 5 : 3, { breaksBlocks: !!setting("blockdmg", true), causesFire: v.typeId === "war:plane" || v.typeId === "war:heli" });
 });
 
 // Players always get in: soldiers make room (and never keep the driver's seat).
@@ -1882,7 +1896,7 @@ async function vehicleMenu(player, v) {
   if (v.typeId === "war:plane") opts.push(["bomb", "Drop bomb"]);
   if (v.typeId === "war:tank") opts.push(["shell", "Fire cannon"]);
   opts.push(["army", "Army orders..."]);
-  const af = new ActionFormData().title(v.typeId === "war:plane" ? "War Plane" : v.typeId === "war:tank" ? "Tank" : "Troop Boat")
+  const af = new ActionFormData().title({ "war:plane": "War Plane", "war:tank": "Tank", "war:truck": "Transport Truck", "war:gunboat": "Coast Guard Gunboat", "war:heli": "Transport Helicopter" }[v.typeId] ?? "Troop Boat")
     .body("Units within 24 blocks of the vehicle can board.");
   for (const o of opts) af.button(o[1]);
   const r = await show(af, player);
@@ -1963,6 +1977,9 @@ function tool(player, typeId, target) {
     case "war:boat_item": return run(() => placeVehicle(player, "war:boat"));
     case "war:plane_item": return run(() => placeVehicle(player, "war:plane"));
     case "war:tank_item": return run(() => placeVehicle(player, "war:tank"));
+    case "war:truck_item": return run(() => placeVehicle(player, "war:truck"));
+    case "war:gunboat_item": return run(() => placeVehicle(player, "war:gunboat"));
+    case "war:heli_item": return run(() => placeVehicle(player, "war:heli"));
     case "war:war_horn": return run(() => blowHorn(player));
     case "war:mg_nest_item": return run(() => placeVehicle(player, NEST));
   }
@@ -2213,7 +2230,7 @@ async function giveOrderInner(player, cfg, given) {
     player.onScreenDisplay.setActionBar(`§eBoarded: §f${n} §7(${free - n} seats left)`);
     return;
   }
-  let slot, spotCenter, march, orderDest;
+  let slot, spotCenter, march, orderDest, walkTo;
   if (order === "charge") {
     const pt = chargePoint(player, cfg);
     if (!pt) { player.onScreenDisplay.setActionBar(cfg.target === 1 ? "§cNo enemy war flag within 400 blocks. §7(Only flags of factions you're at war with count; rally flags don't.)" : "§cCouldn't find that position."); return; }
@@ -2224,6 +2241,11 @@ async function giveOrderInner(player, cfg, given) {
     let near = false;
     try { near = !!dest && dist(cxz, dest) <= 14 && Math.abs((dest.y ?? cxz.y) - cxz.y) <= 1 && !!player.dimension.getBlock(dest) && localReach(player.dimension, cxz, dest); } catch {}
     if (near) { slot = makeWaypoint(player.dimension, dest); march = undefined; }       // close and on the same level: Minecraft walks them there
+    else if (dest && Number.isFinite(dest.y) && Math.hypot(dest.x - cxz.x, dest.z - cxz.z) <= 40) {
+      // (v9.2: a short trip (40 blocks), another floor or round a wall: no march (its route and lanes took 20 s to get
+      //  going indoors); each man gets his own route there at once, stairs and all, and the spot is held when he's there)
+      slot = makeWaypoint(player.dimension, dest); walkTo = dest; spotCenter = dest; march = undefined;
+    }
     else {
       const fac = cfg.faction || sd(pool[0]).faction;
       if (dest && Math.hypot(dest.x - cxz.x, dest.z - cxz.z) > orderLimit()) { factionMsg(fac, `§cToo far: ${Math.round(Math.hypot(dest.x - cxz.x, dest.z - cxz.z))} blocks (limit ${orderLimit()}). Pick a closer point.`, player); return; }
@@ -2271,7 +2293,10 @@ async function giveOrderInner(player, cfg, given) {
         updateName(e); setJSON(e, "war:st", {}); think(e);
       } else if (spotCenter) {
         // each soldier gets its own spot around the target instead of one crowded point
-        giveFunction(e, mapFunc(order, sd(e).div), player, formationSlot(e.dimension, spotCenter, e, order === "patrol" || order === "roam" ? 4 : 2.5) || slot);
+        const fs = formationSlot(e.dimension, spotCenter, e, order === "patrol" || order === "roam" ? 4 : 2.5) || slot;
+        if (walkTo) sdp(e, "war:then", cfg.then ?? "hold");                     // (on the way he's charging; there, he holds or patrols)
+        giveFunction(e, mapFunc(order, sd(e).div), player, fs);
+        if (walkTo && !mountOf.has(e.id)) { const m = marker(fs); planPersonalTo(e, "advance", m ? { ...m.location } : walkTo, now); }   // (v9.2: his own route there now)
       } else if (march) {
         sdp(e, "war:then", cfg.then ?? "hold");
         giveFunction(e, mapFunc(order, sd(e).div), player, march.lanes[n % march.lanes.length]); // each soldier gets a lane
@@ -3321,7 +3346,7 @@ function hittable(o, shooter) {
     return !!o.getComponent("minecraft:health");
   } catch { return false; }
 }
-const onNestW = (e) => (ridingNest(e) ? "mg" : undefined);
+const onNestW = (e) => (ridingNest(e) ? "mg" : ARM.get(e.id)?.arm === "pistol" ? "pistol" : undefined);   // (v9.2: the sidearm hits like a pistol)
 function hitscan(e, spec, from, dir, range, weapon) {
   const dim = e.dimension, n = Math.hypot(dir.x, dir.y, dir.z) || 1, u = { x: dir.x / n, y: dir.y / n, z: dir.z / n };
   let blockD = range;
@@ -3549,7 +3574,8 @@ function gunTick(e, now) {
   if (downed.has(e.id)) return;
   const d = sd(e);
   const onNest = ridingNest(e);
-  const spec = onNest ? NEST_SPEC : GUN_SPEC[d.weapon];
+  const arm = ARM.get(e.id);
+  const spec = onNest ? NEST_SPEC : GUN_SPEC[arm?.arm === "pistol" ? "pistol" : d.weapon];
   if (pows.has(e.id)) return;
   // (v6.9.2: falling back he still fires at anyone within 20: a wounded man in a building with nowhere to run used to
   //  stand there and die without a shot)
@@ -3602,12 +3628,13 @@ function gunTick(e, now) {
     } else st.next = now + 4;
     return;
   }
+  if (!st.target && now >= st.next && !onNest && SMOKES.length && smokeShot(e, d, spec, st, now)) return;   // (v9.2: into the smoke he just went into)
   if (!st.target || now < st.next) return;
   const t = st.target;
   if (ambushHold(e, d, t, now)) { st.next = now + 2; return; }          // v9.0: an ambush: nobody fires until it's sprung
   if (!t.isValid || downed.has(t.id) || pows.has(t.id)) { st.target = undefined; st.check = now; return; }   // (v7.1: down or surrendered: no more rounds into him, or past him into the wall)
   if (!shotAt(e, d, t, now)) return;                                    // beyond the gun's useful range, or a head too far to hit: close in first (v5.4)
-  if (closeEnemy(e, d, 2.5)) return;                                    // hand-to-hand right now
+  if (arm?.arm === "blade" || (arm?.jamUntil ?? 0) > now && arm.arm === "main") return;   // (v9.2: sword out / clearing a jam)
   if (d.weapon === "at" && !VEHICLES.includes(t.typeId) && dist(t.location, e.location) < 6) { st.next = now + 6; return; }   // (v6.9.1: no rocket at a man this close: the blast would take him too)
   const from = headLoc(e);
   if (friendlyInLine(e, d, from, chest(t), t)) {                        // never shoot through a friendly
@@ -3628,9 +3655,10 @@ function gunTick(e, now) {
   st.lastShot = now;
   suppressNear(t, d.weapon);
   st.ammo--;
+  if (!onNest && Math.random() < (JAM[arm?.arm === "pistol" ? "pistol" : d.weapon] ?? 0)) jamGun(e, d, now);   // (v9.2: rarely, a jam)
   if (st.ammo > 0) st.next = now + Math.max(1, spec.gap);
   else {
-    st.ammo = spec.mag; st.next = now + spec.reload + Math.floor(Math.random() * 8);
+    st.ammo = spec.mag; st.next = now + spec.reload + Math.floor(Math.random() * 8); st.reloadUntil = st.next;
     try { e.dimension.playSound("random.click", e.location, { volume: 0.35, pitch: 0.7 }); } catch {}   // a quiet reload
     if (Math.random() < 0.6 && perc.get(e.id)?.threat) callout(e, "Reloading!");   // (not every reload, and only in a fight)
   }
@@ -3708,13 +3736,13 @@ system.runInterval(() => {
   const alive = new Set();
   for (const v of vehicleList) {
     try {
-      if (!v.isValid || v.typeId === "war:boat") continue;
+      if (!v.isValid || WATERCRAFT.includes(v.typeId)) continue;
       const vel = v.getVelocity(), sp = Math.hypot(vel.x, vel.y, vel.z);
-      if (v.typeId === "war:plane") {
+      if (v.typeId === "war:plane" || v.typeId === "war:heli") {
         const st = vstate.get(v.id);
-        if (st && st.speed > 0.08) {
+        if (st && (st.speed > 0.08 || (st.rpm ?? 0) > 0.3)) {
           alive.add(v.id);
-          if (!engineOn.has(v.id) || tick() % 30 < 6) v.dimension.playSound("plane.fly", v.location, { volume: 2 + st.speed * 4, pitch: 0.8 + st.speed * 0.4 });
+          if (!engineOn.has(v.id) || tick() % 30 < 6) v.dimension.playSound("plane.fly", v.location, v.typeId === "war:heli" ? { volume: 3, pitch: 0.45 + (st.rpm ?? 0) * 0.15 } : { volume: 2 + st.speed * 4, pitch: 0.8 + st.speed * 0.4 });
           engineOn.set(v.id, { dim: v.dimension.id, loc: v.location });
         }
       } else if (sp > 0.03) {
@@ -5076,7 +5104,90 @@ class Heap {
   }
   get size() { return this.a.length; }
 }
+// v9.2: a quick, bounded search for trips within ~40 blocks (most of all moves inside and around buildings, and every
+// "to the other floor" one): it walks floors and stairs (up or down a step, down two) straight to the goal, under a
+// time cap (6 ms, 12 ms a tick in all), and answers at once. The full planner (danger, water, long ways round) only
+// gets what this can't do. Before, a man going downstairs in a fight could wait 30 s or more in the planner's queue
+// ("working out the way"), behind every other search, and the queue threw out the oldest searches when it was full.
+let qrMs = 0, qrTick = -1;
+function quickRoute(dim, from, to, maxNodes = 3000) {
+  const now = tick(); if (now !== qrTick) { qrTick = now; qrMs = 0; }
+  if (qrMs > 12) return undefined;
+  const t0 = Date.now();
+  const sx = Math.floor(from.x), sz = Math.floor(from.z), sy = Math.floor(from.y + 0.01), tx = Math.floor(to.x), tz = Math.floor(to.z), ty = Math.floor(to.y + 0.01);
+  if (Math.abs(tx - sx) > 60 || Math.abs(tz - sz) > 60) return undefined;
+  const K = (x, y, z) => ((x - sx + 64) * 128 + (z - sz + 64)) * 256 + (y - sy + 128);
+  const g = new Map([[K(sx, sy, sz), 0]]), par = new Map([[K(sx, sy, sz), -1]]), pos = new Map([[K(sx, sy, sz), [sx, sy, sz]]]);
+  const open = new Heap(); open.push({ x: sx, y: sy, z: sz, f: 0 });
+  let n = 0, found;
+  while (open.size && n < maxNodes) {
+    const c = open.pop(); n++;
+    if ((n & 63) === 0 && Date.now() - t0 > 6) break;
+    if (c.x === tx && c.z === tz && Math.abs(c.y - ty) <= 1) { found = c; break; }
+    const ck = K(c.x, c.y, c.z), cg = g.get(ck);
+    for (const [dx, dz] of [[1, 0], [-1, 0], [0, 1], [0, -1]]) for (const dy of [0, 1, -1, -2]) {
+      const nx = c.x + dx, nz = c.z + dz, ny = c.y + dy, k = K(nx, ny, nz);
+      if (Math.abs(nx - sx) > 62 || Math.abs(nz - sz) > 62) continue;
+      if (!standAt(dim, nx, ny, nz, now)) continue;
+      if (dy === 1) { try { if (!passable(tBlock(dim, c.x + 0.5, c.y + 2, c.z + 0.5))) continue; } catch { continue; } }
+      const ng = cg + 1 + (dy ? 0.4 : 0) + (webAt(dim, nx, ny, nz) ? 25 : 0);
+      if (ng < (g.get(k) ?? Infinity)) { g.set(k, ng); par.set(k, ck); pos.set(k, [nx, ny, nz]); open.push({ x: nx, y: ny, z: nz, f: ng + Math.abs(tx - nx) + Math.abs(tz - nz) + 3 * Math.abs(ty - ny) }); }
+      break;                                                                     // (one height per column: the first that stands)
+    }
+  }
+  qrMs += Date.now() - t0;
+  if (!found) return undefined;
+  const out = []; let k = K(found.x, found.y, found.z);
+  while (k !== -1 && k !== undefined) { const p = pos.get(k); out.push({ x: p[0] + 0.5, y: p[1], z: p[2] + 0.5, w: false, climb: false, open: false }); k = par.get(k); }
+  return out.reverse();
+}
+// v9.2: staircases, learned. Every route that goes over stairs teaches the flight (top, foot, the steps) for that
+// place; a later trip to the other floor nearby is put together at once: walk to the flight (one floor, straight at
+// it), the steps, walk on from the other end. Before, every man searched the whole floor for the stairs himself, and
+// on a real server ten of those searches queued for many seconds.
+const STAIRS = [];   // { dimId, top, foot, pts (top -> foot), t }
+function learnStairs(dimId, pts) {
+  if (!pts || pts.length < 4) return;
+  let i = 0;
+  while (i < pts.length - 2) {
+    let j = i;
+    while (j + 1 < pts.length && Math.abs(pts[j + 1].y - pts[j].y) === 1 && Math.sign(pts[j + 1].y - pts[j].y) === Math.sign(pts[i + 1].y - pts[i].y) && !pts[j + 1].climb) j++;
+    if (j - i >= 3) {                                                            // a run of 3+ steps one way: a flight
+      const run = pts.slice(Math.max(0, i - 1), Math.min(pts.length, j + 2)).map((p) => ({ x: p.x, y: p.y, z: p.z, w: false, climb: false, open: false }));
+      const down = run[run.length - 1].y < run[0].y, flight = down ? run : run.slice().reverse();
+      const top = flight[0], foot = flight[flight.length - 1];
+      if (!STAIRS.some((s) => s.dimId === dimId && r3(s.top, top) < 2 && r3(s.foot, foot) < 2)) { STAIRS.push({ dimId, top, foot, pts: flight, t: tick() }); if (STAIRS.length > 200) STAIRS.shift(); }
+      i = j;
+    }
+    i++;
+  }
+}
+function portalRoute(dim, start, goal, depth = 0) {
+  const sy = start.y, gy = goal.y;
+  if (Math.abs(gy - sy) <= 2.5) return depth ? quickRoute(dim, start, goal, 2000) : undefined;
+  const down = gy < sy;
+  let best, bs = 1e9;
+  for (const s of STAIRS) {
+    if (s.dimId !== dim.id) continue;
+    const a = down ? s.top : s.foot, b = down ? s.foot : s.top;
+    if (Math.abs(a.y - sy) > 1.5 || flat(a, start) > 40 || (down ? b.y < gy - 1.5 : b.y > gy + 1.5)) continue;
+    const sc = flat(a, start) + flat(b, goal) + Math.abs(b.y - gy) * 4;
+    if (sc < bs) { bs = sc; best = s; }
+  }
+  if (!best) return undefined;
+  const a = down ? best.top : best.foot, b = down ? best.foot : best.top, steps = down ? best.pts : best.pts.slice().reverse();
+  const leg1 = flat(a, start) < 1.5 && Math.abs(a.y - sy) < 1 ? [{ x: start.x, y: Math.floor(sy), z: start.z, w: false, climb: false, open: false }] : quickRoute(dim, start, a, 2000);
+  if (!leg1) return undefined;
+  const rest = Math.abs(b.y - gy) <= 1.5 ? (flat(b, goal) < 1.5 ? [] : quickRoute(dim, b, goal, 2000)) : depth < 2 ? portalRoute(dim, b, goal, depth + 1) : undefined;
+  if (!rest) return undefined;
+  return [...leg1, ...steps, ...rest];
+}
 function planRoute(dim, start, goal, onDone, opts = {}) {
+  if ((opts.step ?? 1) === 1 && !opts.goalFn && Number.isFinite(goal.y) && Math.hypot(goal.x - start.x, goal.z - start.z) <= 40) {
+    const qr = Math.abs(goal.y - start.y) > 2.5 ? (STAIRS.length ? portalRoute(dim, start, goal) : undefined) : quickRoute(dim, start, goal);   // (a floor change with no flight known yet: the full planner, which teaches it)
+    if (qr && qr.length > 1) { const job = { quick: true }; system.run(() => { if (!job.cancel) { try { onDone(qr, false); } catch {} } }); return job; }
+  }
+  { const od = onDone; onDone = (pts, ...rest) => { try { learnStairs(dim.id, pts); } catch {} return od(pts, ...rest); }; }   // (every route found teaches its stairs)
   const step = opts.step ?? 1;
   const maxRadius = opts.maxRadius ?? 170;
   const snap = (v) => Math.floor(v / step) * step;
@@ -5779,7 +5890,11 @@ function planPersonalTo(e, kind, dest, now) {
     // (v7.3: a route cut short that ends on the wrong floor is no route: it left the stormers standing under the enemy)
     if (pts && partial && otherFloor && Math.abs(pts[pts.length - 1].y - dest.y) > 2) pts = undefined;
     pr.planning = false; pr.pts = pts; pr.idx = 0; if (pts && !partial) rememberRoute(dim, dest, pts);
-  }, { max: Math.max(3000, Math.min(otherFloor ? 30000 : 20000, Math.round(far * (otherFloor ? 500 : 300)))), maxRadius: Math.min(90, far + (otherFloor ? 45 : 30)), accept, danger });
+  }, { max: Math.max(3000, Math.min(otherFloor ? 30000 : 20000, Math.round(far * (otherFloor ? 500 : 300)))), maxRadius: Math.min(90, far + (otherFloor ? 45 : 30)), accept,
+    // (v9.2: finding the way to another floor, no flight known here yet: it goes first, and without the enemy-sight
+    //  costs (a ray per square searched made it ~250 microseconds a square on a real server): once found, the stairs
+    //  are learned and everyone else's trip to that floor is put together at once)
+    danger: otherFloor ? undefined : danger, prio: otherFloor && far <= 60 && !STAIRS.some((sr) => sr.dimId === dim.id && flat(sr.top, e.location) < 48) });
 }
 function brainMove(e, d, now, melee, anchor, leash) {
   const BW = squads.get(squadKey(e, d))?.bw ?? bwOf(d.faction);
@@ -5939,7 +6054,11 @@ function brainMove(e, d, now, melee, anchor, leash) {
       return { g: "g_none", t: "t_mid", urgent: false };
     }
     case "hold": return undefined;
-    case "advance": note(e, S.plan === "assault" ? "assaulting" : "advancing"); return B.target ? go(B.target) : undefined;
+    case "advance": {                                                    // (v9.2: no point picked yet: the nearest enemy the squad knows of)
+      const tg = B.target ?? nearestKnownB(S, e)?.q;
+      if (!tg) return undefined;
+      note(e, S.plan === "assault" ? "assaulting" : "advancing"); return go(tg);
+    }
   }
   return undefined;
 }
@@ -6736,7 +6855,9 @@ function sandbagSpot(e, enemyC, anchor, leash, now) {
 const NEST = "war:mg_nest";
 const NEST_SPEC = { bullet: "ww:nlmg_projectile", sight: 200, fire: 200, mag: 40, gap: 2, reload: 50, speed: 5.0, spread: 0.006 };
 const nestRider = (n) => (n.getComponent("minecraft:rideable")?.getRiders() ?? [])[0];
-function ridingNest(e) { try { return rideInfo(e).on === NEST; } catch { return false; } }
+function ridingNest(e) { try { const on = rideInfo(e).on; return on === NEST || (MG_SEAT.includes(on) && gunSeat(e)); } catch { return false; } }
+// v9.2: the gunboat's / helicopter's second seat is the MG: a soldier there fires it as from a nest
+function gunSeat(e) { try { const v = e.getComponent("minecraft:riding")?.entityRidingOn; const rs = v?.getComponent("minecraft:rideable")?.getRiders() ?? []; return rs[1]?.id === e.id; } catch { return false; } }
 const nestState = new Map(); // nest id -> { ammo, next }
 system.runInterval(() => {
   const now = tick();
@@ -6878,7 +6999,14 @@ function followPersonal(e, now) {
     if (hit) { pr.planning = false; pr.pts = hit; pr.waitKey = undefined; pr.t = now; }
     else if (!PENDING.has(pr.waitKey) || now - pr.t > 400) { const k = pr.kind, d0 = pr.dest; personal.delete(e.id); PENDING.delete(pr.waitKey); planPersonalTo(e, k, d0, now); return { g: "g_none", t: "t_mid", urgent: false }; }
   }
-  if (pr.planning) { if (now - pr.t > (["advance", "engage", "settle"].includes(pr.kind) ? 400 : 160)) { if (globalThis.__planStats) globalThis.__planStats.dropped++; return drop(); } return now - pr.t < 40 ? { g: "g_none", t: "t_mid", urgent: false } : undefined; }   // a short wait for the route; never frozen (v7.3: a long one gets time)
+  if (pr.planning && pr.dest && STAIRS.length && (now - pr.t) % 10 === 0 && Math.abs(pr.dest.y - e.location.y) > 2.5 && flat(pr.dest, e.location) <= 40) {
+    const r = portalRoute(e.dimension, e.location, pr.dest);                  // (v9.2: the stairs were just learned: no more waiting)
+    if (r && r.length > 1) { if (pr.job) pr.job.cancel = true; if (pr.waitKey) PENDING.delete(pr.waitKey); pr.planning = false; pr.pts = r; pr.idx = 0; pr.t = now; pr.waitKey = undefined; }
+  }
+  if (pr.planning) {
+    if (now - pr.t > (["advance", "engage", "settle"].includes(pr.kind) ? 400 : 160)) { if (globalThis.__planStats) globalThis.__planStats.dropped++; return drop(); }
+    return now - pr.t < 40 ? { g: "g_none", t: "t_mid", urgent: false } : undefined;
+  }   // a short wait for the route; never frozen (v7.3: a long one gets time)
   if (!pr.pts) return drop();
   const i = trackIdx(e.id, pr.pts, e.location);
   pr.idx = i;
@@ -7296,7 +7424,16 @@ function buildingRole(e, d, now, S, B, t) {
     B.role = R;
     if (R.spot) claimSpot(e, R.spot, now);
   }
-  if (!R.spot) { if (R.job === "reserve" && !S.known.size) note(e, JOB_NOTE.reserve); return undefined; }
+  if (!R.spot) {
+    if (R.job !== "reserve") return undefined;
+    if (!S.known.size) { note(e, JOB_NOTE.reserve); return undefined; }
+    // (v9.2: the reserve in a fight is the men who go where it is: up to the nearest enemy known, until he has a shot)
+    const nk = nearestKnownB(S, e);
+    if (!nk || nk.dd < 8 || (t?.isValid && canHit(e, t))) return undefined;
+    if (!personal.has(e.id) || now - (B.resT ?? -999) > 200) { B.resT = now; planPersonalTo(e, "engage", { x: nk.q.x, y: nk.q.y, z: nk.q.z }, now); }
+    note(e, "reserve: moving up to the fight");
+    return followPersonal(e, now);
+  }
   const l = e.location;
   // (v7.4: committed to moving, not to a spot: a man at a window with no shot from it for 10 s in a fight goes and finds
   //  one (the brain's shot-seeking and closing-in take over); the door and stairhead men stay: waiting IS their job)
@@ -9247,9 +9384,15 @@ system.runInterval(() => {
 // the squad's own use of it: (1) the start of an assault or a flank across open ground they can be shot on; (2) the
 // dash at a held building's door; (3) pinned down in the open (most of them under fire where they lie): a screen to
 // get out from under it
+// v9.2: smoke is for a real firefight, never "because there's a fight somewhere": the squad has SEEN the enemy (not
+// only heard of him), the contact is 5 s old or more, and it's under fire now (rounds at its men in the last 3 s).
+// when this soldier (or player) last fired: his own gun state, else the gunfire log
+function lastFired(id) { const g = gunState.get(id)?.lastShot; if (g !== undefined) return g; for (let i = SHOTS.length - 1; i >= 0; i--) if (SHOTS[i].id === id) return SHOTS[i].t; return undefined; }
+const underFire = (ours, now, win = 60) => ours.filter((e) => now - (firedAt.get(e.id)?.t ?? -9999) < win || now - (hurtBy.get(e.id)?.t ?? -9999) < win).length;
 function squadSmoke(S, ours, known, now) {
   const prev = S.smokePlan; S.smokePlan = S.plan;
   if (!known.length || now - (S.smokeT ?? -99999) < SMOKE.squadGap) return;
+  if (S.contactT < 0 || now - S.contactT < 100 || !known.some((q) => !q.heard && now - q.t < 60) || !underFire(ours, now)) { S.pinN = 0; return; }
   const oc = S.ourC; if (!oc) return;
   const dim = ours[0].dimension, look = known.filter((q) => !q.heard).slice(0, 4);
   let near, nd = 1e9;
@@ -9264,14 +9407,16 @@ function squadSmoke(S, ours, known, now) {
     const doors = entrances(dim, S.enemyC ?? near).slice().sort((p, q) => flat(p, oc) - flat(q, oc));
     const door = doors[0];
     const watch = known.slice(0, 4);                                          // (inside, they're mostly heard, not seen: where they are is enough)
-    if (door && flat(door, oc) >= 8 && flat(door, oc) <= SMOKE.reach + 6 && (exposureAt(dim, { x: (oc.x + door.x) / 2, y: oc.y, z: (oc.z + door.z) / 2 }, watch) > 0 || ours.some((e) => now - (firedAt.get(e.id)?.t ?? -9999) < 100))) {
+    if (door && flat(door, oc) >= 8 && flat(door, oc) <= SMOKE.reach + 6 && exposureAt(dim, { x: (oc.x + door.x) / 2, y: oc.y, z: (oc.z + door.z) / 2 }, watch) > 0) {
       S.bplan.smoked = true;
       screenAt = { x: oc.x + (door.x - oc.x) * 0.7, y: door.y, z: oc.z + (door.z - oc.z) * 0.7 }; why = "covering the run to the door";
     }
   }
-  if (!screenAt && nd >= 10) {
-    const pinned = ours.filter((e) => (suppB.get(e.id) ?? 0) > 8 || now - (firedAt.get(e.id)?.t ?? -9999) < 30).length;
-    if (pinned * 2 > ours.length && ours.filter((e) => !isIndoors(e)).length * 2 > ours.length && look.length && exposureAt(dim, oc, look) > 0) {
+  // pinned: most of the squad really suppressed, three checks (3 s) in a row, out in the open where they're seen
+  const pinnedNow = ours.filter((e) => (suppB.get(e.id) ?? 0) > 8).length * 2 > ours.length;
+  S.pinN = pinnedNow ? (S.pinN ?? 0) + 1 : 0;
+  if (!screenAt && nd >= 10 && S.pinN >= 3) {
+    if (ours.filter((e) => !isIndoors(e)).length * 2 > ours.length && look.length && exposureAt(dim, oc, look) > 0) {
       const L = nd; screenAt = { x: oc.x + ((near.x - oc.x) / L) * 5, y: oc.y, z: oc.z + ((near.z - oc.z) / L) * 5 }; why = "pinned down, screening";
     }
   }
@@ -9283,6 +9428,72 @@ function squadSmoke(S, ours, known, now) {
   throwSmoke(who, screenAt, why);
 }
 
+// ---- v9.2: fire into smoke. A man who lost sight of his enemy in the last 4 s, and it's a smoke cloud between them
+// (not a wall), puts short bursts where he last saw him: wider, fewer, and never with a friend in the way. Not the
+// sniper (no target, no shot) and not the rocket.
+function smokeShot(e, d, spec, st, now) {
+  if (d.weapon === "sniper" || d.weapon === "at" || SAFE.has(e.id)) return false;
+  const ps = perc.get(e.id), ls = ps?.lastSeen;
+  if (!ls || !ps.lostT || now - ps.lostT > 80 || ps.threat?.isValid && !ps.lostT) return false;
+  if ((st.smokeN ?? 0) >= 8 && now - (st.smokeT0 ?? 0) < 100) return false;   // (a few bursts, then he waits for it to thin)
+  const h = headLoc(e), p = { x: ls.x, y: ls.y + 1.1, z: ls.z };
+  const dx = p.x - h.x, dy = p.y - (h.y - 0.2), dz = p.z - h.z, L = Math.hypot(dx, dy, dz);
+  if (L < 3 || L > Math.min(spec.fire, 80) || !smokeBlocks(e.dimension.id, h, p)) return false;
+  const u = { x: dx / L, y: dy / L, z: dz / L }, from = { x: h.x + u.x * 0.9, y: h.y - 0.2 + u.y * 0.9, z: h.z + u.z * 0.9 };
+  try { if (rayHit(e.dimension, from, u, L - 1.2)) return false; } catch { return false; }   // a wall in the way: not the smoke
+  if (friendlyInLine(e, d, h, p, undefined)) return false;
+  if (turnTo(e, p, 25) > 30) { st.next = now + 2; return true; }
+  if (now - (st.smokeT0 ?? 0) >= 100) { st.smokeT0 = now; st.smokeN = 0; }
+  st.smokeN = (st.smokeN ?? 0) + 1;
+  const r = () => (Math.random() + Math.random() - 1) * Math.max(0.03, spec.spread * 5);
+  const dir = { x: u.x + r(), y: u.y + r() * 0.5, z: u.z + r() };
+  if (preciseHits()) hitscan(e, spec, from, dir, Math.min(spec.fire + 20, 220), sd(e).weapon);
+  else try { const b = e.dimension.spawnEntity(spec.bullet, from); const pc = b.getComponent("minecraft:projectile"); if (pc) { OURS.add(b.id); pc.owner = e; pc.shoot({ x: dir.x * spec.speed, y: dir.y * spec.speed, z: dir.z * spec.speed }); } } catch {}
+  noteShot(e); st.lastShot = now; st.ammo--;
+  note(e, "firing into the smoke");
+  if (st.ammo > 0) st.next = now + Math.max(3, spec.gap) + 2; else { st.ammo = spec.mag; st.next = now + spec.reload + Math.floor(Math.random() * 8); }
+  return true;
+}
+// ---- v9.2: the right weapon for the moment. Each gunner has his main gun, a sidearm (pistol) and a blade.
+// - An enemy right on him (2.5 blocks) and his gun the wrong tool there (jammed, reloading, or a long gun: rifle,
+//   sniper, machine gun, launcher; or the enemy has a blade and he can't fire this instant): the sword. An SMG, a
+//   pistol, a semi-automatic or a shotgun keeps shooting up close; that's what they're for.
+// - A jam (rare: 2 to 8 in a thousand rounds, by weapon) takes 3-7 s to clear: the pistol meanwhile, or the sword if
+//   an enemy is within 5 blocks.
+// - A rifle or machine gun reloading with an enemy within 6 blocks: a quick draw of the pistol.
+// - Otherwise the main gun. What he holds is what he uses; he doesn't swap back and forth by the second.
+const ARM = new Map(); // soldier id -> { arm: "main" | "pistol" | "blade", t, jamUntil, mainAmmo }
+const JAM = { rifle: 0.003, semi: 0.004, smg: 0.006, mg: 0.008, shotgun: 0.003, pistol: 0.002, sniper: 0.002, at: 0 };
+const LONG_GUN = ["rifle", "sniper", "mg", "at"];
+function jamGun(e, d, now) {
+  const A = ARM.get(e.id) ?? { arm: "main", t: -999 }; ARM.set(e.id, A);
+  A.jamUntil = now + 60 + Math.floor(Math.random() * 80);
+  note(e, "gun jammed: clearing it");
+  if (Math.random() < 0.5) callout(e, "Reloading!");
+}
+function chooseArm(e, d, now, calm) {
+  let A = ARM.get(e.id);
+  if (!A) { A = { arm: "main", t: -999, jamUntil: 0 }; ARM.set(e.id, A); }
+  const st = gunState.get(e.id), jammed = A.jamUntil > now;
+  const reloading = !!st && (st.reloadUntil ?? 0) > now + 10;
+  let want = "main";
+  if (!calm && !d.surr && !downed.has(e.id) && !ridingNest(e)) {
+    const close = closeEnemy(e, d, 2.5);
+    const foeBlade = close?.typeId === SOLDIER && !GUNS.includes(sd(close).weapon);
+    if (close && (jammed || reloading || LONG_GUN.includes(d.weapon) || (foeBlade && now < (st?.next ?? 0)))) want = "blade";
+    else if (jammed) want = closeEnemy(e, d, 5) ? "blade" : d.weapon === "pistol" ? "main" : "pistol";
+    else if (reloading && LONG_GUN.includes(d.weapon) && closeEnemy(e, d, 6)) want = "pistol";
+    if (want === "main" && A.arm === "blade" && closeEnemy(e, d, 3.5) && (LONG_GUN.includes(d.weapon) || jammed)) want = "blade";   // (still in the melee: the sword stays out)
+  }
+  if (want === A.arm) return want;
+  if (want !== "blade" && now - A.t < 20) return A.arm;                     // (no swapping by the second)
+  if (A.arm === "pistol" && st) { st.ammo = A.mainAmmo ?? GUN_SPEC[d.weapon]?.mag ?? 1; }
+  if (want === "pistol" && st) { A.mainAmmo = st.ammo; st.ammo = GUN_SPEC.pistol.mag; st.next = Math.max(st.next, now + 8); }   // (the draw takes a moment)
+  A.arm = want; A.t = now;
+  try { equip(e, want === "blade" ? "iron_sword" : want === "pistol" ? `ww:${gunModel(d.faction, "pistol")}` : weaponItem(e)); } catch {}
+  note(e, want === "blade" ? "hand to hand" : want === "pistol" ? "drew his pistol" : "back on his gun");
+  return want;
+}
 // ---- the wounded dragged to cover. A man down where the enemy can see him, with no medic on the way: the nearest
 // squad mate (within 16 blocks) goes out for him, throws smoke if he has it, grabs him and drags him back to the
 // nearest spot the enemy can't see, then patches him up: ~5 s of first aid and he's back on his feet, weak (4 hearts
@@ -9329,15 +9540,24 @@ system.runInterval(() => {
       if (c.dd < wd) { wd = c.dd; who = c.e; }
     }
     if (!who) continue;
+    // (v9.2: nobody runs out into fire. Enemies who can see the wounded man and are shooting: smoke first if he has
+    //  it (and he waits for it to bloom), else he waits for a lull; the same for the ground he'd have to cross)
+    const threats = enemiesSeeing(v, dv.faction), active = threats.filter((c) => now - (lastFired(c.id) ?? -9999) < 100);
+    const blinded = (c, at) => SMOKES.length && smokeBlocks(v.dimension.id, { x: c.x, y: c.y + 1.6, z: c.z }, at);
+    const vChest = { x: v.location.x, y: v.location.y + 0.4, z: v.location.z }, mid = { x: (v.location.x + who.location.x) / 2, y: v.location.y + 1, z: (v.location.z + who.location.z) / 2 };
+    const exposed = active.filter((c) => !blinded(c, vChest) || clearShot(v.dimension, { x: c.x, y: c.y + 1.6, z: c.z }, mid) && !blinded(c, mid));
+    let wait = 0;
+    if (exposed.length) {
+      if (!smokeScreen(who, v.location, exposed[0], 3.5, "covering a wounded man")) continue;   // no smoke: not now
+      wait = 45;                                                              // the canister's flight and the cloud's bloom
+    }
     const wk = squadKey(who, sd(who)), WS = squads.get(wk);
     let busy = 0; for (const [, D2] of DRAG) if (D2.sq === wk) busy++;
     if (busy >= ((WS?.n ?? 0) >= 8 ? 2 : 1) || (WS?.ratio !== undefined && WS.ratio < 0.6 && flat(who.location, v.location) > 6)) continue;   // a squad losing the fight keeps its men in it
-    DRAG.set(id, { sq: wk, by: who.id, phase: "go", t0: now, phaseT: now }); v9stat("rescueGo");
+    DRAG.set(id, { sq: wk, by: who.id, phase: wait ? "wait" : "go", t0: now, phaseT: now, until: now + wait }); v9stat("rescueGo");
     dragOf.set(who.id, id);
-    note(who, "going for a wounded mate");
-    callout(who, "Moving up!", { event: true });
-    const seen = enemiesSeeing(v, dv.faction);
-    if (seen.length) { const c = seen[0]; smokeScreen(who, v.location, c, 3.5, "covering a wounded man"); }
+    note(who, wait ? "smoke out, then going for a wounded mate" : "going for a wounded mate");
+    if (!wait) callout(who, "Moving up!", { event: true });
   }
 }, 20);
 function casevacMove(e, d, now) {
@@ -9345,6 +9565,13 @@ function casevacMove(e, d, now) {
   const D = DRAG.get(vid), v = world.getEntity(vid);
   if (!D || !v?.isValid || !downed.has(vid)) { dragEnd(vid); return undefined; }
   const dd = flat(v.location, e.location), dy = Math.abs(v.location.y - e.location.y);
+  if (D.phase === "wait") {
+    if (now < D.until) { note(e, "waiting for the smoke"); return { g: "g_none", t: "t_mid", urgent: false }; }
+    D.phase = "go"; D.phaseT = now; callout(e, "Moving up!", { event: true });
+  }
+  if (D.phase === "go" && dd > 3 && now - (firedAt.get(e.id)?.t ?? -9999) < 12 && !(SMOKES.length && SMOKES.some((sm) => now <= sm.until && flat(sm, v.location) < 8))) {
+    note(e, "under fire: back to cover"); dragEnd(vid); dragCool.set(e.id, now + 400); return undefined;   // (v9.2: shot at on the way, no smoke: he goes back)
+  }
   if (D.phase === "go") {
     if (dd < 1.9 && dy < 1.5) {
       downed.set(vid, Math.max(downed.get(vid) ?? now, now + 500)); try { sdp(v, "war:downed", downed.get(vid)); } catch {}   // pressure on the wound: he holds on
@@ -9511,6 +9738,59 @@ function ambushQuiet(e) {
   try { const S = squads.get(squadKey(e, sd(e))); return !!S?.amb && tick() < S.amb.until; } catch { return false; }
 }
 
+// ---- v9.2: the mounted MG (gunboat bow gun, helicopter door gun) fired by a player: a burst per click toward the
+// crosshair, precise rounds, the crew and the vehicle itself never hit
+const vmgState = new Map(); // vehicle id -> { ammo, next }
+function vehicleMG(v, shooter) {
+  const now = tick();
+  let st = vmgState.get(v.id); if (!st) { st = { ammo: 60, next: 0 }; vmgState.set(v.id, st); }
+  if (now < st.next) return;
+  const crew = new Set([v.id, ...(v.getComponent("minecraft:rideable")?.getRiders() ?? []).map((r) => r.id)]);
+  for (let k = 0; k < 5 && st.ammo > 0; k++, st.ammo--) system.runTimeout(() => {
+    try {
+      const h = headLoc(shooter), dir = shooter.getViewDirection(), sp = 0.012, rr = () => (Math.random() + Math.random() - 1) * sp;
+      const d2 = { x: dir.x + rr(), y: dir.y + rr(), z: dir.z + rr() };
+      let from = { x: h.x + d2.x * 1.5, y: h.y - 0.1 + d2.y * 1.5, z: h.z + d2.z * 1.5 };
+      for (let t = 0; t < 4; t++) { if (!v.dimension.getEntitiesFromRay(from, d2, { maxDistance: 0.6 }).some((r) => crew.has(r.entity.id))) break; from = { x: from.x + d2.x, y: from.y + d2.y, z: from.z + d2.z }; }
+      hitscan(shooter, GUN_SPEC.mg, from, d2, 160, "mg");
+      v.dimension.playSound("mg42_shot_mid", v.location, { volume: 2 });
+    } catch {}
+  }, k * 2);
+  st.next = now + 12;
+  if (st.ammo <= 0) { st.ammo = 60; st.next = now + 60; try { shooter.onScreenDisplay.setActionBar("§7MG reloading..."); } catch {} }
+}
+// ---- v9.2: the helicopter. It hovers on its own; W/S fly forward/back, the mouse turns it, looking up or down past
+// 20 degrees climbs or descends (the jump key climbs too). The rotor needs ~2 s to spin up before it lifts; with
+// nobody at the controls it settles to the ground. Hitting the ground or a wall hard, or being shot down, is a crash.
+function heliFly(v, st, pilot, riders, loc, ground) {
+  const RAD = Math.PI / 180;
+  if (st.rpm === undefined) { st.rpm = 0; st.yaw = v.getRotation().y; st.speed = 0; st.vy = 0; }
+  st.rpm = Math.max(0, Math.min(1, st.rpm + (pilot ? 0.025 : -0.01)));
+  let wantSp = 0, wantVy = ground ? 0 : -0.12;
+  if (pilot) {
+    const mv = pilot.inputInfo.getMovementVector();
+    st.yaw = turnToward(st.yaw, pilot.getRotation().y, 4);
+    const lp = Math.asin(Math.max(-1, Math.min(1, pilot.getViewDirection().y))) / RAD;
+    let climb = 0;
+    try { if (String(pilot.inputInfo.getButtonState?.("Jump")) === "Pressed") climb = 1; } catch {}
+    if (!climb && Math.abs(lp) > 20) climb = Math.max(-1, Math.min(1, (lp - Math.sign(lp) * 20) / 30));
+    wantVy = climb * 0.32;
+    wantSp = mv.y > 0 ? mv.y * 0.65 : mv.y * 0.2;
+    if (st.rpm < 0.7) { wantVy = Math.min(wantVy, ground ? 0 : -0.2); wantSp *= st.rpm; }   // not enough lift yet
+    if (loc.y > 300) wantVy = Math.min(wantVy, 0);
+    if (st.age % 5 === 0) { try { pilot.onScreenDisplay.setActionBar(`§7Rotor ${Math.round(st.rpm * 100)}% · Speed ${Math.round(st.speed * 72)} km/h · Alt ${Math.round(loc.y)}\n${HUD["war:heli"]}`); } catch {} }
+  }
+  st.speed += (wantSp - st.speed) * 0.05;
+  st.vy += (wantVy - st.vy) * 0.15;
+  if (ground && st.vy < 0) {
+    if (st.vy < -0.45 && st.age > 20) { crashPlane(v, riders); return; }       // came down hard
+    st.vy = 0;
+  }
+  const f = fwdFromYaw(st.yaw), dir = { x: f.x, y: 0, z: f.z };
+  if (st.age > 20 && Math.abs(st.speed) > 0.45 && blockedAhead(v, { x: dir.x * Math.sign(st.speed), y: 0, z: dir.z * Math.sign(st.speed) }, 3, [0.5, 1.5, 2.5])) { crashPlane(v, riders); return; }
+  v.setRotation({ x: 0, y: st.yaw });
+  v.clearVelocity(); v.applyImpulse({ x: dir.x * st.speed, y: st.vy, z: dir.z * st.speed });
+}
 // ================================================================ v9.1: riding (vanilla mounts and boats)
 // Soldiers ride saddled horses, donkeys, mules, camels, pigs (and skeleton / zombie horses) and boats, never this
 // add-on's own vehicles (they have their own crews and menus). An animal only takes a rider of the kinds it allows,
@@ -9704,7 +9984,7 @@ system.runInterval(() => {
     const live = new Set();
     for (const t of [SOLDIER, HOUND]) for (const e of allOf(t)) live.add(e.id);
     for (const p of world.getAllPlayers()) live.add(p.id);
-    for (const m of [breachFragUsed, smokeUsed, dragCool, firedAt, lastPos, noiseFrom, noiseT, alertUntil, modeMemo, propSync, mountedAt, wetTrack, swimGiveUp, breakCool, recentHits, wetMemo, medicCall, lastHp, buildBudget, shotAtPlayer, doorLook, hopT, settleT, flinchT, edgeFearT, kiteT, fleeFire, lastUse, hurtBy, perc, brain, gunState, notes, sweep, marchWatch, forceGlide, glideBan, aimedBy, hpMemo]) {
+    for (const m of [ARM, breachFragUsed, smokeUsed, dragCool, firedAt, lastPos, noiseFrom, noiseT, alertUntil, modeMemo, propSync, mountedAt, wetTrack, swimGiveUp, breakCool, recentHits, wetMemo, medicCall, lastHp, buildBudget, shotAtPlayer, doorLook, hopT, settleT, flinchT, edgeFearT, kiteT, fleeFire, lastUse, hurtBy, perc, brain, gunState, notes, sweep, marchWatch, forceGlide, glideBan, aimedBy, hpMemo]) {
       if (!m?.size) continue;
       for (const k of [...m.keys()]) if (typeof k === "string" && k.length > 3 && !k.includes(":") && !live.has(k)) m.delete(k);
     }

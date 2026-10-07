@@ -1,0 +1,131 @@
+{
+  "format_version": "1.21.50",
+  "minecraft:entity": {
+    "description": {
+      "identifier": "war:gunboat",
+      "is_spawnable": false,
+      "is_summonable": true
+    },
+    "components": {
+      "minecraft:type_family": {
+        "family": [
+          "war_vehicle",
+          "war_gunboat",
+          "inanimate"
+        ]
+      },
+      "minecraft:collision_box": {
+        "width": 2.5,
+        "height": 1.2
+      },
+      "minecraft:health": {
+        "value": 100,
+        "max": 100
+      },
+      "minecraft:physics": {
+        "has_gravity": true,
+        "has_collision": true
+      },
+      "minecraft:pushable": {
+        "is_pushable": false,
+        "is_pushable_by_piston": false
+      },
+      "minecraft:knockback_resistance": {
+        "value": 1.0
+      },
+      "minecraft:persistent": {},
+      "minecraft:damage_sensor": {
+        "triggers": [
+          {
+            "cause": "fall",
+            "deals_damage": "no"
+          },
+          {
+            "cause": "drowning",
+            "deals_damage": "no"
+          }
+        ]
+      },
+      "minecraft:nameable": {
+        "always_show": false
+      },
+      "minecraft:rideable": {
+        "seat_count": 8,
+        "family_types": [
+          "player",
+          "war_soldier"
+        ],
+        "interact_text": "Board",
+        "pull_in_entities": false,
+        "crouching_skip_interact": true,
+        "seats": [
+          {
+            "position": [
+              0,
+              0.35,
+              -0.3
+            ]
+          },
+          {
+            "position": [
+              0,
+              0.35,
+              2.3
+            ]
+          },
+          {
+            "position": [
+              -0.6,
+              0.35,
+              -1.6
+            ]
+          },
+          {
+            "position": [
+              0.6,
+              0.35,
+              -1.6
+            ]
+          },
+          {
+            "position": [
+              -0.6,
+              0.35,
+              -2.5
+            ]
+          },
+          {
+            "position": [
+              0.6,
+              0.35,
+              -2.5
+            ]
+          },
+          {
+            "position": [
+              -0.85,
+              0.35,
+              0.9
+            ]
+          },
+          {
+            "position": [
+              0.85,
+              0.35,
+              0.9
+            ]
+          }
+        ]
+      },
+      "minecraft:buoyant": {
+        "base_buoyancy": 1.0,
+        "apply_gravity": true,
+        "simulate_waves": false,
+        "liquid_blocks": [
+          "minecraft:water",
+          "minecraft:flowing_water"
+        ]
+      }
+    }
+  }
+}

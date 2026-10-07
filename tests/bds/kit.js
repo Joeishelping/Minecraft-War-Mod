@@ -157,6 +157,19 @@ KS.ride = async (o, ox, oz) => {
   for (const m of mounts) { try { m.remove(); } catch {} }
   return r;
 };
+// v9.2: a live grenade at a soldier's feet: does it hurt him, and do the men near it run?
+KS.nade = async (o, ox, oz) => {
+  floorAt(ox - 20, oz - 20, ox + 20, oz + 20);
+  const men = []; for (let i = 0; i < 4; i++) men.push(kitSoldier(1, { x: ox + i * 1.5 + 0.5, y: Y, z: oz + 0.5 }, "rifle", "hold"));
+  await kitWait(40);
+  const hp0 = men.map((e) => e.getComponent("minecraft:health").currentValue), p0 = men.map((e) => ({ ...e.location }));
+  const thrower = o.by ? kitSoldier(2, { x: ox + 0.5, y: Y, z: oz + 15.5 }, "rifle", "hold") : undefined;
+  liveNades.push({ dim: ow(), at: { x: ox + 1.5, y: Y, z: oz + 1.5 }, boom: tick() + Number(o.fuse ?? 30), by: thrower });
+  await kitWait(28);
+  const moved = men.map((e, i) => +Math.hypot(e.location.x - p0[i].x, e.location.z - p0[i].z).toFixed(1));
+  await kitWait(20);
+  return { hp0, hp1: men.map((e) => e.isValid ? (downed.has(e.id) ? "down" : e.getComponent("minecraft:health").currentValue) : "dead"), movedBeforeBoom: moved };
+};
 KS.siege = async (o, ox, oz) => {
   floorAt(ox - 20, oz - 50, ox + 60, oz + 40);
   const B = (x0, y0, z0, x1, y1, z1, b) => kfill(ox + x0, Y + y0, oz + z0, ox + x1, Y + y1, oz + z1, b);
@@ -215,6 +228,72 @@ KS.bigSiege = async (o, ox, oz) => {
     return !A.length || !D.length;
   });
   return { ticks: tick() - t0, attLeft: att.filter((e) => e.isValid && !isDown(e)).length, defLeft: def.filter((e) => e.isValid && !isDown(e)).length, firstUp, attUpMax, labelLies: lbl.n ? +(lbl.lie / lbl.n).toFixed(3) : 0, labelN: lbl.n, ...kitShotStats(t0) };
+};
+// v9.2: upstairs, the enemy below. mode=order: told to a point on the ground floor (inside); mode=free: holding up
+// there, free to fight (roam). How soon they're down, how many, and how many stand idle under a busy label.
+KS.downFight = async (o, ox, oz) => {
+  floorAt(ox - 20, oz - 60, ox + 80, oz + 50);
+  const B = (x0, y0, z0, x1, y1, z1, b) => kfill(ox + x0, Y + y0, oz + z0, ox + x1, Y + y1, oz + z1, b);
+  B(0, 0, 0, 47, 18, 29, "stone_bricks"); B(1, 0, 1, 46, 17, 28, "air");
+  B(1, 6, 1, 46, 6, 28, "oak_planks"); B(1, 12, 1, 46, 12, 28, "oak_planks");
+  B(16, 0, 1, 16, 5, 28, "stone_bricks"); B(32, 0, 1, 32, 5, 28, "stone_bricks");
+  for (const x of [16, 32]) for (const z of [8, 20]) B(x, 0, z, x, 1, z, "air");
+  for (let i = 0; i < 6; i++) kset(ox + 40 + i, Y + i, oz + 26, STAIR("+x")); B(39, 6, 26, 45, 6, 26, "air");
+  for (let i = 0; i < 6; i++) kset(ox + 3 + i, Y + 6 + i, oz + 3, STAIR("+x")); B(2, 12, 3, 8, 12, 3, "air");
+  for (const x of [23, 24]) B(x, 0, 0, x, 1, 0, "air");
+  setRelPair(1, 2, "1", false);
+  const att = [], def = [];
+  for (let i = 0; i < 10; i++) att.push(kitSoldier(1, { x: ox + 8 + i * 3 + 0.5, y: Y + 7, z: oz + 8.5 + (i % 3) * 4 }, ["rifle", "smg", "semi", "mg"][i % 4], o.mode === "free" ? "patrol" : "hold"));
+  for (let i = 0; i < 8; i++) def.push(kitSoldier(2, { x: ox + 4 + i * 1.5 + 0.5, y: Y, z: oz + 14.5 + (i % 2) * 3 }, ["rifle", "smg", "semi", "mg"][i % 4], "hold"));
+  await kitWait(40);
+  if (o.mode !== "free") await kitOrder(1, { x: ox + 24, y: Y, z: oz + 14 });
+  const t0 = tick();
+  let firstDown = -1, down30 = 0, down60 = 0, idleLbl = 0, lblN = 0; const hist = new Map(), lab = {};
+  await kitLoop(Number(o.ticks ?? 2400), () => {
+    const A = att.filter((e) => e.isValid && !isDown(e)), D = def.filter((e) => e.isValid && !isDown(e));
+    const dn = A.filter((e) => e.location.y < Y + 3).length;
+    if (dn && firstDown < 0) firstDown = tick() - t0;
+    if (tick() - t0 <= 600) down30 = Math.max(down30, dn); if (tick() - t0 <= 1200) down60 = Math.max(down60, dn);
+    if ((tick() - t0) % 20 === 0) for (const e of A) {
+      const n = notes.get(e.id); const h = hist.get(e.id) ?? []; h.push({ ...e.location }); if (h.length > 6) h.shift(); hist.set(e.id, h);
+      if (!n) continue;
+      const busy = /working out the way|advancing|in reserve|assaulting|moving to engage|storming/.test(n.text);
+      if (!busy) continue; lblN++; lab[n.text] = (lab[n.text] ?? 0) + 1;
+      if (h.length >= 6 && Math.hypot(h[0].x - e.location.x, h[0].z - e.location.z) < 0.8 && Math.abs(h[0].y - e.location.y) < 0.8 && now0(e)) idleLbl++;
+    }
+    return !A.length || !D.length;
+  });
+  function now0(e) { return !(gunState.get(e.id)?.lastShot > tick() - 60); }
+  return { mode: o.mode ?? "order", ticks: tick() - t0, firstDown, down30, down60, attLeft: att.filter((e) => e.isValid && !isDown(e)).length, defLeft: def.filter((e) => e.isValid && !isDown(e)).length, idleBusyLabel: lblN ? +(idleLbl / lblN).toFixed(2) : 0, labels: lab };
+};
+// v9.2: the new vehicles: they spawn, carry soldiers, a soldier in the gun seat counts as the gunner, an unpiloted
+// helicopter in the air settles to the ground, and each blows up when destroyed
+KS.vehicles = async (o, ox, oz) => {
+  floorAt(ox - 30, oz - 30, ox + 30, oz + 30);
+  kfill(ox + 8, Y - 3, oz - 10, ox + 25, Y - 1, oz + 10, "water");
+  const r = {};
+  const tr = ow().spawnEntity("war:truck", { x: ox - 10.5, y: Y, z: oz + 0.5 });
+  const gb = ow().spawnEntity("war:gunboat", { x: ox + 16.5, y: Y - 1, z: oz + 0.5 });
+  const he = ow().spawnEntity("war:heli", { x: ox - 10.5, y: Y + 12, z: oz + 15.5 });
+  const men = []; for (let i = 0; i < 4; i++) men.push(kitSoldier(1, { x: ox + i * 2 + 0.5, y: Y, z: oz - 8.5 }, "rifle", "hold"));
+  await kitWait(20);
+  r.truckSeats = tr.getComponent("minecraft:rideable")?.seatCount; r.boatSeats = gb.getComponent("minecraft:rideable")?.seatCount; r.heliSeats = he.getComponent("minecraft:rideable")?.seatCount;
+  try { tr.getComponent("minecraft:rideable").addRider(men[0]); } catch {}
+  try { gb.getComponent("minecraft:rideable").addRider(men[1]); gb.getComponent("minecraft:rideable").addRider(men[2]); } catch {}
+  await kitWait(10);
+  r.inTruck = men[0].getComponent("minecraft:riding")?.entityRidingOn?.typeId ?? null;
+  r.boatGunner = ridingNest(men[2]); r.boatDriverNotGunner = !ridingNest(men[1]);
+  const h0 = he.location.y;
+  await kitWait(200);
+  r.heliFell = +(h0 - he.location.y).toFixed(1); r.boatY = +(gb.location.y - Y).toFixed(1);
+  const tk = ow().spawnEntity("war:tank", { x: ox - 20.5, y: Y, z: oz - 15.5 });
+  await kitWait(5);
+  const kill = (v) => { try { return v.applyDamage(500, { cause: "entityExplosion" }); } catch (err) { return String(err).slice(0, 40); } };
+  r.dmg = [tr, gb, he, tk].map(kill);
+  await kitWait(30);
+  r.gone = [tr, gb, he, tk].map((v) => !v.isValid || (v.getComponent("minecraft:health")?.currentValue ?? 0) <= 0);
+  r.hp = [tr, gb, he, tk].map((v) => { try { return v.getComponent("minecraft:health")?.currentValue; } catch { return "x"; } });
+  return r;
 };
 KS.trip = async (o, ox, oz) => {
   const N = Number(o.n ?? 8), mode = o.mode ?? "down";

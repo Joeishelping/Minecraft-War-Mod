@@ -1,0 +1,122 @@
+{
+  "format_version": "1.21.50",
+  "minecraft:entity": {
+    "description": {
+      "identifier": "war:heli",
+      "is_spawnable": false,
+      "is_summonable": true
+    },
+    "components": {
+      "minecraft:type_family": {
+        "family": [
+          "war_vehicle",
+          "war_heli",
+          "inanimate"
+        ]
+      },
+      "minecraft:collision_box": {
+        "width": 3.0,
+        "height": 3.0
+      },
+      "minecraft:health": {
+        "value": 90,
+        "max": 90
+      },
+      "minecraft:physics": {
+        "has_gravity": false,
+        "has_collision": true
+      },
+      "minecraft:pushable": {
+        "is_pushable": false,
+        "is_pushable_by_piston": false
+      },
+      "minecraft:knockback_resistance": {
+        "value": 1.0
+      },
+      "minecraft:persistent": {},
+      "minecraft:damage_sensor": {
+        "triggers": [
+          {
+            "cause": "fall",
+            "deals_damage": "no"
+          },
+          {
+            "cause": "drowning",
+            "deals_damage": "no"
+          }
+        ]
+      },
+      "minecraft:nameable": {
+        "always_show": false
+      },
+      "minecraft:rideable": {
+        "seat_count": 8,
+        "family_types": [
+          "player",
+          "war_soldier"
+        ],
+        "interact_text": "Board",
+        "pull_in_entities": false,
+        "crouching_skip_interact": true,
+        "seats": [
+          {
+            "position": [
+              -0.45,
+              0.85,
+              1.9
+            ]
+          },
+          {
+            "position": [
+              0.45,
+              0.85,
+              1.9
+            ]
+          },
+          {
+            "position": [
+              -0.6,
+              0.85,
+              0.8
+            ]
+          },
+          {
+            "position": [
+              0.6,
+              0.85,
+              0.8
+            ]
+          },
+          {
+            "position": [
+              -0.6,
+              0.85,
+              -0.1
+            ]
+          },
+          {
+            "position": [
+              0.6,
+              0.85,
+              -0.1
+            ]
+          },
+          {
+            "position": [
+              -0.6,
+              0.85,
+              -0.9
+            ]
+          },
+          {
+            "position": [
+              0.6,
+              0.85,
+              -0.9
+            ]
+          }
+        ]
+      }
+    }
+  }
+}

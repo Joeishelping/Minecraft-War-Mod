@@ -1,0 +1,140 @@
+{
+  "format_version": "1.21.50",
+  "minecraft:entity": {
+    "description": {
+      "identifier": "war:truck",
+      "is_spawnable": false,
+      "is_summonable": true
+    },
+    "components": {
+      "minecraft:type_family": {
+        "family": [
+          "war_vehicle",
+          "war_truck",
+          "inanimate"
+        ]
+      },
+      "minecraft:collision_box": {
+        "width": 3.0,
+        "height": 2.6
+      },
+      "minecraft:health": {
+        "value": 80,
+        "max": 80
+      },
+      "minecraft:physics": {
+        "has_gravity": true,
+        "has_collision": true
+      },
+      "minecraft:pushable": {
+        "is_pushable": false,
+        "is_pushable_by_piston": false
+      },
+      "minecraft:knockback_resistance": {
+        "value": 1.0
+      },
+      "minecraft:persistent": {},
+      "minecraft:damage_sensor": {
+        "triggers": [
+          {
+            "cause": "fall",
+            "deals_damage": "no"
+          },
+          {
+            "cause": "drowning",
+            "deals_damage": "no"
+          }
+        ]
+      },
+      "minecraft:nameable": {
+        "always_show": false
+      },
+      "minecraft:rideable": {
+        "seat_count": 10,
+        "family_types": [
+          "player",
+          "war_soldier"
+        ],
+        "interact_text": "Board",
+        "pull_in_entities": false,
+        "crouching_skip_interact": true,
+        "seats": [
+          {
+            "position": [
+              -0.45,
+              0.95,
+              2.5
+            ]
+          },
+          {
+            "position": [
+              0.45,
+              0.95,
+              2.5
+            ]
+          },
+          {
+            "position": [
+              -0.85,
+              0.95,
+              0.4
+            ]
+          },
+          {
+            "position": [
+              0.85,
+              0.95,
+              0.4
+            ]
+          },
+          {
+            "position": [
+              -0.85,
+              0.95,
+              -0.6
+            ]
+          },
+          {
+            "position": [
+              0.85,
+              0.95,
+              -0.6
+            ]
+          },
+          {
+            "position": [
+              -0.85,
+              0.95,
+              -1.6
+            ]
+          },
+          {
+            "position": [
+              0.85,
+              0.95,
+              -1.6
+            ]
+          },
+          {
+            "position": [
+              -0.85,
+              0.95,
+              -2.6
+            ]
+          },
+          {
+            "position": [
+              0.85,
+              0.95,
+              -2.6
+            ]
+          }
+        ]
+      },
+      "minecraft:variable_max_auto_step": {
+        "base_value": 1.0625,
+        "jump_prevented_value": 1.0625
+      }
+    }
+  }
+}

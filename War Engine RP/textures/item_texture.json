@@ -52,6 +52,15 @@
     },
     "war_mg_nest_item": {
       "textures": "textures/items/war_mg_nest_item"
+    },
+    "war_truck_item": {
+      "textures": "textures/items/war_truck_item"
+    },
+    "war_gunboat_item": {
+      "textures": "textures/items/war_gunboat_item"
+    },
+    "war_heli_item": {
+      "textures": "textures/items/war_heli_item"
     }
   }
 }

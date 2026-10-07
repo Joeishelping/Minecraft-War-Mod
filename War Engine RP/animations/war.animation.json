@@ -223,6 +223,25 @@
           ]
         }
       }
+    },
+    "animation.war.rotor_spin": {
+      "loop": true,
+      "bones": {
+        "rotor": {
+          "rotation": [
+            0,
+            "query.has_rider ? query.life_time * 1080 : 0",
+            0
+          ]
+        },
+        "tail_rotor": {
+          "rotation": [
+            "query.has_rider ? query.life_time * 1800 : 0",
+            0,
+            0
+          ]
+        }
+      }
     }
   }
 }
