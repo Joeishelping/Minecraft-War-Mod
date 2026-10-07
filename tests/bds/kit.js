@@ -94,6 +94,69 @@ KS.dpmove = async (o, ox, oz) => {
   for (const e of men) { try { e.remove(); } catch {} }
   return { n: N };
 };
+// v9.1: which vanilla mounts take a soldier as a rider (by script), and do they move with him on
+KS.mounts = async (o, ox, oz) => {
+  floorAt(ox - 30, oz - 30, ox + 30, oz + 30);
+  kfill(ox + 10, Y - 1, oz - 20, ox + 20, Y - 1, oz + 20, "water");
+  const types = ["minecraft:horse", "minecraft:donkey", "minecraft:mule", "minecraft:camel", "minecraft:pig", "minecraft:llama", "minecraft:skeleton_horse", "minecraft:boat", "minecraft:chest_boat"];
+  const out = {};
+  let i = 0;
+  for (const t of types) {
+    const water = t.includes("boat");
+    const at = water ? { x: ox + 15.5, y: Y - 0.5, z: oz - 15 + i * 4 + 0.5 } : { x: ox - 20 + i * 4 + 0.5, y: Y, z: oz + 0.5 };
+    i++;
+    const r = { };
+    try {
+      const m = ow().spawnEntity(t, at);
+      const s0 = kitSoldier(1, { x: at.x, y: Y, z: at.z + 1 }, "rifle", "hold");
+      await kitWait(10);
+      r.sad0 = m.hasComponent?.("minecraft:is_saddled");
+      try { const inv = m.getComponent("minecraft:inventory")?.container; if (inv && o.saddle) { inv.setItem(0, new ItemStack("minecraft:saddle", 1)); } r.inv = inv?.size; } catch (err) { r.invErr = String(err).slice(0, 60); }
+      await kitWait(5);
+      r.sad1 = m.hasComponent?.("minecraft:is_saddled");
+      const rd = m.getComponent("minecraft:rideable");
+      r.seats = rd?.seatCount; r.family = rd?.getFamilyTypes?.();
+      if (o.wide) { s0.triggerEvent("war:mount_on"); await kitWait(2); }
+      try { r.add = rd?.addRider(s0) ?? "no rideable"; } catch (err) { r.add = `throw ${String(err).slice(0, 60)}`; }
+      if (o.wide) { await kitWait(2); s0.triggerEvent("war:mount_off"); }
+      await kitWait(10);
+      r.riding = s0.getComponent("minecraft:riding")?.entityRidingOn?.typeId ?? null;
+      const p0 = { ...m.location };
+      for (let k = 0; k < 20; k++) { try { m.applyImpulse({ x: 0, y: 0, z: 0.15 }); } catch {} await kitWait(1); }
+      r.moved = +Math.hypot(m.location.x - p0.x, m.location.z - p0.z).toFixed(1);
+      r.stillOn = s0.getComponent("minecraft:riding")?.entityRidingOn?.id === m.id;
+      try { m.remove(); } catch {} try { s0.remove(); } catch {}
+    } catch (err) { r.err = String(err).slice(0, 80); }
+    out[t.replace("minecraft:", "")] = r;
+  }
+  return { mounts: out };
+};
+// v9.1: Mount up (saddled camels), ride 40 blocks to a charge point, Dismount
+KS.ride = async (o, ox, oz) => {
+  floorAt(ox - 30, oz - 30, ox + 70, oz + 30);
+  const men = [], mounts = [];
+  for (let i = 0; i < 3; i++) {
+    const m = ow().spawnEntity("minecraft:camel", { x: ox - 10 + i * 4 + 0.5, y: Y, z: oz + 4.5 });
+    try { m.getComponent("minecraft:inventory")?.container?.setItem(0, new ItemStack("minecraft:saddle", 1)); } catch {}
+    mounts.push(m);
+    men.push(kitSoldier(1, { x: ox - 10 + i * 4 + 0.5, y: Y, z: oz + 0.5 }, "rifle", "hold"));
+  }
+  await kitWait(20);
+  await giveOrderInner(KIT_PLAYER, { faction: 1, order: ORDERS.findIndex((q) => q[0] === "mount"), squad: 0, count: 0, radius: 200, stance: "aggressive", ao: 100, free: true, target: 5, cx: ox, cz: oz, cy: Y });
+  await kitWait(40);
+  const riding = () => men.filter((e) => e.isValid && e.getComponent("minecraft:riding")?.entityRidingOn?.typeId === "minecraft:camel").length;
+  const r = { mounted: riding() };
+  const dest = { x: ox + 40, y: Y, z: oz };
+  await kitOrder(1, dest);
+  let arrived = -1; const t0 = tick();
+  for (let t = 0; t < 900 && arrived < 0; t += 10) { await kitWait(10); if (men.filter((e) => e.isValid && Math.hypot(e.location.x - dest.x, e.location.z - dest.z) < 7).length >= 2) arrived = tick() - t0; }
+  r.arrivedTicks = arrived; r.stillMounted = riding(); r.final = men.map((e) => `${Math.round(e.location.x - ox)},${Math.round(e.location.z - oz)}`);
+  await giveOrderInner(KIT_PLAYER, { faction: 1, order: ORDERS.findIndex((q) => q[0] === "dismount"), squad: 0, count: 0, radius: 200, stance: "aggressive", ao: 100, free: true, target: 5, cx: ox, cz: oz, cy: Y });
+  await kitWait(20);
+  r.afterDismount = riding();
+  for (const m of mounts) { try { m.remove(); } catch {} }
+  return r;
+};
 KS.siege = async (o, ox, oz) => {
   floorAt(ox - 20, oz - 50, ox + 60, oz + 40);
   const B = (x0, y0, z0, x1, y1, z1, b) => kfill(ox + x0, Y + y0, oz + z0, ox + x1, Y + y1, oz + z1, b);

@@ -18000,6 +18000,20 @@
           "track_target": true,
           "reach_multiplier": 2.8
         }
+      },
+      "war:mounting": {
+        "minecraft:type_family": {
+          "family": [
+            "war_soldier",
+            "mob",
+            "irongolem",
+            "villager",
+            "player",
+            "baby_undead",
+            "zombie",
+            "skeleton"
+          ]
+        }
       }
     },
     "components": {
@@ -19112,6 +19126,20 @@
         "add": {
           "component_groups": [
             "war:w_spear"
+          ]
+        }
+      },
+      "war:mount_on": {
+        "add": {
+          "component_groups": [
+            "war:mounting"
+          ]
+        }
+      },
+      "war:mount_off": {
+        "remove": {
+          "component_groups": [
+            "war:mounting"
           ]
         }
       }

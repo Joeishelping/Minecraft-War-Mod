@@ -559,6 +559,13 @@ function gcWaypoints(soldiers) {
   //  entry goes, so the list doesn't grow with every soldier the world has ever had)
   const now2 = tick(), refs = getRefs();
   for (const id of Object.keys(refs)) { if (!refSeen.has(id)) refSeen.set(id, now2); else if (now2 - refSeen.get(id) > 72000) { delete refs[id]; refSeen.delete(id); } }
+  // (a saved value holds at most 32767 characters: past ~24000 the soldiers longest out of sight go first)
+  let txt = JSON.stringify(refs);
+  if (txt.length > 24000) {
+    const order = Object.keys(refs).sort((a, b) => (refSeen.get(a) ?? 0) - (refSeen.get(b) ?? 0));
+    let len = txt.length;
+    for (const id of order) { if (len <= 18000) break; len -= id.length + JSON.stringify(refs[id]).length + 4; delete refs[id]; refSeen.delete(id); }
+  }
   setJSON(world, "war:slotrefs", refs);
 }
 system.runTimeout(() => { try { if (world.getDynamicProperty("war:slotseen") !== undefined) world.setDynamicProperty("war:slotseen", undefined); } catch {} }, 100);   // (v9.0: a record nothing has used since v8.2)
@@ -2065,7 +2072,7 @@ async function eggUse(player, div) {
 }
 
 // ================================================================ Command Baton (army only)
-const ORDERS = [["charge", "Charge POS"], ["hold", "Hold here"], ["patrol", "Patrol here"], ["follow", "Follow me"], ["fallback", "Fall back"], ["board", "Board the vehicle I'm looking at"], ["mark", "Mark this spot (where I'm standing)"], ["roam", "Roam the area (any floor, free to hunt)"]];
+const ORDERS = [["charge", "Charge POS"], ["hold", "Hold here"], ["patrol", "Patrol here"], ["follow", "Follow me"], ["fallback", "Fall back"], ["board", "Board the vehicle I'm looking at"], ["mark", "Mark this spot (where I'm standing)"], ["roam", "Roam the area (any floor, free to hunt)"], ["mount", "Mount up (saddled horses, camels, boats nearby)"], ["dismount", "Dismount"]];
 const mapFunc = (order, div) => (div === "garrison" ? { hold: "post", patrol: "patrol", roam: "patrol", follow: "follow", charge: "charge" } : { hold: "hold", patrol: "patrol", roam: "patrol", follow: "follow", charge: "charge" })[order];   // (v7.0: roam = a free patrol)
 
 async function batonUse(player) {
@@ -2166,7 +2173,7 @@ async function giveOrderInner(player, cfg, given) {
   if (cfg.coal !== undefined && !coalMembers.length) { player.onScreenDisplay.setActionBar("§7That coalition has no factions (or is gone)."); return; }
   let pool = given ?? player.dimension.getEntities({ type: SOLDIER, location: player.location, maxDistance: cfg.radius }).filter((e) => {
     const d = sd(e);
-    if (d.surr || d.div === "guard" || d.div === "medic" || isRiding(e)) return false;
+    if (d.surr || d.div === "guard" || d.div === "medic" || (isRiding(e) && !mountOf.has(e.id))) return false;   // (v9.1: a man on a horse or in a boat still takes orders)
     if (cfg.coal !== undefined) { if (!coalMembers.includes(d.faction)) return false; }   // (v6.9.3: a coalition order)
     else if (cfg.faction && d.faction !== cfg.faction) return false;
     if (cfg.squad && d.squad !== cfg.squad) return false;
@@ -2188,6 +2195,11 @@ async function giveOrderInner(player, cfg, given) {
     return;
   }
 
+  if (order === "mount" || order === "dismount") {
+    const n = order === "mount" ? mountUp(pool, false) : dismountAll(pool);
+    player.onScreenDisplay.setActionBar(order === "mount" ? (n ? `§eMounting up: §f${n}` : "§7No free saddled animals or boats near them (within 16 blocks).") : `§eDismounting: §f${n}`);
+    return;
+  }
   if (order === "board") {
     let veh;
     try { veh = player.getEntitiesFromViewDirection({ maxDistance: 64 }).map((h) => h.entity).find((x) => VEHICLES.includes(x.typeId)); } catch {}
@@ -2201,12 +2213,13 @@ async function giveOrderInner(player, cfg, given) {
     player.onScreenDisplay.setActionBar(`§eBoarded: §f${n} §7(${free - n} seats left)`);
     return;
   }
-  let slot, spotCenter, march;
+  let slot, spotCenter, march, orderDest;
   if (order === "charge") {
     const pt = chargePoint(player, cfg);
     if (!pt) { player.onScreenDisplay.setActionBar(cfg.target === 1 ? "§cNo enemy war flag within 400 blocks. §7(Only flags of factions you're at war with count; rally flags don't.)" : "§cCouldn't find that position."); return; }
     let dest = pt;
     if ("slot" in pt) { const fl = marker(pt.slot); dest = fl ? { x: fl.location.x, y: fl.location.y, z: fl.location.z } : undefined; }
+    orderDest = dest;
     const cxz = pool.reduce((a, e) => ({ x: a.x + e.location.x / pool.length, y: a.y + e.location.y / pool.length, z: a.z + e.location.z / pool.length }), { x: 0, y: 0, z: 0 });
     let near = false;
     try { near = !!dest && dist(cxz, dest) <= 14 && Math.abs((dest.y ?? cxz.y) - cxz.y) <= 1 && !!player.dimension.getBlock(dest) && localReach(player.dimension, cxz, dest); } catch {}
@@ -2220,6 +2233,7 @@ async function giveOrderInner(player, cfg, given) {
   } else if (order === "hold" || order === "patrol" || order === "roam") {
     const spot = generals.get(player.id)?.cursor ?? aimFar(player);
     if (!spot) { player.onScreenDisplay.setActionBar("§cLook at the ground where they should go."); return; }
+    orderDest = spot;
     let loaded = !spot.estimated;
     try { if (loaded) loaded = !!player.dimension.getBlock(spot); } catch { loaded = false; }
     // v5.8: a spot they can't plainly walk to on their own level (up a ladder, on a wall, another floor, past a
@@ -2244,6 +2258,7 @@ async function giveOrderInner(player, cfg, given) {
   for (const e of pool) {
     try {
       freshMind(e);                                            // the newest order overrides everything
+      if (mountOf.has(e.id) && orderDest) rideTo.set(e.id, { ...orderDest }); else rideTo.delete(e.id);   // (v9.1: in the saddle: he rides straight there)
       sdp(e, "war:ordt", now);
       sdp(e, "war:ao", cfg.ao ?? 100);
       sdp(e, "war:free", cfg.free !== false);
@@ -9496,6 +9511,125 @@ function ambushQuiet(e) {
   try { const S = squads.get(squadKey(e, sd(e))); return !!S?.amb && tick() < S.amb.until; } catch { return false; }
 }
 
+// ================================================================ v9.1: riding (vanilla mounts and boats)
+// Soldiers ride saddled horses, donkeys, mules, camels, pigs (and skeleton / zombie horses) and boats, never this
+// add-on's own vehicles (they have their own crews and menus). An animal only takes a rider of the kinds it allows,
+// so for the moment of getting on the soldier counts as a player (a family group added and taken away again); once
+// he's on, he stays on. The script rides it for him: toward his leader (Follow / Escort), his spot (Hold / Post), or
+// his goal, a straight ride that jumps one-block steps; he fights from the saddle.
+// When you ride something, your followers mount whatever's free near them, and get off when you do. Army orders:
+// "Mount up" / "Dismount".
+const MOUNT_SPEED = { "minecraft:horse": 0.34, "minecraft:donkey": 0.26, "minecraft:mule": 0.26, "minecraft:camel": 0.22, "minecraft:pig": 0.12, "minecraft:skeleton_horse": 0.32, "minecraft:zombie_horse": 0.26, "minecraft:boat": 0.4, "minecraft:chest_boat": 0.4 };
+const isBoatType = (t) => t === "minecraft:boat" || t === "minecraft:chest_boat";
+const mountOf = new Map();   // soldier id -> { id (mount), auto (got on because his leader did) }
+const rideTo = new Map();    // soldier id -> where his last order sends him (riding: straight there)
+function mountReady(m) {
+  try {
+    if (!m?.isValid || !(m.typeId in MOUNT_SPEED)) return false;
+    const rd = m.getComponent("minecraft:rideable"); if (!rd) return false;
+    if (rd.getRiders().length >= rd.seatCount) return false;
+    if (isBoatType(m.typeId)) return true;
+    return !!m.hasComponent?.("minecraft:is_saddled");                     // (saddled ones only)
+  } catch { return false; }
+}
+function mountSoldier(e, m, auto) {
+  try {
+    e.triggerEvent("war:mount_on");
+    system.runTimeout(() => {
+      try {
+        if (!e.isValid || !m.isValid) return;
+        const rd = m.getComponent("minecraft:rideable");
+        if (rd?.addRider(e) || e.getComponent("minecraft:riding")?.entityRidingOn?.id === m.id) { mountOf.set(e.id, { id: m.id, auto }); note(e, "mounted"); }
+      } catch {}
+      system.runTimeout(() => { try { if (e.isValid) e.triggerEvent("war:mount_off"); } catch {} }, 2);
+    }, 2);
+  } catch {}
+}
+function mountUp(list, auto) {
+  const taken = new Set();
+  let n = 0;
+  for (const e of list) {
+    if (mountOf.has(e.id) || isRiding(e) || downed.has(e.id) || sd(e).surr || sd(e).div === "cavalier") continue;
+    let best, bd = 1e9;
+    for (const t of Object.keys(MOUNT_SPEED)) for (const m of e.dimension.getEntities({ type: t, location: e.location, maxDistance: 16 })) {
+      if (!mountReady(m)) continue;
+      const left = (m.getComponent("minecraft:rideable")?.seatCount ?? 1) - (m.getComponent("minecraft:rideable")?.getRiders().length ?? 0) - (taken.has(m.id) ? 1 : 0);
+      if (left <= 0) continue;
+      const dd = dist(m.location, e.location); if (dd < bd) { bd = dd; best = m; }
+    }
+    if (!best) continue;
+    taken.add(best.id);
+    try { e.teleport({ x: best.location.x, y: best.location.y + 0.4, z: best.location.z }); } catch {}
+    mountSoldier(e, best, auto); n++;
+  }
+  return n;
+}
+function dismountAll(list) {
+  let n = 0;
+  for (const e of list) {
+    const M = mountOf.get(e.id); if (!M) continue;
+    try { world.getEntity(M.id)?.getComponent("minecraft:rideable")?.ejectRider(e); } catch {}
+    mountOf.delete(e.id); rideTo.delete(e.id); n++;
+  }
+  return n;
+}
+// where a mounted soldier wants to go (and how close is close enough)
+function rideDest(e, d) {
+  if ((d.func === "follow" || d.func === "escort") && d.leader) { const p = findPlayer(d.leader); if (p && p.dimension.id === e.dimension.id) return { at: p.location, stop: 4 }; }
+  const rt = rideTo.get(e.id);
+  if (rt) return { at: rt, stop: 4 };
+  const an = ["hold", "post", "sentry", "stand"].includes(d.func) ? marker(d.goal) : undefined;
+  if (an) return { at: an.location, stop: 3 };
+  const g = marker(Number(gdp(e, "war:catchup") ?? 0)) ?? marker(d.goal);
+  return g ? { at: g.location, stop: 3 } : undefined;
+}
+system.runInterval(() => {
+  for (const [id, M] of [...mountOf]) {
+    try {
+      const e = world.getEntity(id), m = world.getEntity(M.id);
+      if (!e?.isValid || !m?.isValid || downed.has(id) || e.getComponent("minecraft:riding")?.entityRidingOn?.id !== M.id) { mountOf.delete(id); continue; }
+      const rd = m.getComponent("minecraft:rideable")?.getRiders() ?? [];
+      if (rd[0]?.id !== id) continue;                                          // (a passenger: whoever's in front steers)
+      const d = sd(e), want = rideDest(e, d);
+      const l = m.location, vel = m.getVelocity();
+      let tx = 0, tz = 0;
+      if (want) {
+        const dx = want.at.x - l.x, dz = want.at.z - l.z, L = Math.hypot(dx, dz);
+        if (L > want.stop) {
+          let sp = MOUNT_SPEED[m.typeId] ?? 0.25;
+          if (isBoatType(m.typeId)) { let wet = false; try { wet = !!m.dimension.getBlock({ x: l.x, y: l.y - 0.2, z: l.z })?.isLiquid || !!m.dimension.getBlock(l)?.isLiquid; } catch {} if (!wet) sp = 0.04; }
+          if (gunState.get(id)?.target?.isValid) sp *= 0.5;                   // (firing from the saddle: easy)
+          sp *= Math.min(1, (L - want.stop) / 4 + 0.3);
+          tx = (dx / L) * sp; tz = (dz / L) * sp;
+          const yaw = (Math.atan2(-dx, dz) * 180) / Math.PI;
+          try { m.setRotation({ x: 0, y: turnToward(m.getRotation().y, yaw, 12) }); } catch {}
+          // a one-block step ahead: jump it (horses and the like)
+          if (!isBoatType(m.typeId) && solidAt(m.dimension, { x: l.x, y: l.y - 0.2, z: l.z })) {
+            const ahead = { x: l.x + (dx / L) * 1.2, y: l.y + 0.5, z: l.z + (dz / L) * 1.2 };
+            if (solidAt(m.dimension, ahead) && !solidAt(m.dimension, { x: ahead.x, y: l.y + 1.5, z: ahead.z })) m.applyImpulse({ x: 0, y: 0.5, z: 0 });
+          }
+        }
+      }
+      m.applyImpulse({ x: (tx - vel.x) * 0.8, y: 0, z: (tz - vel.z) * 0.8 });
+    } catch { mountOf.delete(id); }
+  }
+}, 2);
+// your followers ride when you do, and get off when you do
+const leaderRode = new Map(); // player id -> was riding (non-add-on mount) last check
+system.runInterval(() => {
+  for (const p of world.getAllPlayers()) {
+    try {
+      const on = p.getComponent("minecraft:riding")?.entityRidingOn;
+      const rides = !!on && !VEHICLES.includes(on.typeId) && on.typeId !== NEST && !on.typeId.startsWith("war:");
+      const was = leaderRode.get(p.id) ?? false;
+      if (!rides && !was) continue;
+      const mine = p.dimension.getEntities({ type: SOLDIER, location: p.location, maxDistance: 32 }).filter((e) => { const d = sd(e); return (d.func === "follow" || d.func === "escort") && d.leader === p.id; });
+      if (rides) mountUp(mine.filter((e) => !mountOf.has(e.id) && !isRiding(e)).slice(0, 4), true);   // (a few a second)
+      else dismountAll(mine.filter((e) => mountOf.get(e.id)?.auto));
+      leaderRode.set(p.id, rides);
+    } catch {}
+  }
+}, 20);
 // ================================================================ v9.1: neutral zones
 // An area (a circle, every height) where nobody fights: think of a UN building. Anyone standing inside it (soldier,
 // war dog, player) can't be targeted by soldiers and doesn't target anyone; a stray round doesn't land on him there;
