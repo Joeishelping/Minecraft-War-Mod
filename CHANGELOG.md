@@ -1,5 +1,31 @@
 # War Engine changelog
 
+## v9.4 (No more huddling when idle, World Animals in sync: shooting and riding, any saddled mount)
+
+- **No huddling.**
+  - The v9.2 campfire walked men to seats round a fire, which bunched them up. Now nobody walks anywhere: when two
+    to six men of a squad have stood still where they are for a minute, within 5 blocks of each other (no fight
+    near, a player around), one sometimes lights a fire on a free patch of open ground between them, and each sits
+    down on the spot he's standing on, facing it. Any order or sign of a fight gets them up; the fire goes out after
+    3-5 minutes. The story at the fire stays.
+  - Idle men on a hold, post, sentry or stand order who end up on top of a squad mate (closer than 1.6 blocks) take a
+    step or two straight away from him, on safe ground. Before, only men in a fight made room.
+- **World Animals v2 (`Joeishelping/Animals`) and War Engine work together.**
+  - Soldiers shoot its man-eaters (lions, tigers, leopards, panthers, bears, hyenas, hippos, crocodiles, komodo
+    dragons, snakes, sharks) before they get close: gunners from 16 blocks, others from 9. Before, soldiers never
+    saw any of its animals, even one mauling them, because none of them is a "monster".
+  - Any of its animals that attacks one of ours is fought back. Deer, birds, zebras, elephants and the like are
+    left alone otherwise.
+  - A tamed animal of your faction or an ally's is never shot, even if it bites someone by mistake. A pet of a
+    faction you're not at war with is left alone unless it attacks.
+  - Riding them (from v9.3) was checked in the real game: a tamed, saddled elephant takes a soldier on "Mount up"
+    and carries him 35 blocks to the ordered spot.
+- **Soldiers aim at a mob's middle.** Every mob was aimed at as if it were a man (1.2 blocks up), so rounds went
+  over lions, spiders and slimes. Now the aim height comes from each kind's own eye height. In the test, 9 of 13
+  rounds hit a charging lion; it died before it reached anyone.
+- **Ride anything.** Besides horses, donkeys, mules, camels, pigs, boats, striders (new) and World Animals mounts,
+  soldiers now get on any saddled mount from any add-on on "Mount up".
+
 ## v9.3 (Soldiers ride other add-ons' animals)
 
 - **Soldiers ride World Animals mounts.** Any animal from another add-on with the type family `war_mount` counts

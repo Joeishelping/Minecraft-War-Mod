@@ -3044,6 +3044,18 @@ async function loadoutMenu(player) {
 let combatants = new Map(); // dim id -> [{ e, x, y, z }]
 const entMemo = new Map(); // id -> entity (or null), for this tick only (v7.2: one lookup per id per tick, not one per squad mate)
 system.runInterval(() => entMemo.clear(), 1);
+// v9.4: World Animals v2 (Joeishelping/Animals): every animal has the family "worldanimals"; these attack people on
+// sight. A tamed one carries its owner's faction tag war_f<n> (that add-on copies it), so it's friend or foe like him.
+const WA_FAMILY = "worldanimals";
+const WA_DANGER = new Set(["lion", "white_lion", "tiger", "white_tiger", "leopard", "panther", "bear", "hyenas", "hippopotamus", "crocodile", "komodo_dragon", "snake", "snake_coral", "shark", "white_shark", "tiger_shark"].map((k) => `worldanimals:${k}`));
+let raCache = { t: -1, s: new Set() };
+function recentAttackers() {      // who has hurt one of ours in the last 10 s (one pass per tick, shared)
+  const now = tick(); if (raCache.t === now) return raCache.s;
+  const s0 = new Set(); for (const h of hurtBy.values()) if (now - h.t < 200) s0.add(h.id);
+  raCache = { t: now, s: s0 }; return s0;
+}
+const isWA = (o) => typeof o.typeId === "string" && o.typeId.startsWith("worldanimals:");
+function waFaction(o) { try { for (const t of o.getTags()) if (t.startsWith("war_f")) { const n = Number(t.slice(5)); if (n > 0) return n; } } catch {} return 0; }
 function refreshCombatants() {
   const next = new Map();
   for (const did of DIMS) {
@@ -3056,6 +3068,9 @@ function refreshCombatants() {
     try { add(dim.getPlayers()); } catch {}
     for (const t of VEHICLES) { try { add(dim.getEntities({ type: t })); } catch {} }
     try { add(dim.getEntities({ families: ["monster"] })); } catch {}
+    // v9.4: World Animals (another add-on): its man-eaters, and any animal that has just gone for one of ours. Deer,
+    // birds, fish and the like aren't in the scan at all (nobody shoots them, and they cost nothing).
+    try { const hit = recentAttackers(); add(dim.getEntities({ families: [WA_FAMILY] }).filter((o) => !o.hasComponent?.("minecraft:is_baby") && (WA_DANGER.has(o.typeId) || hit.has(o.id)))); } catch {}
     // v5.7: a 32-block grid, so "who is near me" looks at the nearby cells only
     const grid = new Map();
     for (const c of list) { const k = Math.floor(c.x / 32) * 100000 + Math.floor(c.z / 32); let a = grid.get(k); if (!a) { a = []; grid.set(k, a); } a.push(c); }
@@ -3145,7 +3160,14 @@ const GUN_SPEC = {
   sniper:  { bullet: "ww:nrifle_projectile",   sight: 250, fire: 250, mag: 1,  gap: 0, reload: 45,  speed: 6.0, spread: 0.0025 },
 };
 const gunState = new Map(); // soldier id -> { target, ammo, next, seen, check, step }
-function chest(o) { const l = o.location; const ps = o.typeId === SOLDIER ? (poseOf.get(o.id) ?? 0) : 0; return { x: l.x, y: l.y + (o.typeId === "war:tank" ? 1.0 : o.typeId === HOUND ? 0.5 : ps === 2 ? 0.35 : ps === 1 ? 0.85 : 1.2), z: l.z }; }
+// v9.4: a mob's middle from its own eye height (a lion, a spider, a slime are far lower than a man), once per kind
+const MOB_MID = new Map();   // typeId -> height of its middle above its feet
+function mobMid(o) {
+  let m = MOB_MID.get(o.typeId);
+  if (m === undefined) { m = 1.2; try { const h = o.getHeadLocation().y - o.location.y; if (h > 0.05 && h < 6) m = Math.max(0.25, Math.min(1.2, h * 0.75)); } catch {} if (o.hasComponent?.("minecraft:is_baby")) return m * 0.6; MOB_MID.set(o.typeId, m); }
+  return m;
+}
+function chest(o) { const l = o.location, t = o.typeId; const ps = t === SOLDIER ? (poseOf.get(o.id) ?? 0) : 0; return { x: l.x, y: l.y + (t === "war:tank" ? 1.0 : t === HOUND ? 0.5 : t === SOLDIER ? (ps === 2 ? 0.35 : ps === 1 ? 0.85 : 1.2) : t === "minecraft:player" ? 1.2 : VEHICLES.includes(t) ? 1.2 : mobMid(o)), z: l.z }; }
 // v8.1: THE "SEEING THROUGH WALLS" BUG. Bedrock's block ray counts its maxDistance in block CELLS stepped through
 // (about |dx|+|dy|+|dz| on a diagonal), not in straight-line distance. Every line-of-sight check asked for the
 // straight-line length, so on any slanted line (up to a window, across a courtyard) the ray gave up BEFORE it reached
@@ -3204,12 +3226,18 @@ function isTargetFor(e, d, o) {
   if (VEHICLES.includes(o.typeId)) return false;
   if (o.typeId === SOLDIER || o.typeId === HOUND) return isHostile(d.faction, factionOf(o)) || isProvoker(d.faction, o, tick());
   if (o.typeId === "minecraft:player") { try { return playerFair(o) && (isHostile(d.faction, factionOf(o)) || isProvoker(d.faction, o, tick())); } catch { return false; } }
+  // v9.4: a World Animals pet of ours or a friend's is never a target (even if it bit someone by mistake)
+  // (and a pet of a faction we're not at war with is left alone unless it goes for us: it doesn't attack us either)
+  let petCalm = false;
+  if (isWA(o)) { const pf = waFaction(o); if (pf && (pf === d.faction || isFriendly(d.faction, pf))) return false; petCalm = !!pf && !isHostile(d.faction, pf); }
   // vanilla mobs: only once one of them has attacked one of ours, and only when it's close
   const as = assist.get(e.id);
   if ((as && as.id === o.id && tick() - as.t < 200) || attackedRecently(e, o, tick())) return true;
+  if (petCalm) return false;
   const dd = dist(o.location, e.location), id = o.typeId;
   if (id.includes("creeper")) return dd <= 10;                                        // shoot it before it gets here
   if (["skeleton", "stray", "pillager", "witch", "blaze", "bogged"].some((k) => id.includes(k))) return dd <= 20;   // shooting at us
+  if (isWA(o)) { if (!WA_DANGER.has(id)) return false; return dd <= (d.ranged ? 16 : 9); }   // (v9.4: a rhino or an elephant only once it's charged one of ours; a lion (it goes for men within 10) shot before it gets there)
   return dd <= 9;                                                                      // anything hostile this close is a danger
 }
 // Is a friendly (or ally) in or near the line of fire?
@@ -8964,13 +8992,33 @@ function spreadMove(e, now) {
   return slot ? { g: "g_wp", slot, t: "t_mid", urgent: false } : undefined;
 }
 system.runInterval(() => { const now = tick(); for (const [id, c] of [...spotClaims]) if (now - c.t > 200) spotClaims.delete(id); for (const [id, t] of [...crowdT]) if (t < now) crowdT.delete(id); }, 200);
+// v9.4: no fight, standing at his post / hold on top of a squad mate (closer than 1.6 blocks): one of the two takes a
+// step or two straight away from him, on safe ground. No markers and no routes: he stays right by his spot.
+function idleSpace(e, d, now, anchor, leash) {
+  if (!["hold", "post", "sentry", "stand"].includes(d.func) || campOf.has(e.id) || mountOf.has(e.id) || isRiding(e)) return undefined;
+  const l = e.location;
+  const mates = nearSnap(e.dimension.id, l, 1.6).filter((c) => c.id !== e.id && c.id < e.id && c.type === SOLDIER && !c.down && c.f === d.faction && Math.abs(c.y - l.y) < 1);
+  if (!mates.length) return undefined;                            // (of two on the same spot, only one moves)
+  try { const v = e.getVelocity(); if (Math.hypot(v.x, v.z) > 0.12) return undefined; } catch { return undefined; }
+  let ax = 0, az = 0;
+  for (const c of mates) { const dx = l.x - c.x, dz = l.z - c.z, L = Math.hypot(dx, dz); if (L > 0.05) { ax += dx / L; az += dz / L; } }
+  const a0 = Math.hypot(ax, az) > 0.1 ? Math.atan2(az, ax) : (e.id.charCodeAt(e.id.length - 1) % 8) * Math.PI / 4;
+  for (const da of [0, 0.8, -0.8, 1.6, -1.6, Math.PI]) {           // straight away from him, else the nearest free side
+    const a = a0 + da, ux = Math.cos(a), uz = Math.sin(a), to = { x: l.x + ux * 1.6, y: l.y, z: l.z + uz * 1.6 };
+    if (!straightReach(e.dimension, l, to) || dangerNear(e.dimension, to)) continue;
+    push(e, { x: ux * 0.22, y: 0.02, z: uz * 0.22 }, 2);
+    note(e, "making room");
+    return { g: "g_none", t: "t_mid", urgent: false };
+  }
+  return undefined;
+}
 // the brain's move, then (if he's standing still in a pile) making room
 function combatMove(e, d, now, melee, anchor, leash) {
   const mv = drillMove(e, d, now, melee, anchor, leash);
   if (mv && mv.g !== "g_none") return mv;
   const anchored = ["hold", "post", "sentry", "stand"].includes(d.func);
   if (!mv && !anchored) return mv;                                // marching on: spacing is the formation's job
-  if (!squads.get(squadKey(e, d))?.known?.size) return mv;        // no fight: each has his own spot already
+  if (!squads.get(squadKey(e, d))?.known?.size) return idleSpace(e, d, now, anchor, leash) ?? mv;   // (v9.4: no fight: only a man standing on a mate moves)
   return unCrowd(e, d, now, anchor, leash) ?? mv;
 }
 
@@ -9826,13 +9874,15 @@ function heliFly(v, st, pilot, riders, loc, ground) {
 // his goal, a straight ride that jumps one-block steps; he fights from the saddle.
 // When you ride something, your followers mount whatever's free near them, and get off when you do. Army orders:
 // "Mount up" / "Dismount".
-const MOUNT_SPEED = { "minecraft:horse": 0.34, "minecraft:donkey": 0.26, "minecraft:mule": 0.26, "minecraft:camel": 0.22, "minecraft:pig": 0.12, "minecraft:skeleton_horse": 0.32, "minecraft:zombie_horse": 0.26, "minecraft:boat": 0.4, "minecraft:chest_boat": 0.4 };
+const MOUNT_SPEED = { "minecraft:horse": 0.34, "minecraft:donkey": 0.26, "minecraft:mule": 0.26, "minecraft:camel": 0.22, "minecraft:pig": 0.12, "minecraft:skeleton_horse": 0.32, "minecraft:zombie_horse": 0.26, "minecraft:boat": 0.4, "minecraft:chest_boat": 0.4, "minecraft:strider": 0.16 };
 const isBoatType = (t) => t === "minecraft:boat" || t === "minecraft:chest_boat";
 // v9.3: other add-ons' animals a soldier can ride (World Animals: elephants, big cats, rhinos, giraffes, ostriches...)
 // carry the type family "war_mount"; saddled, they're mounts like a horse, at their own walking speed
 const ANIMAL_MOUNT = "war_mount";
 const isAnimalMount = (m) => { try { return !(m.typeId in MOUNT_SPEED) && !!m.getComponent("minecraft:type_family")?.hasTypeFamily(ANIMAL_MOUNT); } catch { return false; } };
-const isMount = (m) => !!m && (m.typeId in MOUNT_SPEED || isAnimalMount(m));
+// v9.4: and anything else from any add-on that has a seat and wears a saddle (a soldier only gets on once it's saddled)
+const isOtherMount = (m) => { try { const t = m.typeId; return !(t in MOUNT_SPEED) && !t.startsWith("war:") && t !== "minecraft:player" && !!m.hasComponent("minecraft:is_saddled") && !!m.getComponent("minecraft:rideable"); } catch { return false; } };
+const isMount = (m) => !!m && (m.typeId in MOUNT_SPEED || isAnimalMount(m) || isOtherMount(m));
 function mountSpeed(m) {
   if (m.typeId in MOUNT_SPEED) return MOUNT_SPEED[m.typeId];
   let v = 0.25;
@@ -9874,6 +9924,7 @@ function mountUp(list, auto) {
     const near = [];
     for (const t of [...Object.keys(MOUNT_SPEED), ...(auto ? [] : VEHICLES)]) near.push(...e.dimension.getEntities({ type: t, location: e.location, maxDistance: 16 }));
     try { near.push(...e.dimension.getEntities({ families: [ANIMAL_MOUNT], location: e.location, maxDistance: 16 })); } catch {}
+    try { for (const m of e.dimension.getEntities({ location: e.location, maxDistance: 16, excludeTypes: [SOLDIER, HOUND, "minecraft:player", "minecraft:item", "minecraft:xp_orb", ...Object.keys(MOUNT_SPEED), ...VEHICLES] })) if (!near.some((q) => q.id === m.id) && isOtherMount(m)) near.push(m); } catch {}   // (v9.4: any saddled mount)
     for (const m of near) {
       if (!mountReady(m) || playerAt(m)) continue;
       const left = (m.getComponent("minecraft:rideable")?.seatCount ?? 1) - (m.getComponent("minecraft:rideable")?.getRiders().length ?? 0) - (taken.has(m.id) ? 1 : 0);
@@ -9953,25 +10004,28 @@ system.runInterval(() => {
     } catch {}
   }
 }, 20);
-// ================================================================ v9.2: campfires
-// Three or more men of a squad who've stood in the same place for a minute with no fight anywhere near (a post, a
-// hold, a patrol that's stopped) sometimes light a fire on open ground among them, walk to a seat around it and sit.
-// Now and then one of them tells a story (only there). Any order, any move, any sign of a fight: he stands up and
-// carries on as before; the fire burns out after 3-5 minutes, or when fewer than two are left at it. Only men near a
-// player are looked at, and only every few seconds: it costs next to nothing.
-const CAMPS = [];               // { id, dimId, at, sq, until, seats: Map(soldier id -> seat), story, t0 }
+// ================================================================ v9.4: campfires (nobody walks anywhere)
+// v9.2 had men walk to seats round a fire, which bunched them up and pulled them off their spots. Now: when two to
+// six men of a squad have stood still for a minute WHERE THEY ARE (a post, a hold, a patrol that stopped), within 5
+// blocks of each other, with no fight near and a player around, one of them sometimes lights a small fire on a free
+// patch of open ground between them. Each one simply sits down on the spot he's standing on, facing it: nobody moves,
+// nobody's order or spot changes. Now and then one of them tells a story (only there). Any order, any move, any sign
+// of a fight: he stands up and carries on. The fire goes out after 3-5 minutes, or when fewer than two still sit at
+// it. Only men near a player are looked at, every 10 s: it costs next to nothing.
+const CAMPS = [];               // { id, dimId, at, sq, until, seats: Map(soldier id -> where he sat), story, t0 }
 const stillSince = new Map();   // soldier id -> { x, y, z, t }
 const campOf = new Map();       // soldier id -> camp id
 const seated = new Set();       // soldier ids sitting at a fire
-// (his decision while he belongs to a fire: on his seat he stays; on the way he follows his route there)
+const campQuit = (e, d, S, now) => now - Number(gdp(e, "war:ordt") ?? -99999) < 200 || inFight(e, S, now) || d.retreat || d.surr;
+// (his decision while he sits at a fire: stay sitting; the moment there's anything else, he's up)
 function campMove(e, now) {
   const cid = campOf.get(e.id); if (!cid) return undefined;
   const c = CAMPS.find((q) => q.id === cid), seat = c?.seats.get(e.id);
-  if (!seat) return undefined;
+  if (!seat) { campOf.delete(e.id); return undefined; }
   const d = sd(e);
-  if (now - Number(gdp(e, "war:ordt") ?? -99999) < 200 || inFight(e, squads.get(squadKey(e, d)), now) || d.retreat || d.surr) { v9stat("campMoveLeave"); campLeave(e, c); return undefined; }   // (an order or a fight: up at once)
-  if (seated.has(e.id) || (flat(e.location, seat) < 0.9 && Math.abs(e.location.y - seat.y) < 1)) { note(e, "sitting by the fire"); return { g: "g_none", t: "t_mid", urgent: false }; }
-  return personal.has(e.id) ? followPersonal(e, now) : undefined;
+  if (campQuit(e, d, squads.get(squadKey(e, d)), now) || flat(e.location, seat) > 1.5) { campLeave(e, c); return undefined; }
+  note(e, "sitting by the fire");
+  return { g: "g_none", t: "t_mid", urgent: false };
 }
 function saveCamps() { try { setJSON(world, "war:camps", CAMPS.map((c) => ({ d: c.dimId, x: c.at.x, y: c.at.y, z: c.at.z }))); } catch {} }
 system.runTimeout(() => {       // a fire left over from before a reload goes out
@@ -9979,36 +10033,31 @@ system.runTimeout(() => {       // a fire left over from before a reload goes ou
 }, 200);
 function campEnd(c) {
   try { const b = world.getDimension(c.dimId).getBlock(c.at); if (b?.typeId === "minecraft:campfire") b.setType("minecraft:air"); } catch {}
-  for (const id of c.seats.keys()) { campOf.delete(id); seated.delete(id); const e = world.getEntity(id); if (e?.isValid) { try { setP(e, "war:sit", false); } catch {} personal.delete(id); } }
-  CAMPS.splice(CAMPS.indexOf(c), 1); saveCamps();
+  for (const id of c.seats.keys()) { campOf.delete(id); seated.delete(id); const e = world.getEntity(id); if (e?.isValid) { try { setP(e, "war:sit", false); } catch {} } }
+  const i = CAMPS.indexOf(c); if (i >= 0) CAMPS.splice(i, 1); saveCamps();
 }
 function campLeave(e, c) {
-  campOf.delete(e.id); c.seats.delete(e.id); seated.delete(e.id);
+  campOf.delete(e.id); c?.seats.delete(e.id); seated.delete(e.id);
   try { setP(e, "war:sit", false); } catch {}
 }
 system.runInterval(() => {
   const now = tick();
-  // the fires: who's still there, who leaves, story time, burning out
+  // the fires: who's still sitting, story time, burning out
   for (const c of [...CAMPS]) {
     for (const [id, seat] of [...c.seats]) {
       const e = world.getEntity(id);
-      if (!e?.isValid || downed.has(id) || isRiding(e)) { v9stat(!e?.isValid ? "campGoneInv" : downed.has(id) ? "campGoneDown" : "campGoneRide"); c.seats.delete(id); campOf.delete(id); seated.delete(id); if (e?.isValid) { try { setP(e, "war:sit", false); } catch {} } continue; }
-      const d = sd(e), S = squads.get(squadKey(e, d));
-      const moved = now - Number(gdp(e, "war:ordt") ?? -99999) < 200 || inFight(e, S, now) || d.retreat || d.surr;
-      if (moved) { v9stat(now - Number(gdp(e, "war:ordt") ?? -99999) < 200 ? "campOrd" : inFight(e, S, now) ? "campFight" : "campRetr"); campLeave(e, c); continue; }
-      if (flat(e.location, seat) < 0.9 && Math.abs(e.location.y - seat.y) < 1) {
-        if (!seated.has(id)) { seated.add(id); setP(e, "war:sit", true); personal.delete(id); }
-        turnTo(e, c.at, 30);
-      } else if (!personal.has(id) && now - c.t0 < 600) planPersonalTo(e, "settle", seat, now);
-      else if (now - c.t0 >= 600 && flat(e.location, seat) > 3) campLeave(e, c);   // (couldn't get to his seat: carries on)
+      if (!e?.isValid || downed.has(id) || isRiding(e)) { campLeave(e?.isValid ? e : { id }, c); continue; }
+      const d = sd(e);
+      if (campQuit(e, d, squads.get(squadKey(e, d)), now) || flat(e.location, seat) > 1.5) { campLeave(e, c); continue; }
+      turnTo(e, c.at, 30);
     }
-    const sitting = [...c.seats.keys()].filter((id) => seated.has(id));
-    if (!c.story && now - c.t0 > 600 && sitting.length >= 2 && Math.random() < 0.04) {   // (rare: about one fire in three hears one)
+    const sitting = [...c.seats.keys()];
+    if (!c.story && now - c.t0 > 400 && sitting.length >= 2 && Math.random() < 0.06) {   // (rare: about one fire in three hears one)
       c.story = true;
       const teller = world.getEntity(sitting[Math.floor(Math.random() * sitting.length)]);
       if (teller?.isValid) callout(teller, "STORY", { key: "story", event: true });
     }
-    if (now > c.until || c.seats.size < 2) { v9stat(now > c.until ? "campBurnt" : "campFew"); campEnd(c); }
+    if (now > c.until || c.seats.size < 2) campEnd(c);
   }
   // who's been standing in one place, no fight about, near a player
   const groups = new Map();
@@ -10018,36 +10067,40 @@ system.runInterval(() => {
       const l = e.location;
       if (!PLAYER_POS.some((p) => p.d === e.dimension.id && Math.hypot(p.x - l.x, p.z - l.z) < 48)) { stillSince.delete(e.id); continue; }
       const d = sd(e);
-      if (!d.faction || d.surr || d.retreat || downed.has(e.id) || isRiding(e) || pows.has(e.id) || d.div === "guard" || d.func === "follow" || d.func === "escort") { stillSince.delete(e.id); continue; }
+      if (!d.faction || d.surr || d.retreat || downed.has(e.id) || isRiding(e) || pows.has(e.id) || personal.has(e.id) || d.div === "guard" || d.func === "follow" || d.func === "escort" || isIndoors(e)) { stillSince.delete(e.id); continue; }
       let st = stillSince.get(e.id);
-      if (!st || Math.hypot(l.x - st.x, l.z - st.z) > 2 || Math.abs(l.y - st.y) > 1) { stillSince.set(e.id, { x: l.x, y: l.y, z: l.z, t: now }); continue; }
+      if (!st || Math.hypot(l.x - st.x, l.z - st.z) > 1 || Math.abs(l.y - st.y) > 1) { stillSince.set(e.id, { x: l.x, y: l.y, z: l.z, t: now }); continue; }
       if (now - st.t < 1200 || inFight(e, squads.get(squadKey(e, d)), now)) continue;
       const k = squadKey(e, d); if (!groups.has(k)) groups.set(k, []); groups.get(k).push(e);
     } catch {}
   }
   for (const [k, men] of groups) {
-    if (men.length < 3 || CAMPS.length >= 6 || CAMPS.some((c) => c.sq === k) || Math.random() > (globalThis.__campChance ?? 0.15)) continue;   // (__campChance: test kits only)
-    const dim = men[0].dimension, c0 = { x: men.reduce((t, e) => t + e.location.x, 0) / men.length, y: men[0].location.y, z: men.reduce((t, e) => t + e.location.z, 0) / men.length };
-    const near = men.filter((e) => flat(e.location, c0) < 8).slice(0, 6);
-    if (near.length < 3) continue;
-    let g;                      // (a spot with nobody standing on it: a man under a lit campfire burns)
-    for (const [ox, oz] of [[0, 0], [1.5, 0], [-1.5, 0], [0, 1.5], [0, -1.5], [1.5, 1.5], [-1.5, -1.5], [1.5, -1.5], [-1.5, 1.5]]) {
+    if (men.length < 2 || CAMPS.length >= 6 || CAMPS.some((c) => c.sq === k) || Math.random() > (globalThis.__campChance ?? 0.12)) continue;   // (__campChance: test kits only)
+    // the tightest knot of men already standing near each other (no one walks to it)
+    let near = [];
+    for (const m of men) { const n = men.filter((o) => o.dimension.id === m.dimension.id && flat(o.location, m.location) <= 5 && Math.abs(o.location.y - m.location.y) < 1.5); if (n.length > near.length) near = n; }
+    near = near.slice(0, 6);
+    if (near.length < 2) continue;
+    const dim = near[0].dimension, c0 = { x: near.reduce((t, e) => t + e.location.x, 0) / near.length, y: near[0].location.y, z: near.reduce((t, e) => t + e.location.z, 0) / near.length };
+    const all = allOf(SOLDIER).filter((o) => o.dimension.id === dim.id && flat(o.location, c0) < 8);
+    let g;                      // a free patch of ground among them: nobody standing on it or right beside it
+    for (const [ox, oz] of [[0, 0], [1, 0], [-1, 0], [0, 1], [0, -1], [1, 1], [-1, -1], [1, -1], [-1, 1], [2, 0], [-2, 0], [0, 2], [0, -2]]) {
       const q = walkableNear(dim, c0.x + ox, c0.z + oz, c0.y);
-      if (q && !allOf(SOLDIER).some((o) => o.dimension.id === dim.id && Math.abs(o.location.x - (Math.floor(q.x) + 0.5)) < 1.3 && Math.abs(o.location.z - (Math.floor(q.z) + 0.5)) < 1.3 && Math.abs(o.location.y - q.y) < 2)) { g = q; break; }
+      if (!q || Math.abs(q.y - c0.y) > 1) continue;
+      const bx = Math.floor(q.x) + 0.5, bz = Math.floor(q.z) + 0.5;
+      if (all.some((o) => Math.hypot(o.location.x - bx, o.location.z - bz) < 1.6 && Math.abs(o.location.y - q.y) < 2)) continue;
+      if (near.some((o) => Math.hypot(o.location.x - bx, o.location.z - bz) > 5)) continue;   // (close enough to everyone sitting at it)
+      g = q; break;
     }
-    if (!g || Math.abs(g.y - c0.y) > 1.5 || isIndoorsAt(dim, g) || dangerNear(dim, g)) continue;
+    if (!g || isIndoorsAt(dim, g) || dangerNear(dim, g)) continue;
     let ok = true;
     try { const b = dim.getBlock({ x: Math.floor(g.x), y: Math.floor(g.y), z: Math.floor(g.z) }), below = dim.getBlock({ x: Math.floor(g.x), y: Math.floor(g.y) - 1, z: Math.floor(g.z) }); ok = !!b?.isAir && !!below && !below.isAir && !below.isLiquid && (tSky(dim, g.x, g.y + 1, g.z) >= 10); if (ok) b.setType("minecraft:campfire"); } catch { ok = false; }
     if (!ok) continue;
     const at = { x: Math.floor(g.x), y: Math.floor(g.y), z: Math.floor(g.z) };
     const camp = { id: `${now}|${k}`, dimId: dim.id, at, sq: k, t0: now, until: now + 3600 + Math.floor(Math.random() * 2400), seats: new Map(), story: false };
-    near.forEach((e, i) => {
-      const a = (i / near.length) * Math.PI * 2, s0 = walkableNear(dim, at.x + 0.5 + Math.cos(a) * 2.2, at.z + 0.5 + Math.sin(a) * 2.2, at.y);
-      if (s0 && Math.abs(s0.y - at.y) <= 1) { camp.seats.set(e.id, s0); campOf.set(e.id, camp.id); }
-    });
-    if (camp.seats.size < 2) { try { dim.getBlock(at)?.setType("minecraft:air"); } catch {} for (const id of camp.seats.keys()) campOf.delete(id); continue; }
+    for (const e of near) { camp.seats.set(e.id, { x: e.location.x, y: e.location.y, z: e.location.z }); campOf.set(e.id, camp.id); seated.add(e.id); setP(e, "war:sit", true); turnTo(e, { x: at.x + 0.5, y: at.y, z: at.z + 0.5 }, 180); }
     CAMPS.push(camp); saveCamps();
-    note(near[0], "lighting a fire");
+    note(near[0], "lit a fire");
   }
 }, 200);
 // ================================================================ v9.1: neutral zones

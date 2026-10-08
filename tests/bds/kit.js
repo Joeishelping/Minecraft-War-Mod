@@ -301,8 +301,11 @@ KS.camp = async (o, ox, oz) => {
   globalThis.__campChance = 1;
   const men = []; for (let i = 0; i < 4; i++) men.push(kitSoldier(1, { x: ox + i * 1.5 + 0.5, y: Y, z: oz + 0.5 }, "rifle", "hold"));
   let lit = -1, sat = 0; const t0 = tick();
+  const p0 = men.map((m) => ({ ...m.location }));
   await kitLoop(2400, () => { if (lit < 0 && CAMPS.length) lit = tick() - t0; sat = Math.max(sat, seated.size); return lit >= 0 && sat >= 3; });
-  const r = { lit, sat, fireBlock: CAMPS[0] ? ow().getBlock(CAMPS[0].at)?.typeId : null, hp: men.map((m) => { try { return Math.round(m.getComponent("minecraft:health").currentValue); } catch { return "x"; } }) };
+  await kitWait(100);
+  const moved = Math.max(...men.map((m, i) => Math.hypot(m.location.x - p0[i].x, m.location.z - p0[i].z)));
+  const r = { moved: Math.round(moved * 10) / 10, minFireGap: CAMPS[0] ? Math.round(Math.min(...men.map((m) => Math.hypot(m.location.x - CAMPS[0].at.x - 0.5, m.location.z - CAMPS[0].at.z - 0.5))) * 10) / 10 : null, lit, sat, fireBlock: CAMPS[0] ? ow().getBlock(CAMPS[0].at)?.typeId : null, hp: men.map((m) => { try { return Math.round(m.getComponent("minecraft:health").currentValue); } catch { return "x"; } }) };
   await kitOrder(1, { x: ox + 10, y: Y, z: oz + 10 });
   await kitWait(60);
   r.seatedAfterOrder = seated.size;
@@ -310,6 +313,72 @@ KS.camp = async (o, ox, oz) => {
   r.campsLeft = CAMPS.length;
   globalThis.__campChance = undefined;
   return r;
+};
+// v9.4: World Animals (installed on the test server): a wild lion is shot; a deer walking by isn't; a lion tamed by a
+// player of faction 1 (tag war_f1) isn't; a tamed, saddled elephant is ridden on "Mount up"; a stack of idle men spreads
+KS.animals = async (o, ox, oz) => {
+  floorAt(ox - 40, oz - 40, ox + 60, oz + 40);
+  kcmd("gamerule domobspawning false");
+  for (const a of ow().getEntities({ families: ["worldanimals"] })) { try { a.remove(); } catch {} }
+  for (const a of ow().getEntities({ families: ["monster"] })) { try { a.remove(); } catch {} }
+  const r = {};
+  const men = []; for (let i = 0; i < 4; i++) men.push(kitSoldier(1, { x: ox + i * 2 + 0.5, y: Y, z: oz + 0.5 }, "rifle", "hold"));
+  await kitWait(40);
+  const hp = (m) => { try { return Math.round(m.getComponent("minecraft:health").currentValue); } catch { return "x"; } };
+  // a deer and a tamed lion, close
+  const deer = ow().spawnEntity("worldanimals:deer", { x: ox + 3.5, y: Y, z: oz + 6.5 });
+  const pet = ow().spawnEntity("worldanimals:lion", { x: ox - 3.5, y: Y, z: oz + 6.5 });
+  try { pet.triggerEvent("minecraft:on_tame"); pet.addTag("war_f1"); } catch (err) { r.petErr = String(err).slice(0, 60); }
+  const d0 = hp(deer), p0 = hp(pet);
+  await kitWait(300);
+  r.deer = { hp0: d0, hp: deer.isValid ? hp(deer) : "dead" }; r.pet = { hp0: p0, hp: pet.isValid ? hp(pet) : "dead" };
+  // a wild lion 14 blocks off
+  const lion = ow().spawnEntity("worldanimals:lion", { x: ox + 3.5, y: Y, z: oz - 14.5 });
+  const lionHp0 = hp(lion), shots0 = KSHOTS.length;
+  const t0 = tick(); let lionDead = -1, minD = 99, aimed = 0, inSnap = 0;
+  await kitLoop(900, () => {
+    if (!lion.isValid || (lion.getComponent("minecraft:health")?.currentValue ?? 0) <= 0) { lionDead = tick() - t0; return true; }
+    minD = Math.min(minD, ...men.map((m) => dist(m.location, lion.location)));
+    if (men.some((m) => gunState.get(m.id)?.target?.id === lion.id)) aimed++;
+    if (tick() % 100 === 0 && r.dbg === undefined) r.dbg = [];
+    if (tick() % 100 === 0 && men[0].isValid) r.dbg.push({ d: Math.round(dist(men[0].location, lion.location)), tf: isTargetFor(men[0], sd(men[0]), lion), thr: perc.get(men[0].id)?.threat?.typeId ?? null, al: perc.get(men[0].id)?.alert, tg: gunState.get(men[0].id)?.target?.typeId ?? null, ch: (() => { try { return canHit(men[0], lion); } catch (err) { return String(err).slice(0, 40); } })(), rg: sd(men[0]).ranged });
+    if ((combatants.get("overworld") ?? []).some((c) => c.id === lion.id)) inSnap++;
+    return false; });
+  r.lionHp = [lionHp0, lion.isValid ? hp(lion) : "dead"]; r.shots = KSHOTS.slice(shots0).length; r.hits = KSHOTS.slice(shots0).filter((q) => q.hit).length;
+  r.lionDeadTicks = lionDead; r.lionMinD = Math.round(minD); r.lionAimedTicks = aimed; r.lionInSnap = inSnap; r.menHp = men.map(hp); r.menDown = men.filter((m) => !m.isValid || downed.has(m.id)).length;
+  try { if (deer.isValid) deer.remove(); if (pet.isValid) pet.remove(); } catch {}
+  // a tamed, saddled elephant: Mount up
+  const el = ow().spawnEntity("worldanimals:african_elephant", { x: ox + 3.5, y: Y, z: oz + 5.5 });
+  try { el.triggerEvent("minecraft:on_tame"); el.triggerEvent("minecraft:on_saddle"); } catch (err) { r.elErr = String(err).slice(0, 60); }
+  await kitWait(10);
+  r.elSaddled = !!el.hasComponent?.("minecraft:is_saddled"); r.elFamily = (() => { try { return el.getComponent("minecraft:type_family")?.hasTypeFamily("war_mount"); } catch { return "x"; } })();
+  await giveOrderInner(KIT_PLAYER, { faction: 1, order: ORDERS.findIndex((q) => q[0] === "mount"), squad: 0, count: 0, radius: 200, stance: "aggressive", ao: 100, free: true, target: 5, cx: ox, cz: oz, cy: Y });
+  await kitWait(40);
+  const rider = men.find((m) => m.isValid && m.getComponent("minecraft:riding")?.entityRidingOn?.id === el.id);
+  r.elRidden = !!rider;
+  if (rider) {
+    const e0 = { ...el.location }, dest = { x: ox + 40, y: Y, z: oz + 5 };
+    await kitOrder(1, dest);
+    await kitWait(400);
+    r.elMoved = Math.round(Math.hypot(el.location.x - e0.x, el.location.z - e0.z));
+    r.elStillRidden = rider.getComponent("minecraft:riding")?.entityRidingOn?.id === el.id;
+  }
+  await giveOrderInner(KIT_PLAYER, { faction: 1, order: ORDERS.findIndex((q) => q[0] === "dismount"), squad: 0, count: 0, radius: 200, stance: "aggressive", ao: 100, free: true, target: 5, cx: ox, cz: oz, cy: Y });
+  try { el.remove(); } catch {}
+  // two idle men standing on the same spot (a hold): one steps aside
+  const a = kitSoldier(2, { x: ox + 20.5, y: Y, z: oz + 20.5 }, "rifle", "hold"), b = kitSoldier(2, { x: ox + 20.6, y: Y, z: oz + 20.6 }, "rifle", "hold");
+  await kitWait(300);
+  r.stackGap = Math.round(Math.hypot(a.location.x - b.location.x, a.location.z - b.location.z) * 10) / 10;
+  return r;
+};
+// v9.4: idle men on a hold spawned on top of each other: does one of each pair step aside (and nobody else move)?
+KS.stack = async (o, ox, oz) => {
+  floorAt(ox - 30, oz - 30, ox + 30, oz + 30);
+  const pairs = []; for (let i = 0; i < 4; i++) pairs.push([kitSoldier(1, { x: ox + i * 8 + 0.5, y: Y, z: oz + 0.5 }, "rifle", "hold"), kitSoldier(1, { x: ox + i * 8 + 0.6, y: Y, z: oz + 0.6 }, "rifle", "hold")]);
+  const gaps = [];
+  for (const w of [100, 200, 300]) { await kitWait(100); gaps.push(pairs.map(([a, b]) => Math.round(Math.hypot(a.location.x - b.location.x, a.location.z - b.location.z) * 10) / 10)); }
+  const st = pairs.flat().map((e) => { const d = sd(e); return `${d.func}/${notes.get(e.id)?.text ?? notes.get(e.id) ?? "-"}`; });
+  return { gaps, st: st.slice(0, 4) };
 };
 KS.trip = async (o, ox, oz) => {
   const N = Number(o.n ?? 8), mode = o.mode ?? "down";
