@@ -1,0 +1,40 @@
+{
+  "format_version": "1.21.60",
+  "minecraft:crafting_items_catalog": {
+    "categories": [
+      {
+        "category_name": "items",
+        "groups": [
+          {
+            "group_identifier": {
+              "icon": "war:command_baton",
+              "name": "war:itemGroup.war"
+            },
+            "items": [
+              "war:egg_cavalier",
+              "war:command_baton",
+              "war:egg_grenadier",
+              "war:flag",
+              "war:egg_foot",
+              "war:egg_garrison",
+              "war:egg_guard",
+              "war:egg_houndmaster",
+              "war:egg_medic",
+              "war:mg_nest_item",
+              "war:tank_item",
+              "war:tp_wand",
+              "war:boat_item",
+              "war:unit_wand",
+              "war:chronicle",
+              "war:war_horn",
+              "war:plane_item",
+              "war:truck_item",
+              "war:gunboat_item",
+              "war:heli_item"
+            ]
+          }
+        ]
+      }
+    ]
+  }
+}

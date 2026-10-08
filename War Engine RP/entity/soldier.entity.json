@@ -555,6 +555,9 @@
           },
           {
             "prone": "q.property('war:pose') == 2 && !q.property('war:down') && !q.is_riding && !q.property('war:cav')"
+          },
+          {
+            "sit": "q.property('war:sit') && !q.is_riding && !q.property('war:down')"
           }
         ]
       },
@@ -654,7 +657,8 @@
         "gs_kar98s": "animation.kar98s.shoot",
         "gun_fire": "controller.animation.war.gun_fire",
         "kneel": "animation.war.kneel",
-        "prone": "animation.war.prone"
+        "prone": "animation.war.prone",
+        "sit": "animation.war.sit"
       },
       "enable_attachables": true
     }

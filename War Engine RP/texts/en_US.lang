@@ -35,3 +35,4 @@ entity.war:gunboat.name=Coast Guard Gunboat
 item.war:gunboat_item=Coast Guard Gunboat
 entity.war:heli.name=Transport Helicopter
 item.war:heli_item=Transport Helicopter
+war:itemGroup.war=War Engine

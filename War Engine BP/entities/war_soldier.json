@@ -90,6 +90,11 @@
           "type": "bool",
           "default": false,
           "client_sync": true
+        },
+        "war:sit": {
+          "type": "bool",
+          "default": false,
+          "client_sync": true
         }
       }
     },

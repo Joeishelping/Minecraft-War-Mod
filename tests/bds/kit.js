@@ -295,6 +295,22 @@ KS.vehicles = async (o, ox, oz) => {
   r.hp = [tr, gb, he, tk].map((v) => { try { return v.getComponent("minecraft:health")?.currentValue; } catch { return "x"; } });
   return r;
 };
+// v9.2: idle men light a campfire, sit round it; an order gets them up and the fire goes out when they've gone
+KS.camp = async (o, ox, oz) => {
+  floorAt(ox - 20, oz - 20, ox + 20, oz + 20);
+  globalThis.__campChance = 1;
+  const men = []; for (let i = 0; i < 4; i++) men.push(kitSoldier(1, { x: ox + i * 1.5 + 0.5, y: Y, z: oz + 0.5 }, "rifle", "hold"));
+  let lit = -1, sat = 0; const t0 = tick();
+  await kitLoop(2400, () => { if (lit < 0 && CAMPS.length) lit = tick() - t0; sat = Math.max(sat, seated.size); return lit >= 0 && sat >= 3; });
+  const r = { lit, sat, fireBlock: CAMPS[0] ? ow().getBlock(CAMPS[0].at)?.typeId : null, hp: men.map((m) => { try { return Math.round(m.getComponent("minecraft:health").currentValue); } catch { return "x"; } }) };
+  await kitOrder(1, { x: ox + 10, y: Y, z: oz + 10 });
+  await kitWait(60);
+  r.seatedAfterOrder = seated.size;
+  await kitWait(260);
+  r.campsLeft = CAMPS.length;
+  globalThis.__campChance = undefined;
+  return r;
+};
 KS.trip = async (o, ox, oz) => {
   const N = Number(o.n ?? 8), mode = o.mode ?? "down";
   let start, dest, okFn;
@@ -438,6 +454,7 @@ function kitLoop(max, f) { return new Promise((res) => { const t0 = tick(); cons
   if (KIT?.trace && (tick() - t0) % Number(KIT.trace) < 10) { try { const ps = globalThis.__planStats; if (ps) { console.warn(`PLAN jobs=${planJobs.length} exp/tick=${(ps.exp / Math.max(1, ps.ticks)).toFixed(0)} ms/tick=${(ps.ms / Math.max(1, ps.ticks)).toFixed(1)} reads/tick=${(ps.reads / Math.max(1, ps.ticks)).toFixed(0)} done=${ps.done} dropped=${ps.dropped} meanDoneTicks=${(ps.doneT / Math.max(1, ps.done)).toFixed(0)}`); globalThis.__planStats = { exp: 0, ms: 0, reads: 0, ticks: 0, done: 0, dropped: 0, doneT: 0 }; } console.warn(`TRACE ${tick() - t0} ` + kitSoldiers().slice(0, 12).map((e) => `${(e.location.x - KIT.ox).toFixed(1)},${(e.location.y - Y).toFixed(1)},${(e.location.z - KIT.oz).toFixed(1)}${isDown(e) ? "D" : ""}:${(notes.get(e.id)?.text ?? "").slice(0, 18)}:${JSON.parse(String(gdp(e, "war:st") ?? "{}")).g ?? ""}:${sd(e).func}`).join(" | ")); } catch (err) { console.warn(`TRACE err ${err}`); } }
   if (done || tick() - t0 >= max) { system.clearRun(id); res(); } }, 10); }); }
 let kitSlot = 0;
+globalThis.__viewers = () => (KIT ? [{ d: "minecraft:overworld", x: KIT.ox + 20, z: KIT.oz }] : []);   // (the test site counts as watched, as a real battle is)
 system.afterEvents.scriptEventReceive.subscribe((ev) => {
   if (ev.id !== "war:test") return;
   const [name, ...args] = String(ev.message ?? "").trim().split(/\s+/);

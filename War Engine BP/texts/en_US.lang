@@ -29,3 +29,4 @@ item.war:tank_item=Tank
 item.war:chronicle=War Chronicle
 item.war:war_horn=War Horn
 item.war:mg_nest_item=MG Nest
+war:itemGroup.war=War Engine

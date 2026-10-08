@@ -1,5 +1,38 @@
 # War Engine changelog
 
+## v9.2 (Riding fixed for players, soldiers in the add-on's vehicles, campfires, smoke only to breach or pull back, less lag)
+
+Checked in the simulator (all 10 acceptance checks pass) and on a real Bedrock server.
+
+- **You can ride again.**
+  - Right-click a horse, camel, pig or boat a soldier is sitting on: he gets off and you get on. If there's a spare
+    seat, he climbs back on behind you.
+  - Soldiers no longer jump onto a free mount you're standing next to.
+- **"Mount up" includes this add-on's truck, gunboat and helicopter.** Soldiers ride as passengers; you drive.
+  When your followers mount up on their own because you rode off, they still only take vanilla mounts.
+- **Riding positions.** The seats on the truck (cab and bed), the gunboat and the helicopter were lowered, so the
+  men sit in the vehicle instead of floating above it.
+- **Campfires.**
+  - Three or more men of a squad who've stood in one place for a minute (a post, a hold, a patrol that stopped),
+    with no fight near and a player around, sometimes light a fire on open ground.
+  - They sit round it, facing the fire. Now and then one of them tells a story; this is the only place that line
+    is used.
+  - Any order, sign of a fight, retreat or surrender gets them up at once.
+  - The fire goes out after 3 to 5 minutes, or when fewer than two men are left at it. A fire left from before a
+    reload is put out.
+  - The story recording goes in `War Engine RP/sounds/war_voice/<language>/story.ogg`. Until it's there the line
+    stays silent.
+- **Patrols keep walking.** Before, an enemy merely heard far away stopped a patrol in place. Now only a real fight
+  does: an enemy seen in the last 10 s, the squad firing, or a threat in sight.
+- **Smoke only to breach or pull back.**
+  - Kept: a breach on a door the enemy covers, and a screen when most of the squad is falling back with the enemy in
+    sight (8 to 40 blocks).
+  - Removed: smoke for an assault, a flank, being pinned down, or a wounded man.
+  - A rescuer whose wounded mate is under fire now waits for a lull instead.
+- **Less lag.** Soldiers more than 96 blocks from every player think and look around half as often. Their fights
+  still play out.
+- **Creative menu.** Every War Engine item is now in one collapsible "War Engine" group.
+
 ## v9.1 (Grenades that work, smoke and rescues with reasons, the right weapon, stairs, riding, vehicles, neutral zones)
 
 Checked in the simulator (all 10 acceptance checks pass) and on a real Bedrock server.

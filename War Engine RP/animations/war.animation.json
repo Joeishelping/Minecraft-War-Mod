@@ -242,6 +242,39 @@
           ]
         }
       }
+    },
+    "animation.war.sit": {
+      "loop": true,
+      "bones": {
+        "root": {
+          "position": [
+            0,
+            -11,
+            0
+          ]
+        },
+        "rightLeg": {
+          "rotation": [
+            -80,
+            12,
+            0
+          ]
+        },
+        "leftLeg": {
+          "rotation": [
+            -80,
+            -12,
+            0
+          ]
+        },
+        "rightArm": {
+          "rotation": [
+            -25,
+            0,
+            0
+          ]
+        }
+      }
     }
   }
 }

@@ -4176,6 +4176,204 @@
           "volume": 1.0
         }
       ]
+    },
+    "war.voice.aave.story": {
+      "category": "hostile",
+      "min_distance": 6.0,
+      "max_distance": 32.0,
+      "sounds": [
+        {
+          "name": "sounds/war_voice/aave/story",
+          "volume": 1.0
+        }
+      ]
+    },
+    "war.voice.arabic_sy.story": {
+      "category": "hostile",
+      "min_distance": 6.0,
+      "max_distance": 32.0,
+      "sounds": [
+        {
+          "name": "sounds/war_voice/arabic_sy/story",
+          "volume": 1.0
+        }
+      ]
+    },
+    "war.voice.chinese.story": {
+      "category": "hostile",
+      "min_distance": 6.0,
+      "max_distance": 32.0,
+      "sounds": [
+        {
+          "name": "sounds/war_voice/chinese/story",
+          "volume": 1.0
+        }
+      ]
+    },
+    "war.voice.dutch.story": {
+      "category": "hostile",
+      "min_distance": 6.0,
+      "max_distance": 32.0,
+      "sounds": [
+        {
+          "name": "sounds/war_voice/dutch/story",
+          "volume": 1.0
+        }
+      ]
+    },
+    "war.voice.en_gb.story": {
+      "category": "hostile",
+      "min_distance": 6.0,
+      "max_distance": 32.0,
+      "sounds": [
+        {
+          "name": "sounds/war_voice/en_gb/story",
+          "volume": 1.0
+        }
+      ]
+    },
+    "war.voice.en_us.story": {
+      "category": "hostile",
+      "min_distance": 6.0,
+      "max_distance": 32.0,
+      "sounds": [
+        {
+          "name": "sounds/war_voice/en_us/story",
+          "volume": 1.0
+        }
+      ]
+    },
+    "war.voice.german.story": {
+      "category": "hostile",
+      "min_distance": 6.0,
+      "max_distance": 32.0,
+      "sounds": [
+        {
+          "name": "sounds/war_voice/german/story",
+          "volume": 1.0
+        }
+      ]
+    },
+    "war.voice.greek.story": {
+      "category": "hostile",
+      "min_distance": 6.0,
+      "max_distance": 32.0,
+      "sounds": [
+        {
+          "name": "sounds/war_voice/greek/story",
+          "volume": 1.0
+        }
+      ]
+    },
+    "war.voice.haitian.story": {
+      "category": "hostile",
+      "min_distance": 6.0,
+      "max_distance": 32.0,
+      "sounds": [
+        {
+          "name": "sounds/war_voice/haitian/story",
+          "volume": 1.0
+        }
+      ]
+    },
+    "war.voice.hebrew.story": {
+      "category": "hostile",
+      "min_distance": 6.0,
+      "max_distance": 32.0,
+      "sounds": [
+        {
+          "name": "sounds/war_voice/hebrew/story",
+          "volume": 1.0
+        }
+      ]
+    },
+    "war.voice.hindi.story": {
+      "category": "hostile",
+      "min_distance": 6.0,
+      "max_distance": 32.0,
+      "sounds": [
+        {
+          "name": "sounds/war_voice/hindi/story",
+          "volume": 1.0
+        }
+      ]
+    },
+    "war.voice.igbo.story": {
+      "category": "hostile",
+      "min_distance": 6.0,
+      "max_distance": 32.0,
+      "sounds": [
+        {
+          "name": "sounds/war_voice/igbo/story",
+          "volume": 1.0
+        }
+      ]
+    },
+    "war.voice.italian.story": {
+      "category": "hostile",
+      "min_distance": 6.0,
+      "max_distance": 32.0,
+      "sounds": [
+        {
+          "name": "sounds/war_voice/italian/story",
+          "volume": 1.0
+        }
+      ]
+    },
+    "war.voice.korean.story": {
+      "category": "hostile",
+      "min_distance": 6.0,
+      "max_distance": 32.0,
+      "sounds": [
+        {
+          "name": "sounds/war_voice/korean/story",
+          "volume": 1.0
+        }
+      ]
+    },
+    "war.voice.maya.story": {
+      "category": "hostile",
+      "min_distance": 6.0,
+      "max_distance": 32.0,
+      "sounds": [
+        {
+          "name": "sounds/war_voice/maya/story",
+          "volume": 1.0
+        }
+      ]
+    },
+    "war.voice.mongolian.story": {
+      "category": "hostile",
+      "min_distance": 6.0,
+      "max_distance": 32.0,
+      "sounds": [
+        {
+          "name": "sounds/war_voice/mongolian/story",
+          "volume": 1.0
+        }
+      ]
+    },
+    "war.voice.russian.story": {
+      "category": "hostile",
+      "min_distance": 6.0,
+      "max_distance": 32.0,
+      "sounds": [
+        {
+          "name": "sounds/war_voice/russian/story",
+          "volume": 1.0
+        }
+      ]
+    },
+    "war.voice.spanish.story": {
+      "category": "hostile",
+      "min_distance": 6.0,
+      "max_distance": 32.0,
+      "sounds": [
+        {
+          "name": "sounds/war_voice/spanish/story",
+          "volume": 1.0
+        }
+      ]
     }
   }
 }

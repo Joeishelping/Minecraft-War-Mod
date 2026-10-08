@@ -826,7 +826,7 @@ function think(e) {
     // v5.6: a fresh order is obeyed at once: for ~5 s after it nothing stops him to fight (he still shoots on the move)
     const fresh = now - Number(gdp(e, "war:ordt") ?? -99999) < 100 && (["charge", "follow", "patrol"].includes(d.func) || (anchor && dist(anchor.location, e.location) > 6));
     const fight = !fresh && !wet;
-    const engaged = medicMove(e, d, now) ?? casevacMove(e, d, now) ?? shakenMove(e, d, now) ?? waterExit(e, d, now) ?? (fresh || wet ? undefined : reflexMove(e, d, now, anchor, bLeash)) ?? extDecide("first", e, d, now) ?? (personal.has(e.id) ? followPersonal(e, now) : undefined) ?? spreadMove(e, now) ?? (fight ? combatMove(e, d, now, melee, anchor, bLeash) : undefined) ?? (fight ? engagement(e, d, now, d.goal, melee) : undefined) ?? (fresh ? undefined : reinforceMove(e, d, now)) ??
+    const engaged = campMove(e, now) ?? medicMove(e, d, now) ?? casevacMove(e, d, now) ?? shakenMove(e, d, now) ?? waterExit(e, d, now) ?? (fresh || wet ? undefined : reflexMove(e, d, now, anchor, bLeash)) ?? extDecide("first", e, d, now) ?? (personal.has(e.id) ? followPersonal(e, now) : undefined) ?? spreadMove(e, now) ?? (fight ? combatMove(e, d, now, melee, anchor, bLeash) : undefined) ?? (fight ? engagement(e, d, now, d.goal, melee) : undefined) ?? (fresh ? undefined : reinforceMove(e, d, now)) ??
       (cu !== undefined && marker(Number(cu)) ? (note(e, formMode.has(e.id) ? "marching" : "catching up"), { g: "g_wp", slot: Number(cu), t: "t_mid", urgent: true }) : undefined) ??
       patrolSweep(e, d, now) ?? followLeader(e, d, now) ?? extDecide("last", e, d, now);
     // how far each stationary order may leave its spot to fight: post barely, hold to meet a charge, sentry its whole radius
@@ -1222,6 +1222,12 @@ const propSync = new Map(); // id -> tick his entity properties were last re-app
 // thinks a little less often, but the work per tick never grows (no lag spikes in 200 v 200). Soldiers in the
 // background (far from every player, not fighting, not moving, not just ordered) think every third turn.
 const THINK_MAX = 24;
+// v9.2: level of detail by distance. A soldier no player is within 96 blocks of thinks and looks around half as often
+// again (in a fight every 2nd pass, quiet every 6th): nobody sees him, and his fight still plays out. Player positions
+// are read once a second.
+let PLAYER_POS = [];
+system.runInterval(() => { try { PLAYER_POS = world.getAllPlayers().map((p) => ({ d: p.dimension.id, x: p.location.x, z: p.location.z })); const xv = globalThis.__viewers?.(); if (xv) PLAYER_POS.push(...xv); } catch {} }, 20);   // (__viewers: test kits only)
+const farFromPlayers = (e) => { const l = e.location, d = e.dimension.id; for (const p of PLAYER_POS) if (p.d === d && Math.abs(p.x - l.x) < 96 && Math.abs(p.z - l.z) < 96) return false; return true; };
 let thinkCursor = 0, thinkAcc = 0;
 const thinkPass = new Map(), g2Done = new Set();
 system.runInterval(() => {
@@ -1245,7 +1251,9 @@ system.runInterval(() => {
       if (gdp(e, "p_war:gun") === undefined && GUNS.includes(String(gdp(e, "war:weapon") ?? ""))) equip(e, weaponItem(e));
       if (gdp(e, "war:relv") !== v) applyRelations(e);
       const pass = (thinkPass.get(e.id) ?? 0) + 1; thinkPass.set(e.id, pass);
-      if (!isHot(e, now) && pass % 3) continue;
+      const hot = isHot(e, now);
+      if (!hot && pass % 3) continue;
+      if (pass % (hot ? 2 : 6) && farFromPlayers(e)) continue;                    // (v9.2: nobody near to see him)
       think(e);
     } catch (err) { oops("think", err); }
   }
@@ -1861,6 +1869,23 @@ world.beforeEvents.playerInteractWithEntity.subscribe((ev) => {
     }
   } catch {}
   const v = ev.target, p = ev.player;
+  if (v && v.typeId in MOUNT_SPEED) {                                        // (v9.2: your horse / camel / boat: a soldier on it makes room for you)
+    try {
+      const rd = v.getComponent("minecraft:rideable"), rs = rd?.getRiders() ?? [];
+      if (rs.some((r) => r.id === p.id)) return;
+      const sol = rs.filter((r) => r.typeId === SOLDIER);
+      if (!sol.length) return;
+      ev.cancel = true;
+      system.run(() => {
+        try {
+          for (const s0 of sol) { rd.ejectRider(s0); mountOf.delete(s0.id); }
+          rd.addRider(p);
+          if (rd.seatCount > 1) system.runTimeout(() => { for (const s0 of sol.slice(0, rd.seatCount - 1)) { try { if (s0.isValid && !isRiding(s0)) mountSoldier(s0, v, true); } catch {} } }, 10);
+        } catch {}
+      });
+    } catch {}
+    return;
+  }
   if (!v || !VEHICLES.includes(v.typeId)) return;
   let riders, seatCount;
   try { const r = v.getComponent("minecraft:rideable"); riders = r.getRiders(); seatCount = r.seatCount; } catch { return; }
@@ -3997,7 +4022,9 @@ system.runInterval(() => {
       try {
         if (!e.isValid) continue;
         const pass = (percPass.get(e.id) ?? 0) + 1; percPass.set(e.id, pass);
-        if (!isHot(e, now) && pass % 3) continue;
+        const hot = isHot(e, now);
+        if (!hot && pass % 3) continue;
+        if (pass % (hot ? 2 : 6) && farFromPlayers(e)) continue;                  // (v9.2)
         perceive(e, now);
       } catch (err) { oops("perception", err); }
     }
@@ -5418,9 +5445,17 @@ function helpInArea(victim, attacker, fv, now) {
 
 // ---- patrol: a wide sweep of the whole area (not a stroll around one spot)
 const sweep = new Map(); // id -> { slot, at, t }
+// v9.2: a real fight near him: an enemy SEEN in the last 10 s, his squad firing in the last 20 s, or a threat in sight
+function inFight(e, S, now) {
+  if (perc.get(e.id)?.threat?.isValid) return true;
+  if (!S) return false;
+  if (S.fightT !== undefined && now - S.fightT < 400) return true;
+  for (const q of S.known.values()) if (!q.heard && now - q.t < 200) return true;
+  return false;
+}
 function patrolSweep(e, d, now) {
   if (d.func !== "patrol" || d.retreat || isRiding(e)) return undefined;
-  if (squads.get(squadKey(e, d))?.known?.size) { sweep.delete(e.id); return undefined; }   // (v8.2: in a fight a patrol stops wandering: the fight decides where he goes)
+  if (inFight(e, squads.get(squadKey(e, d)), now)) { sweep.delete(e.id); return undefined; }   // (v8.2: in a fight a patrol stops wandering: the fight decides where he goes. v9.2: a real fight, not an enemy merely heard of somewhere around: that froze patrols for good)
   const roam = !!gdp(e, "war:roam");
   const r = roam ? Math.max(d.radius, Math.min(150, aoOf(e))) : Math.max(d.radius, freeOf(e) ? Math.min(150, aoOf(e)) : d.radius);
   // every patrol uses the sweep: points on his level (v7.0: reached by a real route if need be, not only a plain walk:
@@ -6229,7 +6264,7 @@ const BASE_LINES = ["spotted", "contact", "flanking", "charge", "gogogo", "movin
 const MORE_LINES = ["under_fire", "idle_quiet", "idle_sharp", "idle_smoke", "idle_done", "idle_legs", "medic", "thanks", "surrender", "reloading", "grenade"];
 const VOICE_HAS = Object.fromEntries(["en_us", "greek", "korean", "mongolian", "hebrew", "spanish", "german", "aave"].map((l) => [l, [...BASE_LINES, ...MORE_LINES]]));   // (v6.7: recorded so far)
 const IDLE_LINES = ["idle_quiet", "idle_sharp", "idle_smoke", "idle_done", "idle_legs"];
-const voiceHas = (lang, key) => (VOICE_HAS[lang] ?? BASE_LINES).includes(key);
+const voiceHas = (lang, key) => key === "story" || (VOICE_HAS[lang] ?? BASE_LINES).includes(key);   // (v9.2: the campfire story: sounds/war_voice/<lang>/story.ogg, silent until it's there)
 const CALL_ALL = BASE_LINES;
 const lastCall = new Map(); // soldier id / squad line -> tick
 let callSec = -1, callsThisSec = 0;
@@ -6245,6 +6280,7 @@ const LINE_INFO = {
   hold: ["Hold position!", "the march arrives"], follow: ["Follow me!", "a march starts"],
   under_fire: ["Taking heavy fire!", "shot at, pinned down"], idle_quiet: ["Sector's locked down...", "idle"],
   idle_sharp: ["Head on a swivel, stay frosty.", "idle"], idle_smoke: ["Anyone got a dart?", "idle (tired)"],
+  story: ["(tells a story)", "at a campfire, now and then"],
   idle_done: ["So done with this deployment...", "idle (tired)"], idle_legs: ["My legs are shot...", "idle (tired)"],
   medic: ["Medic! I'm hit!", "down, and no medic coming"], thanks: ["Good looking out, brother.", "just revived"],
   surrender: ["Don't shoot!", "surrendering"], reloading: ["Dry, cover me while I swap!", "reloading in a fight"],
@@ -9399,10 +9435,7 @@ function squadSmoke(S, ours, known, now) {
   for (const q of known) { const dd = Math.hypot(q.x - oc.x, q.z - oc.z); if (dd < nd) { nd = dd; near = q; } }
   if (!near || nd > 60) return;
   let screenAt, why;
-  if (prev !== S.plan && (S.plan === "assault" || S.plan === "fix") && nd >= 8) {
-    const go = S.plan === "fix" && S.flankPt ? { x: (oc.x + S.flankPt.x) / 2, y: oc.y, z: (oc.z + S.flankPt.z) / 2 } : { x: oc.x + (near.x - oc.x) * 0.4, y: oc.y, z: oc.z + (near.z - oc.z) * 0.4 };
-    if (look.length && exposureAt(dim, go, look) > 0) { screenAt = { x: go.x + (near.x - go.x) * 0.45, y: go.y, z: go.z + (near.z - go.z) * 0.45 }; why = S.plan === "fix" ? "covering the flank" : "covering the assault"; }
-  }
+  // (v9.2: no smoke for an assault or a flank any more: only to breach, or to get back to safety)
   if (!screenAt && S.bplan?.kind === "attack" && !S.bplan.smoked && ours.filter((e) => isIndoors(e)).length * 2 < ours.length) {
     const doors = entrances(dim, S.enemyC ?? near).slice().sort((p, q) => flat(p, oc) - flat(q, oc));
     const door = doors[0];
@@ -9412,13 +9445,10 @@ function squadSmoke(S, ours, known, now) {
       screenAt = { x: oc.x + (door.x - oc.x) * 0.7, y: door.y, z: oc.z + (door.z - oc.z) * 0.7 }; why = "covering the run to the door";
     }
   }
-  // pinned: most of the squad really suppressed, three checks (3 s) in a row, out in the open where they're seen
-  const pinnedNow = ours.filter((e) => (suppB.get(e.id) ?? 0) > 8).length * 2 > ours.length;
-  S.pinN = pinnedNow ? (S.pinN ?? 0) + 1 : 0;
-  if (!screenAt && nd >= 10 && S.pinN >= 3) {
-    if (ours.filter((e) => !isIndoors(e)).length * 2 > ours.length && look.length && exposureAt(dim, oc, look) > 0) {
-      const L = nd; screenAt = { x: oc.x + ((near.x - oc.x) / L) * 5, y: oc.y, z: oc.z + ((near.z - oc.z) / L) * 5 }; why = "pinned down, screening";
-    }
+  // falling back to safety: most of the squad pulling back (retreat order, or broken) with the enemy in sight: a screen
+  // between them and the enemy
+  if (!screenAt && nd >= 8 && nd <= 40 && ours.filter((e) => sd(e).retreat || shaken.has(e.id)).length * 2 > ours.length && look.length) {
+    const L = nd; screenAt = { x: oc.x + ((near.x - oc.x) / L) * 5, y: oc.y, z: oc.z + ((near.z - oc.z) / L) * 5 }; why = "covering the pull-back";
   }
   if (!screenAt) return;
   let who, wd = 1e9;
@@ -9547,10 +9577,7 @@ system.runInterval(() => {
     const vChest = { x: v.location.x, y: v.location.y + 0.4, z: v.location.z }, mid = { x: (v.location.x + who.location.x) / 2, y: v.location.y + 1, z: (v.location.z + who.location.z) / 2 };
     const exposed = active.filter((c) => !blinded(c, vChest) || clearShot(v.dimension, { x: c.x, y: c.y + 1.6, z: c.z }, mid) && !blinded(c, mid));
     let wait = 0;
-    if (exposed.length) {
-      if (!smokeScreen(who, v.location, exposed[0], 3.5, "covering a wounded man")) continue;   // no smoke: not now
-      wait = 45;                                                              // the canister's flight and the cloud's bloom
-    }
+    if (exposed.length) continue;                                             // (v9.2: under fire: he waits for a lull; smoke is for breaching and pulling back)
     const wk = squadKey(who, sd(who)), WS = squads.get(wk);
     let busy = 0; for (const [, D2] of DRAG) if (D2.sq === wk) busy++;
     if (busy >= ((WS?.n ?? 0) >= 8 ? 2 : 1) || (WS?.ratio !== undefined && WS.ratio < 0.6 && flat(who.location, v.location) > 6)) continue;   // a squad losing the fight keeps its men in it
@@ -9805,10 +9832,10 @@ const mountOf = new Map();   // soldier id -> { id (mount), auto (got on because
 const rideTo = new Map();    // soldier id -> where his last order sends him (riding: straight there)
 function mountReady(m) {
   try {
-    if (!m?.isValid || !(m.typeId in MOUNT_SPEED)) return false;
+    if (!m?.isValid || !(m.typeId in MOUNT_SPEED || VEHICLES.includes(m.typeId))) return false;
     const rd = m.getComponent("minecraft:rideable"); if (!rd) return false;
     if (rd.getRiders().length >= rd.seatCount) return false;
-    if (isBoatType(m.typeId)) return true;
+    if (isBoatType(m.typeId) || VEHICLES.includes(m.typeId)) return true;   // (v9.2: the add-on's vehicles: on "Mount up", as passengers)
     return !!m.hasComponent?.("minecraft:is_saddled");                     // (saddled ones only)
   } catch { return false; }
 }
@@ -9827,12 +9854,14 @@ function mountSoldier(e, m, auto) {
 }
 function mountUp(list, auto) {
   const taken = new Set();
+  const walkers = world.getAllPlayers().filter((p) => { try { return !p.getComponent("minecraft:riding")?.entityRidingOn; } catch { return false; } });
+  const playerAt = (m) => walkers.some((p) => p.dimension.id === m.dimension.id && dist(p.location, m.location) < 2.5);   // (v9.2: a mount a player is stepping up to is his)
   let n = 0;
   for (const e of list) {
     if (mountOf.has(e.id) || isRiding(e) || downed.has(e.id) || sd(e).surr || sd(e).div === "cavalier") continue;
     let best, bd = 1e9;
-    for (const t of Object.keys(MOUNT_SPEED)) for (const m of e.dimension.getEntities({ type: t, location: e.location, maxDistance: 16 })) {
-      if (!mountReady(m)) continue;
+    for (const t of [...Object.keys(MOUNT_SPEED), ...(auto ? [] : VEHICLES)]) for (const m of e.dimension.getEntities({ type: t, location: e.location, maxDistance: 16 })) {
+      if (!mountReady(m) || playerAt(m)) continue;
       const left = (m.getComponent("minecraft:rideable")?.seatCount ?? 1) - (m.getComponent("minecraft:rideable")?.getRiders().length ?? 0) - (taken.has(m.id) ? 1 : 0);
       if (left <= 0) continue;
       const dd = dist(m.location, e.location); if (dd < bd) { bd = dd; best = m; }
@@ -9869,7 +9898,7 @@ system.runInterval(() => {
       const e = world.getEntity(id), m = world.getEntity(M.id);
       if (!e?.isValid || !m?.isValid || downed.has(id) || e.getComponent("minecraft:riding")?.entityRidingOn?.id !== M.id) { mountOf.delete(id); continue; }
       const rd = m.getComponent("minecraft:rideable")?.getRiders() ?? [];
-      if (rd[0]?.id !== id) continue;                                          // (a passenger: whoever's in front steers)
+      if (rd[0]?.id !== id || VEHICLES.includes(m.typeId)) continue;           // (a passenger: whoever's in front steers; the add-on's vehicles drive themselves)
       const d = sd(e), want = rideDest(e, d);
       const l = m.location, vel = m.getVelocity();
       let tx = 0, tz = 0;
@@ -9910,6 +9939,103 @@ system.runInterval(() => {
     } catch {}
   }
 }, 20);
+// ================================================================ v9.2: campfires
+// Three or more men of a squad who've stood in the same place for a minute with no fight anywhere near (a post, a
+// hold, a patrol that's stopped) sometimes light a fire on open ground among them, walk to a seat around it and sit.
+// Now and then one of them tells a story (only there). Any order, any move, any sign of a fight: he stands up and
+// carries on as before; the fire burns out after 3-5 minutes, or when fewer than two are left at it. Only men near a
+// player are looked at, and only every few seconds: it costs next to nothing.
+const CAMPS = [];               // { id, dimId, at, sq, until, seats: Map(soldier id -> seat), story, t0 }
+const stillSince = new Map();   // soldier id -> { x, y, z, t }
+const campOf = new Map();       // soldier id -> camp id
+const seated = new Set();       // soldier ids sitting at a fire
+// (his decision while he belongs to a fire: on his seat he stays; on the way he follows his route there)
+function campMove(e, now) {
+  const cid = campOf.get(e.id); if (!cid) return undefined;
+  const c = CAMPS.find((q) => q.id === cid), seat = c?.seats.get(e.id);
+  if (!seat) return undefined;
+  const d = sd(e);
+  if (now - Number(gdp(e, "war:ordt") ?? -99999) < 200 || inFight(e, squads.get(squadKey(e, d)), now) || d.retreat || d.surr) { v9stat("campMoveLeave"); campLeave(e, c); return undefined; }   // (an order or a fight: up at once)
+  if (seated.has(e.id) || (flat(e.location, seat) < 0.9 && Math.abs(e.location.y - seat.y) < 1)) { note(e, "sitting by the fire"); return { g: "g_none", t: "t_mid", urgent: false }; }
+  return personal.has(e.id) ? followPersonal(e, now) : undefined;
+}
+function saveCamps() { try { setJSON(world, "war:camps", CAMPS.map((c) => ({ d: c.dimId, x: c.at.x, y: c.at.y, z: c.at.z }))); } catch {} }
+system.runTimeout(() => {       // a fire left over from before a reload goes out
+  try { for (const c of getJSON(world, "war:camps", [])) { try { const b = world.getDimension(c.d).getBlock(c); if (b?.typeId === "minecraft:campfire") b.setType("minecraft:air"); } catch {} } setJSON(world, "war:camps", []); } catch {}
+}, 200);
+function campEnd(c) {
+  try { const b = world.getDimension(c.dimId).getBlock(c.at); if (b?.typeId === "minecraft:campfire") b.setType("minecraft:air"); } catch {}
+  for (const id of c.seats.keys()) { campOf.delete(id); seated.delete(id); const e = world.getEntity(id); if (e?.isValid) { try { setP(e, "war:sit", false); } catch {} personal.delete(id); } }
+  CAMPS.splice(CAMPS.indexOf(c), 1); saveCamps();
+}
+function campLeave(e, c) {
+  campOf.delete(e.id); c.seats.delete(e.id); seated.delete(e.id);
+  try { setP(e, "war:sit", false); } catch {}
+}
+system.runInterval(() => {
+  const now = tick();
+  // the fires: who's still there, who leaves, story time, burning out
+  for (const c of [...CAMPS]) {
+    for (const [id, seat] of [...c.seats]) {
+      const e = world.getEntity(id);
+      if (!e?.isValid || downed.has(id) || isRiding(e)) { v9stat(!e?.isValid ? "campGoneInv" : downed.has(id) ? "campGoneDown" : "campGoneRide"); c.seats.delete(id); campOf.delete(id); seated.delete(id); if (e?.isValid) { try { setP(e, "war:sit", false); } catch {} } continue; }
+      const d = sd(e), S = squads.get(squadKey(e, d));
+      const moved = now - Number(gdp(e, "war:ordt") ?? -99999) < 200 || inFight(e, S, now) || d.retreat || d.surr;
+      if (moved) { v9stat(now - Number(gdp(e, "war:ordt") ?? -99999) < 200 ? "campOrd" : inFight(e, S, now) ? "campFight" : "campRetr"); campLeave(e, c); continue; }
+      if (flat(e.location, seat) < 0.9 && Math.abs(e.location.y - seat.y) < 1) {
+        if (!seated.has(id)) { seated.add(id); setP(e, "war:sit", true); personal.delete(id); }
+        turnTo(e, c.at, 30);
+      } else if (!personal.has(id) && now - c.t0 < 600) planPersonalTo(e, "settle", seat, now);
+      else if (now - c.t0 >= 600 && flat(e.location, seat) > 3) campLeave(e, c);   // (couldn't get to his seat: carries on)
+    }
+    const sitting = [...c.seats.keys()].filter((id) => seated.has(id));
+    if (!c.story && now - c.t0 > 600 && sitting.length >= 2 && Math.random() < 0.04) {   // (rare: about one fire in three hears one)
+      c.story = true;
+      const teller = world.getEntity(sitting[Math.floor(Math.random() * sitting.length)]);
+      if (teller?.isValid) callout(teller, "STORY", { key: "story", event: true });
+    }
+    if (now > c.until || c.seats.size < 2) { v9stat(now > c.until ? "campBurnt" : "campFew"); campEnd(c); }
+  }
+  // who's been standing in one place, no fight about, near a player
+  const groups = new Map();
+  for (const e of allOf(SOLDIER)) {
+    try {
+      if (campOf.has(e.id)) continue;
+      const l = e.location;
+      if (!PLAYER_POS.some((p) => p.d === e.dimension.id && Math.hypot(p.x - l.x, p.z - l.z) < 48)) { stillSince.delete(e.id); continue; }
+      const d = sd(e);
+      if (!d.faction || d.surr || d.retreat || downed.has(e.id) || isRiding(e) || pows.has(e.id) || d.div === "guard" || d.func === "follow" || d.func === "escort") { stillSince.delete(e.id); continue; }
+      let st = stillSince.get(e.id);
+      if (!st || Math.hypot(l.x - st.x, l.z - st.z) > 2 || Math.abs(l.y - st.y) > 1) { stillSince.set(e.id, { x: l.x, y: l.y, z: l.z, t: now }); continue; }
+      if (now - st.t < 1200 || inFight(e, squads.get(squadKey(e, d)), now)) continue;
+      const k = squadKey(e, d); if (!groups.has(k)) groups.set(k, []); groups.get(k).push(e);
+    } catch {}
+  }
+  for (const [k, men] of groups) {
+    if (men.length < 3 || CAMPS.length >= 6 || CAMPS.some((c) => c.sq === k) || Math.random() > (globalThis.__campChance ?? 0.15)) continue;   // (__campChance: test kits only)
+    const dim = men[0].dimension, c0 = { x: men.reduce((t, e) => t + e.location.x, 0) / men.length, y: men[0].location.y, z: men.reduce((t, e) => t + e.location.z, 0) / men.length };
+    const near = men.filter((e) => flat(e.location, c0) < 8).slice(0, 6);
+    if (near.length < 3) continue;
+    let g;                      // (a spot with nobody standing on it: a man under a lit campfire burns)
+    for (const [ox, oz] of [[0, 0], [1.5, 0], [-1.5, 0], [0, 1.5], [0, -1.5], [1.5, 1.5], [-1.5, -1.5], [1.5, -1.5], [-1.5, 1.5]]) {
+      const q = walkableNear(dim, c0.x + ox, c0.z + oz, c0.y);
+      if (q && !allOf(SOLDIER).some((o) => o.dimension.id === dim.id && Math.abs(o.location.x - (Math.floor(q.x) + 0.5)) < 1.3 && Math.abs(o.location.z - (Math.floor(q.z) + 0.5)) < 1.3 && Math.abs(o.location.y - q.y) < 2)) { g = q; break; }
+    }
+    if (!g || Math.abs(g.y - c0.y) > 1.5 || isIndoorsAt(dim, g) || dangerNear(dim, g)) continue;
+    let ok = true;
+    try { const b = dim.getBlock({ x: Math.floor(g.x), y: Math.floor(g.y), z: Math.floor(g.z) }), below = dim.getBlock({ x: Math.floor(g.x), y: Math.floor(g.y) - 1, z: Math.floor(g.z) }); ok = !!b?.isAir && !!below && !below.isAir && !below.isLiquid && (tSky(dim, g.x, g.y + 1, g.z) >= 10); if (ok) b.setType("minecraft:campfire"); } catch { ok = false; }
+    if (!ok) continue;
+    const at = { x: Math.floor(g.x), y: Math.floor(g.y), z: Math.floor(g.z) };
+    const camp = { id: `${now}|${k}`, dimId: dim.id, at, sq: k, t0: now, until: now + 3600 + Math.floor(Math.random() * 2400), seats: new Map(), story: false };
+    near.forEach((e, i) => {
+      const a = (i / near.length) * Math.PI * 2, s0 = walkableNear(dim, at.x + 0.5 + Math.cos(a) * 2.2, at.z + 0.5 + Math.sin(a) * 2.2, at.y);
+      if (s0 && Math.abs(s0.y - at.y) <= 1) { camp.seats.set(e.id, s0); campOf.set(e.id, camp.id); }
+    });
+    if (camp.seats.size < 2) { try { dim.getBlock(at)?.setType("minecraft:air"); } catch {} for (const id of camp.seats.keys()) campOf.delete(id); continue; }
+    CAMPS.push(camp); saveCamps();
+    note(near[0], "lighting a fire");
+  }
+}, 200);
 // ================================================================ v9.1: neutral zones
 // An area (a circle, every height) where nobody fights: think of a UN building. Anyone standing inside it (soldier,
 // war dog, player) can't be targeted by soldiers and doesn't target anyone; a stray round doesn't land on him there;
@@ -9984,7 +10110,7 @@ system.runInterval(() => {
     const live = new Set();
     for (const t of [SOLDIER, HOUND]) for (const e of allOf(t)) live.add(e.id);
     for (const p of world.getAllPlayers()) live.add(p.id);
-    for (const m of [ARM, breachFragUsed, smokeUsed, dragCool, firedAt, lastPos, noiseFrom, noiseT, alertUntil, modeMemo, propSync, mountedAt, wetTrack, swimGiveUp, breakCool, recentHits, wetMemo, medicCall, lastHp, buildBudget, shotAtPlayer, doorLook, hopT, settleT, flinchT, edgeFearT, kiteT, fleeFire, lastUse, hurtBy, perc, brain, gunState, notes, sweep, marchWatch, forceGlide, glideBan, aimedBy, hpMemo]) {
+    for (const m of [stillSince, campOf, seated, ARM, breachFragUsed, smokeUsed, dragCool, firedAt, lastPos, noiseFrom, noiseT, alertUntil, modeMemo, propSync, mountedAt, wetTrack, swimGiveUp, breakCool, recentHits, wetMemo, medicCall, lastHp, buildBudget, shotAtPlayer, doorLook, hopT, settleT, flinchT, edgeFearT, kiteT, fleeFire, lastUse, hurtBy, perc, brain, gunState, notes, sweep, marchWatch, forceGlide, glideBan, aimedBy, hpMemo]) {
       if (!m?.size) continue;
       for (const k of [...m.keys()]) if (typeof k === "string" && k.length > 3 && !k.includes(":") && !live.has(k)) m.delete(k);
     }
