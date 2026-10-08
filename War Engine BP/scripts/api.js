@@ -3,7 +3,7 @@
 // add-on loads; the core calls them at fixed points. The core's own helpers are on WarAPI.lib once the world runs
 // (never touch world data or WarAPI.lib while scripts are still loading: do it inside the callbacks).
 export const WarAPI = {
-  version: "9.2",
+  version: "9.3",
   // decision behaviours: { name, when: "first" | "last", priority, decide(e, d, now, lib) -> move | undefined }
   //   "first": before the combat brain (after medic / shaken / water). "last": only when nothing else wants him.
   //   A move is { g: "g_wp", slot, t: "t_mid", urgent } (walk to a marker slot; lib.myMarker / lib.travel make one)

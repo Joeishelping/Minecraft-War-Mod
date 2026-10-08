@@ -1869,7 +1869,7 @@ world.beforeEvents.playerInteractWithEntity.subscribe((ev) => {
     }
   } catch {}
   const v = ev.target, p = ev.player;
-  if (v && v.typeId in MOUNT_SPEED) {                                        // (v9.2: your horse / camel / boat: a soldier on it makes room for you)
+  if (v && isMount(v)) {                                        // (v9.2: your horse / camel / boat: a soldier on it makes room for you)
     try {
       const rd = v.getComponent("minecraft:rideable"), rs = rd?.getRiders() ?? [];
       if (rs.some((r) => r.id === p.id)) return;
@@ -9828,11 +9828,22 @@ function heliFly(v, st, pilot, riders, loc, ground) {
 // "Mount up" / "Dismount".
 const MOUNT_SPEED = { "minecraft:horse": 0.34, "minecraft:donkey": 0.26, "minecraft:mule": 0.26, "minecraft:camel": 0.22, "minecraft:pig": 0.12, "minecraft:skeleton_horse": 0.32, "minecraft:zombie_horse": 0.26, "minecraft:boat": 0.4, "minecraft:chest_boat": 0.4 };
 const isBoatType = (t) => t === "minecraft:boat" || t === "minecraft:chest_boat";
+// v9.3: other add-ons' animals a soldier can ride (World Animals: elephants, big cats, rhinos, giraffes, ostriches...)
+// carry the type family "war_mount"; saddled, they're mounts like a horse, at their own walking speed
+const ANIMAL_MOUNT = "war_mount";
+const isAnimalMount = (m) => { try { return !(m.typeId in MOUNT_SPEED) && !!m.getComponent("minecraft:type_family")?.hasTypeFamily(ANIMAL_MOUNT); } catch { return false; } };
+const isMount = (m) => !!m && (m.typeId in MOUNT_SPEED || isAnimalMount(m));
+function mountSpeed(m) {
+  if (m.typeId in MOUNT_SPEED) return MOUNT_SPEED[m.typeId];
+  let v = 0.25;
+  try { v = m.getComponent("minecraft:movement")?.defaultValue ?? v; } catch {}
+  return Math.max(0.15, Math.min(0.36, v));
+}
 const mountOf = new Map();   // soldier id -> { id (mount), auto (got on because his leader did) }
 const rideTo = new Map();    // soldier id -> where his last order sends him (riding: straight there)
 function mountReady(m) {
   try {
-    if (!m?.isValid || !(m.typeId in MOUNT_SPEED || VEHICLES.includes(m.typeId))) return false;
+    if (!m?.isValid || !(isMount(m) || VEHICLES.includes(m.typeId))) return false;
     const rd = m.getComponent("minecraft:rideable"); if (!rd) return false;
     if (rd.getRiders().length >= rd.seatCount) return false;
     if (isBoatType(m.typeId) || VEHICLES.includes(m.typeId)) return true;   // (v9.2: the add-on's vehicles: on "Mount up", as passengers)
@@ -9860,7 +9871,10 @@ function mountUp(list, auto) {
   for (const e of list) {
     if (mountOf.has(e.id) || isRiding(e) || downed.has(e.id) || sd(e).surr || sd(e).div === "cavalier") continue;
     let best, bd = 1e9;
-    for (const t of [...Object.keys(MOUNT_SPEED), ...(auto ? [] : VEHICLES)]) for (const m of e.dimension.getEntities({ type: t, location: e.location, maxDistance: 16 })) {
+    const near = [];
+    for (const t of [...Object.keys(MOUNT_SPEED), ...(auto ? [] : VEHICLES)]) near.push(...e.dimension.getEntities({ type: t, location: e.location, maxDistance: 16 }));
+    try { near.push(...e.dimension.getEntities({ families: [ANIMAL_MOUNT], location: e.location, maxDistance: 16 })); } catch {}
+    for (const m of near) {
       if (!mountReady(m) || playerAt(m)) continue;
       const left = (m.getComponent("minecraft:rideable")?.seatCount ?? 1) - (m.getComponent("minecraft:rideable")?.getRiders().length ?? 0) - (taken.has(m.id) ? 1 : 0);
       if (left <= 0) continue;
@@ -9905,7 +9919,7 @@ system.runInterval(() => {
       if (want) {
         const dx = want.at.x - l.x, dz = want.at.z - l.z, L = Math.hypot(dx, dz);
         if (L > want.stop) {
-          let sp = MOUNT_SPEED[m.typeId] ?? 0.25;
+          let sp = mountSpeed(m);
           if (isBoatType(m.typeId)) { let wet = false; try { wet = !!m.dimension.getBlock({ x: l.x, y: l.y - 0.2, z: l.z })?.isLiquid || !!m.dimension.getBlock(l)?.isLiquid; } catch {} if (!wet) sp = 0.04; }
           if (gunState.get(id)?.target?.isValid) sp *= 0.5;                   // (firing from the saddle: easy)
           sp *= Math.min(1, (L - want.stop) / 4 + 0.3);
