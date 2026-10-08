@@ -1,5 +1,13 @@
 # War Engine changelog
 
+## v9.3 (Soldiers ride other add-ons' animals)
+
+- **Soldiers ride World Animals mounts.** Any animal from another add-on with the type family `war_mount` counts
+  as a mount, like a horse: once it's tamed and saddled, "Mount up" and followers riding off with you put soldiers
+  on it, and it carries them at its own walking speed (clamped to 0.15-0.36). World Animals v2 gives that family to
+  its elephants, mammoth, rhino, giraffe, ostrich and big cats.
+- Right-clicking one of those animals while a soldier sits on it hands it over to you, as with a horse.
+
 ## v9.2 (Riding fixed for players, soldiers in the add-on's vehicles, campfires, smoke only to breach or pull back, less lag)
 
 Checked in the simulator (all 10 acceptance checks pass) and on a real Bedrock server.
