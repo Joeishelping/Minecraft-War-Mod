@@ -1,5 +1,33 @@
 # War Engine changelog
 
+## v9.5 (New voice lines: replies, situation callouts, idle back-and-forth, campfire stories)
+
+21 new US English lines, recorded with ElevenLabs in the Luke voice from your workspace (about 860 credits: one take
+per line, short lines, few audio tags). Other languages stay silent on these lines until they're recorded; nothing
+they already say changes.
+
+- **Replies.** A mate answers:
+  - "Target down!" with "Nice shot!"
+  - "I'm hit!" with "Hang on, I got you!"
+  - "Cover me!" with "On it!"
+  - "Hold position!" / "Follow me!" with "Copy that!"
+- **Situations.**
+  - "Smoke out!" when a smoke grenade goes in.
+  - "Breaching! Breaching!" as the stack goes through a door.
+  - A whispered "Wait for it..." (heard only 12 blocks away) when an ambush is set, and "Now! Open fire!" when it's
+    sprung.
+  - "Animal! Put it down!" when a World Animals man-eater comes at them.
+  - "Hands where I can see 'em!" from the nearest enemy soldier when someone surrenders.
+  - "Mount up!" on the Mount up order.
+- **Idle back-and-forth.** Three questions join the idle chatter, and a mate answers each one:
+  - "What's the first thing you're eating when we get home?" / "My mom's cooking. Nothing else even comes close."
+  - "It's too quiet out here." / "Don't jinx it, man."
+  - "You write home yet?" / "Every night. Never send 'em, though."
+- **Campfire stories.** Two stories (the night-watch pig, and grandpa's boots). After a story, a mate laughs it off or
+  groans "You tell that one every single time." A `story.ogg` of your own in a language folder is still used where no
+  recorded story exists.
+- Subtitles (War Table -> Callouts) show every new line in English.
+
 ## v9.4 (No more huddling when idle, World Animals in sync: shooting and riding, any saddled mount)
 
 - **No huddling.**

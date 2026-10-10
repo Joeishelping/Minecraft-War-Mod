@@ -334,6 +334,8 @@ KS.animals = async (o, ox, oz) => {
   r.deer = { hp0: d0, hp: deer.isValid ? hp(deer) : "dead" }; r.pet = { hp0: p0, hp: pet.isValid ? hp(pet) : "dead" };
   // a wild lion 14 blocks off
   const lion = ow().spawnEntity("worldanimals:lion", { x: ox + 3.5, y: Y, z: oz - 14.5 });
+  try { if (lion.hasComponent("minecraft:is_baby")) lion.triggerEvent("minecraft:ageable_grow_up"); } catch {}   // (a cub doesn't hunt)
+  await kitWait(2); r.lionBaby = (() => { try { return lion.hasComponent("minecraft:is_baby"); } catch { return "x"; } })();
   const lionHp0 = hp(lion), shots0 = KSHOTS.length;
   const t0 = tick(); let lionDead = -1, minD = 99, aimed = 0, inSnap = 0;
   await kitLoop(900, () => {
@@ -379,6 +381,18 @@ KS.stack = async (o, ox, oz) => {
   for (const w of [100, 200, 300]) { await kitWait(100); gaps.push(pairs.map(([a, b]) => Math.round(Math.hypot(a.location.x - b.location.x, a.location.z - b.location.z) * 10) / 10)); }
   const st = pairs.flat().map((e) => { const d = sd(e); return `${d.func}/${notes.get(e.id)?.text ?? notes.get(e.id) ?? "-"}`; });
   return { gaps, st: st.slice(0, 4) };
+};
+// v9.5: the new lines: a story gets a mate's reaction, an idle question gets its answer, "Hold position!" a "Copy that!"
+KS.talk = async (o, ox, oz) => {
+  floorAt(ox - 20, oz - 20, ox + 20, oz + 20);
+  const men = []; for (let i = 0; i < 4; i++) men.push(kitSoldier(1, { x: ox + 20 + i * 2 + 0.5, y: Y, z: oz + 0.5 }, "rifle", "hold"));
+  await kitWait(40);
+  const r = { story: callout(men[0], "STORY", { key: "story_1", event: true }) };
+  await kitWait(80);
+  for (let i = 0; i < 6; i++) { lastCall.clear(); heardLine.length = 0; callout(men[i % 4], "IDLE"); await kitWait(90); }
+  for (let i = 0; i < 6; i++) { lastCall.clear(); heardLine.length = 0; callout(men[i % 4], "Hold position!"); await kitWait(40); }
+  r.said = Object.fromEntries(Object.entries(globalThis.__v9 ?? {}).filter(([k]) => k.startsWith("say:")));
+  return r;
 };
 KS.trip = async (o, ox, oz) => {
   const N = Number(o.n ?? 8), mode = o.mode ?? "down";

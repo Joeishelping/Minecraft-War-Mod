@@ -701,6 +701,10 @@ function surrender(e, captor) {
   const d = sd(e);
   if (d.surr) return;
   callout(e, "Don't shoot!", { event: true });                   // (v6.6)
+  try {                                                          // (v9.5: the nearest enemy soldier covers him)
+    const at = { ...e.location }, did = e.dimension.id, f0 = d.faction;
+    system.runTimeout(() => { try { const c = nearSnap(did, at, 16).filter((q) => q.type === SOLDIER && !q.down && q.f && isHostile(q.f, f0) && q.e.isValid).sort((a, b) => a.dd - b.dd)[0]; if (c) callout(c.e, "Hands up!", { event: true }); } catch {} }, 25);
+  } catch {}
   sdp(e, "war:prevfunc", d.func);
   sdp(e, "war:surr", captor);
   const slot = makeWaypoint(e.dimension, e.location);
@@ -2239,6 +2243,7 @@ async function giveOrderInner(player, cfg, given) {
 
   if (order === "mount" || order === "dismount") {
     const n = order === "mount" ? mountUp(pool, false) : dismountAll(pool);
+    if (order === "mount" && n) { const w = pool.find((e) => e.isValid && !downed.has(e.id)); if (w) callout(w, "Mount up!", { event: true }); }   // (v9.5)
     player.onScreenDisplay.setActionBar(order === "mount" ? (n ? `§eMounting up: §f${n}` : "§7No free saddled animals or boats near them (within 16 blocks).") : `§eDismounting: §f${n}`);
     return;
   }
@@ -3972,7 +3977,7 @@ function perceive(e, now) {
   }
   for (const id of [...s.seen.keys()]) if (!visible.has(id)) s.seen.delete(id);
   if (best) {
-    if (!s.threat || s.threat.id !== best.id) { s.threatT = now; if (!s.threat && Math.random() < 0.75) callout(e, "Enemy spotted!"); }
+    if (!s.threat || s.threat.id !== best.id) { s.threatT = now; if (!s.threat && Math.random() < 0.75) { if (!(WA_DANGER.has(best.typeId) && callout(e, "Animal!"))) callout(e, "Enemy spotted!"); } }
     if (s.threat?.id !== best.id) { if (s.threat) aimedBy.get(s.threat.id)?.delete(e.id); let set = aimedBy.get(best.id); if (!set) { set = new Set(); aimedBy.set(best.id, set); } set.add(e.id); }
     s.threat = best; s.lastSeen = { ...best.location }; s.lostT = 0; s.alert = "combat";
     if (d.squad) squadTarget.set(`${d.faction}:${d.squad}`, { id: best.id, t: now });
@@ -6286,12 +6291,21 @@ function voiceOf(f) { const v = getJSON(world, "war:vlang", {})[f]; return VOICE
 const CALL_KEY = { "Enemy spotted!": "spotted", "Contact!": "contact", "Flanking!": "flanking", "Charge!": "charge", "Go, go, go!": "gogogo",
   "Moving up!": "moving_up", "Suppressing!": "suppressing", "I'm hit!": "hit", "Man down!": "man_down", "You're okay!": "okay", "Fall back!": "fall_back",
   "Cover me!": "cover_me", "Target down!": "target_down", "Clear!": "clear", "Hold position!": "hold", "Follow me!": "follow",
-  "Medic!": "medic", "Thanks!": "thanks", "Reloading!": "reloading", "Grenade!": "grenade", "Don't shoot!": "surrender", "Taking fire!": "under_fire" };
+  "Medic!": "medic", "Thanks!": "thanks", "Reloading!": "reloading", "Grenade!": "grenade", "Don't shoot!": "surrender", "Taking fire!": "under_fire",
+  // v9.5: replies and situation lines (US English so far; other languages stay silent on these until recorded)
+  "Copy that!": "copy", "On it!": "on_it", "Nice shot!": "nice_shot", "Hang on, I got you!": "got_you", "Smoke out!": "smoke_out",
+  "Breaching!": "breaching", "Wait for it...": "wait_for_it", "Open fire!": "open_fire", "Animal!": "animal", "Hands up!": "hands_up", "Mount up!": "mount_up" };
 // lines each language has recordings for (the rest stay silent until recorded and added here)
 const BASE_LINES = ["spotted", "contact", "flanking", "charge", "gogogo", "moving_up", "suppressing", "hit", "man_down", "okay", "fall_back", "cover_me", "target_down", "clear", "hold", "follow"];
 const MORE_LINES = ["under_fire", "idle_quiet", "idle_sharp", "idle_smoke", "idle_done", "idle_legs", "medic", "thanks", "surrender", "reloading", "grenade"];
 const VOICE_HAS = Object.fromEntries(["en_us", "greek", "korean", "mongolian", "hebrew", "spanish", "german", "aave"].map((l) => [l, [...BASE_LINES, ...MORE_LINES]]));   // (v6.7: recorded so far)
-const IDLE_LINES = ["idle_quiet", "idle_sharp", "idle_smoke", "idle_done", "idle_legs"];
+// v9.5: replies, situation lines, idle back-and-forth and campfire stories (recorded in US English)
+const EN_LINES = ["copy", "on_it", "nice_shot", "got_you", "smoke_out", "breaching", "wait_for_it", "open_fire", "animal", "hands_up", "mount_up",
+  "q_food", "a_food", "q_quiet", "a_quiet", "q_letter", "a_letter", "story_1", "story_2", "camp_laugh", "camp_again"];
+VOICE_HAS.en_us.push(...EN_LINES);
+const IDLE_ASK = { q_food: "a_food", q_quiet: "a_quiet", q_letter: "a_letter" };   // (an idle question gets its answer from a mate)
+const STORIES = ["story_1", "story_2"];
+const IDLE_LINES = ["idle_quiet", "idle_sharp", "idle_smoke", "idle_done", "idle_legs", "q_food", "q_quiet", "q_letter"];
 const voiceHas = (lang, key) => key === "story" || (VOICE_HAS[lang] ?? BASE_LINES).includes(key);   // (v9.2: the campfire story: sounds/war_voice/<lang>/story.ogg, silent until it's there)
 const CALL_ALL = BASE_LINES;
 const lastCall = new Map(); // soldier id / squad line -> tick
@@ -6313,12 +6327,24 @@ const LINE_INFO = {
   medic: ["Medic! I'm hit!", "down, and no medic coming"], thanks: ["Good looking out, brother.", "just revived"],
   surrender: ["Don't shoot!", "surrendering"], reloading: ["Dry, cover me while I swap!", "reloading in a fight"],
   grenade: ["Frag out! Get down!", "throwing a grenade / molotov, or one lands near him"],
+  copy: ["Copy that!", "answering \"Hold position!\" / \"Follow me!\""], on_it: ["On it!", "answering \"Cover me!\""],
+  nice_shot: ["Nice shot!", "a mate's man goes down"], got_you: ["Hang on, I got you!", "a mate is hit near him"],
+  smoke_out: ["Smoke out!", "throwing smoke"], breaching: ["Breaching! Breaching!", "the stack goes through the door"],
+  wait_for_it: ["Wait for it...", "an ambush is set (whispered)"], open_fire: ["Now! Open fire!", "the ambush is sprung"],
+  animal: ["Animal! Put it down!", "a man-eater (World Animals) comes at them"], hands_up: ["Hands where I can see 'em!", "an enemy surrenders near him"],
+  mount_up: ["Mount up!", "the Mount up order"],
+  q_food: ["What's the first thing you're eating when we get home?", "idle"], a_food: ["My mom's cooking. Nothing else even comes close.", "idle (answer)"],
+  q_quiet: ["It's too quiet out here.", "idle"], a_quiet: ["Don't jinx it, man.", "idle (answer)"],
+  q_letter: ["You write home yet?", "idle"], a_letter: ["Every night. Never send 'em, though.", "idle (answer)"],
+  story_1: ["(the night-watch pig story)", "at a campfire"], story_2: ["(grandpa's boots story)", "at a campfire"],
+  camp_laugh: ["No way. No way that happened!", "after a story"], camp_again: ["You tell that one every single time.", "after a story"],
 };
 const heardLine = []; // recent lines: { key, dim, x, z, t } (nobody repeats a line someone near just said)
 const LINE_WIN = (key) => (IDLE_LINES.includes(key) ? 6000 : key === "medic" ? 240 : key === "hit" || key === "man_down" || key === "target_down" ? 60 : 100);   // (v6.9.1: 5 s for battle lines, was 8)
 const callGap = () => [120, 60, 30][Math.max(0, Math.min(2, Number(setting("vfreq", 1))))];   // per man: Low / Normal / High
 function playLine(dim, at, lang, key, pitch = 1, who) {
   try { dim.playSound(`war.voice.${lang}.${key}`, at, { volume: 1.0, pitch }); } catch {}
+  v9stat(`say:${key}`);                                                   // (test statistics only)
   if (setting("vsubs", false) || who?.forceSubs) {
     const txt = `§7${who?.label ?? "Soldier"}:§f "${LINE_INFO[key]?.[0] ?? key}"`;
     for (const p of world.getAllPlayers()) { try { if (p.dimension.id === dim.id && dist(p.location, at) <= 24) p.onScreenDisplay.setActionBar(txt); } catch {} }
@@ -6370,7 +6396,15 @@ function afterLine(e, key, now) {
   //  in the middle of someone's target scan over that same list)
   const d = sd(e), dimId = e.dimension.id, at = { ...e.location };
   const mate = (r) => { for (const c of nearSnap(dimId, at, r)) if (c.id !== e.id && c.type === SOLDIER && !c.down && c.f === d.faction && c.e.isValid && sd(c.e).squad === d.squad) return c.e; };
-  const reply = (r, text, delay) => system.runTimeout(() => { try { const who = mate(r); if (who?.isValid) callout(who, text); } catch {} }, delay);
+  const reply = (r, text, delay, opt) => system.runTimeout(() => { try { const who = mate(r); if (who?.isValid) callout(who, text, opt); } catch {} }, delay);
+  const lang = voiceOf(d.faction), r0 = Math.random();
+  // v9.5: the new back-and-forth (only where the language has the answer recorded)
+  if (IDLE_ASK[key] && voiceHas(lang, IDLE_ASK[key])) { if (r0 < 0.85) reply(10, "REPLY", 45 + Math.floor(Math.random() * 25), { key: IDLE_ASK[key], event: true }); return; }
+  if (STORIES.includes(key) || key === "story") { if (r0 < 0.7) reply(6, "REPLY", 30, { key: Math.random() < 0.5 ? "camp_laugh" : "camp_again", event: true }); return; }
+  if (key === "target_down" && r0 < 0.3) { reply(12, "Nice shot!", 22); return; }
+  if (key === "hit" && r0 < 0.25) { reply(10, "Hang on, I got you!", 22); return; }
+  if (key === "cover_me" && r0 < 0.4) { reply(10, "On it!", 16); return; }
+  if ((key === "hold" || key === "follow") && r0 < 0.4) { reply(16, "Copy that!", 20); return; }
   if (key === "reloading" && Math.random() < 0.6) reply(10, "Suppressing!", 18);
   else if (key === "contact" && Math.random() < 0.5) reply(16, "Enemy spotted!", 30);
   else if (key === "hit" && Math.random() < 0.4) reply(10, "Man down!", 20);
@@ -8334,6 +8368,7 @@ function wantsWalk(e, goal) {
 }
 function playerNear(e, R) {
   try { const l = e.location, did = e.dimension.id; for (const p of world.getAllPlayers()) { if (p.dimension.id !== did) continue; const pl = p.location; if (Math.abs(pl.x - l.x) <= R && Math.abs(pl.z - l.z) <= R) return true; } } catch {}
+  try { const xv = globalThis.__viewers?.(); if (xv) { const l = e.location; return xv.some((v) => v.d === e.dimension.id && Math.abs(v.x - l.x) <= R && Math.abs(v.z - l.z) <= R); } } catch {}   // (test kits only)
   return false;
 }
 function isRemote(e) {
@@ -9424,6 +9459,7 @@ function smokeScreen(e, at, from, k, why) {
   if (flat(p, e.location) > SMOKE.reach) return false;
   if (S) S.smokeT = now;
   throwSmoke(e, p, why);
+  callout(e, "Smoke out!", { event: true });                    // (v9.5)
   return true;
 }
 function throwSmoke(e, at, why) {
@@ -9740,7 +9776,7 @@ function stackAtDoor(e, pr, i, now) {
     }
   }
   st.go = now; v9stat("breachGo");
-  callout(e, "Go, go, go!", { event: true });
+  if (Math.random() < 0.5 || !callout(e, "Breaching!", { event: true })) callout(e, "Go, go, go!", { event: true });   // (v9.5)
   radio(e, "going in", true);
   return false;
 }
@@ -9783,13 +9819,14 @@ function ambushDecide(S, ours, known, now) {
   if (seen.some((q) => enemyAware(q, ours, now))) return;
   S.amb = { t0: now, until: now + AMB.max }; v9stat("ambushSet");
   radio(ours[0], "enemy hasn't seen us, hold your fire");
+  callout(ours[Math.floor(Math.random() * ours.length)], "Wait for it...", { event: true });   // (v9.5: whispered)
   for (const e of ours) note(e, "ambush: holding fire");
 }
 function ambushSprung(S, now, why) {
   if (!S.amb || now >= S.amb.until) return;
   S.amb.until = now; v9stat(`sprung:${why}`);
   const ours = (S.ours ?? []).filter((e) => e.isValid);
-  if (ours.length) { callout(ours[Math.floor(Math.random() * ours.length)], "Contact!", { event: true }); radio(ours[0], `ambush sprung (${why})`); }
+  if (ours.length) { const w = ours[Math.floor(Math.random() * ours.length)]; if (!callout(w, "Open fire!", { event: true })) callout(w, "Contact!", { event: true }); radio(ours[0], `ambush sprung (${why})`); }
   for (const e of ours) { const st = gunState.get(e.id); if (st) { st.next = Math.min(st.next, now + 1 + Math.floor(Math.random() * 4)); st.check = now; } }
 }
 function ambushHold(e, d, t, now) {
@@ -10055,7 +10092,7 @@ system.runInterval(() => {
     if (!c.story && now - c.t0 > 400 && sitting.length >= 2 && Math.random() < 0.06) {   // (rare: about one fire in three hears one)
       c.story = true;
       const teller = world.getEntity(sitting[Math.floor(Math.random() * sitting.length)]);
-      if (teller?.isValid) callout(teller, "STORY", { key: "story", event: true });
+      if (teller?.isValid) { const ks = STORIES.filter((k) => voiceHas(voiceOf(sd(teller).faction), k)); callout(teller, "STORY", { key: ks.length ? ks[Math.floor(Math.random() * ks.length)] : "story", event: true }); }   // (v9.5: a recorded story, else your own story.ogg)
     }
     if (now > c.until || c.seats.size < 2) campEnd(c);
   }
