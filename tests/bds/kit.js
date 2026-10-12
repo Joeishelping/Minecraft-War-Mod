@@ -410,6 +410,7 @@ KS.bridge = async (o, ox, oz) => {
   floorAt(ox - 20, oz - 30, ox + 80, oz + 30);
   kfill(ox, Y, oz - 8, ox + 14, Y + 5, oz + 8, "stone");
   for (let k = 0; k < 6; k++) kfill(ox + 15 + k, Y + 5 - k, oz - 3, ox + 15 + k, Y + 5 - k, oz + 3, STAIR("-x"));
+  if (o.cover !== "0") for (const x of [26, 33, 40, 47]) for (const z of [-6, 1, 7]) kfill(ox + x, Y, oz + z + ((x / 7) % 2 ? 0 : -2), ox + x, Y + 1, oz + z + 1 + ((x / 7) % 2 ? 0 : -2), "stone_bricks");   // (pillars and low walls on the way, like a real street)
   setRelPair(1, 2, "1", false);
   const att = [], def = [];
   for (let i = 0; i < 6; i++) att.push(kitSoldier(1, { x: ox + 4 + i * 1.6 + 0.5, y: Y + 6, z: oz - 4 + (i % 3) * 4 + 0.5 }, ["rifle", "smg", "semi", "rifle", "mg", "rifle"][i], "hold"));

@@ -6261,6 +6261,10 @@ function brainMove(e, d, now, melee, anchor, leash) {
     } else if (B.act === "fallback") {
       const n = nearestKnownB(S, e);
       if (n) { const dx = e.location.x - n.q.x, dz = e.location.z - n.q.z, L = Math.hypot(dx, dz) || 1; B.target = walkableNear(e.dimension, e.location.x + dx / L * 8, e.location.z + dz / L * 8, e.location.y); }
+    } else if (B.act === "advance" && bMove && tac) {
+      // v9.7: a bound is a dash to real cover (3-8 blocks on), never into the open; no such spot: he stays and covers
+      B.target = ts({ rMin: 3, rMax: 8, toward: S.enemyC, wProg: 1.0, wCover: 2.0, wShot: 0.3, margin: 0.2 })?.spot;
+      if (!B.target) { B.act = t && shot ? "fire" : "hold"; v9stat("boundNoCover"); } else v9stat("boundDash");
     } else if (B.act === "advance" && S.plan !== "advance" && moving && tac && (B.target = ts({ rMin: 4, rMax: 10, toward: S.enemyC, wProg: 1.3, wCover: 1, wShot: 0.6, margin: -9 })?.spot)) {
       // v5.6: bounding from cover to cover toward the enemy (the evaluator's pick, kept in B.target)
     } else if (B.act === "advance" && S.plan !== "advance" && moving) {
