@@ -421,6 +421,62 @@
             0,
             0
           ]
+        },
+        "ra_c": {
+          "rotation": [
+            0,
+            "v.rac",
+            0
+          ]
+        },
+        "ra_d": {
+          "rotation": [
+            "v.rad",
+            0,
+            0
+          ]
+        },
+        "la_c": {
+          "rotation": [
+            0,
+            "v.lac",
+            0
+          ]
+        },
+        "la_d": {
+          "rotation": [
+            "v.lad",
+            0,
+            0
+          ]
+        },
+        "rl_c": {
+          "rotation": [
+            0,
+            "v.rlc",
+            0
+          ]
+        },
+        "rl_d": {
+          "rotation": [
+            "v.rld",
+            0,
+            0
+          ]
+        },
+        "ll_c": {
+          "rotation": [
+            0,
+            "v.llc",
+            0
+          ]
+        },
+        "ll_d": {
+          "rotation": [
+            "v.lld",
+            0,
+            0
+          ]
         }
       }
     },

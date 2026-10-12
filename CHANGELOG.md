@@ -1,5 +1,19 @@
 # War Engine changelog
 
+## v9.12 (Ragdolls with knees and elbows, bodies keep their skin)
+
+- **Bodies keep the skin the man wore.** A soldier in his faction's skin stores no skin of his own (it's worked out
+  on the fly), so his body fell back to the default uniform. Now the body takes exactly the skin he was drawn with:
+  his own, his faction's, or the cavalry uniform. Tested: faction skin 7 and own skin 12 both carried over.
+- **Ragdolls bend at the knees and elbows.** Each arm and leg is now two segments, with the skin still mapped
+  right:
+  - Knees bend forward only, up to about 130 degrees; elbows bend back only, up to about 120. Knees can fall to
+    the side.
+  - A man shot standing buckles at the knees and goes down in a heap. A running man keeps his momentum and pitches
+    forward. Bodies come to rest in about 1 to 1.5 seconds.
+- **Lighter.** Joint angles go to the client every other tick and it smooths in between; at most 8 bodies fall at
+  once. With 20 men killed in the same instant, the worst tick was 9 to 11 ms.
+
 ## v9.11 (Real ragdolls, real dismemberment, the blood pack's blood)
 
 - **Full ragdoll deaths.** A dead man is now a jointed body:

@@ -547,6 +547,21 @@ KS.ragperf = async (o, ox, oz) => {
   let peak = 0; for (let k = 0; k < 100; k++) { await kitWait(1); peak = Math.max(peak, [...RD.values()].filter((q) => q.act).length); }
   return { worstTickMs: globalThis.__rdMs, peakActive: peak, tracked: RD.size, stillActive: [...RD.values()].filter((q) => q.act).length };
 };
+// v9.11: a body wears the skin the man wore: his own, or his faction's
+KS.corpseskin = async (o, ox, oz) => {
+  floorAt(ox - 8, oz - 8, ox + 8, oz + 8);
+  for (const c of ow().getEntities({ type: "war:corpse" })) { try { c.remove(); } catch {} }
+  const keep = getJSON(world, "war:fskins", {});
+  setJSON(world, "war:fskins", { ...keep, 1: 7 });
+  const a = kitSoldier(1, { x: ox + 0.5, y: Y, z: oz + 0.5 }, "rifle", "hold"), b = kitSoldier(1, { x: ox + 4.5, y: Y, z: oz + 0.5 }, "rifle", "hold");
+  setP(b, "war:skin", 12); sdp(b, "p_war:skin", 12);
+  await kitWait(10); syncSkin(a); syncSkin(b); await kitWait(5);
+  const drawn = [a.getProperty("war:skin"), b.getProperty("war:skin")];
+  killReal(a); killReal(b); await kitWait(10);
+  const near = (x) => ow().getEntities({ type: "war:corpse", location: { x, y: Y, z: oz + 0.5 }, maxDistance: 2.5 })[0]?.getProperty("war:skin");
+  setJSON(world, "war:fskins", keep);
+  return { soldiersDrawn: drawn, bodies: [near(ox + 0.5), near(ox + 4.5)] };
+};
 // v9.7: a downed man in plain view of the enemy (who hold their fire) next to a wall: does he crawl behind it?
 KS.crawl = async (o, ox, oz) => {
   floorAt(ox - 20, oz - 20, ox + 30, oz + 20);

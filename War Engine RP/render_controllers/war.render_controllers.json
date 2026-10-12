@@ -1203,7 +1203,7 @@
         }
       ],
       "textures": [
-        "Array.t[q.property('war:skin') > 0 ? (39 + q.property('war:skin')) : (q.property('war:medic') ? (104 + (math.max(q.property('war:faction'), 1) - 1)) : (math.max(q.property('war:faction'), 1) - 1))]"
+        "Array.t[q.property('war:cav') ? (144 + (math.max(q.property('war:faction'), 1) - 1)) : (q.property('war:skin') > 0 ? (39 + q.property('war:skin')) : (q.property('war:medic') ? (104 + (math.max(q.property('war:faction'), 1) - 1)) : (math.max(q.property('war:faction'), 1) - 1)))]"
       ]
     }
   }

@@ -178,6 +178,83 @@
           ],
           "default": 0.0,
           "client_sync": true
+        },
+        "war:rac": {
+          "type": "float",
+          "range": [
+            -180.0,
+            180.0
+          ],
+          "default": 0.0,
+          "client_sync": true
+        },
+        "war:rad": {
+          "type": "float",
+          "range": [
+            -180.0,
+            180.0
+          ],
+          "default": 0.0,
+          "client_sync": true
+        },
+        "war:lac": {
+          "type": "float",
+          "range": [
+            -180.0,
+            180.0
+          ],
+          "default": 0.0,
+          "client_sync": true
+        },
+        "war:lad": {
+          "type": "float",
+          "range": [
+            -180.0,
+            180.0
+          ],
+          "default": 0.0,
+          "client_sync": true
+        },
+        "war:rlc": {
+          "type": "float",
+          "range": [
+            -180.0,
+            180.0
+          ],
+          "default": 0.0,
+          "client_sync": true
+        },
+        "war:rld": {
+          "type": "float",
+          "range": [
+            -180.0,
+            180.0
+          ],
+          "default": 0.0,
+          "client_sync": true
+        },
+        "war:llc": {
+          "type": "float",
+          "range": [
+            -180.0,
+            180.0
+          ],
+          "default": 0.0,
+          "client_sync": true
+        },
+        "war:lld": {
+          "type": "float",
+          "range": [
+            -180.0,
+            180.0
+          ],
+          "default": 0.0,
+          "client_sync": true
+        },
+        "war:cav": {
+          "type": "bool",
+          "default": false,
+          "client_sync": true
         }
       }
     },

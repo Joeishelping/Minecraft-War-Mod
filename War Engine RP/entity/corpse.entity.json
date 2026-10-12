@@ -240,24 +240,32 @@
       },
       "scripts": {
         "initialize": [
-          "v.ta = q.property('war:ta'); v.tb = q.property('war:tb'); v.tg = q.property('war:tg'); v.ha = q.property('war:ha'); v.hb = q.property('war:hb'); v.raa = q.property('war:raa'); v.rab = q.property('war:rab'); v.laa = q.property('war:laa'); v.lab = q.property('war:lab'); v.rla = q.property('war:rla'); v.rlb = q.property('war:rlb'); v.lla = q.property('war:lla'); v.llb = q.property('war:llb'); v.ga = q.property('war:ga'); v.gb = q.property('war:gb');"
+          "v.ta = q.property('war:ta'); v.tb = q.property('war:tb'); v.tg = q.property('war:tg'); v.ha = q.property('war:ha'); v.hb = q.property('war:hb'); v.raa = q.property('war:raa'); v.rab = q.property('war:rab'); v.laa = q.property('war:laa'); v.lab = q.property('war:lab'); v.rla = q.property('war:rla'); v.rlb = q.property('war:rlb'); v.lla = q.property('war:lla'); v.llb = q.property('war:llb'); v.rac = q.property('war:rac'); v.rad = q.property('war:rad'); v.lac = q.property('war:lac'); v.lad = q.property('war:lad'); v.rlc = q.property('war:rlc'); v.rld = q.property('war:rld'); v.llc = q.property('war:llc'); v.lld = q.property('war:lld'); v.ga = q.property('war:ga'); v.gb = q.property('war:gb');"
         ],
         "pre_animation": [
-          "v.ta = math.abs(q.property('war:ta') - v.ta) > 120 ? q.property('war:ta') : math.lerp(v.ta, q.property('war:ta'), 0.5);",
-          "v.tb = math.abs(q.property('war:tb') - v.tb) > 120 ? q.property('war:tb') : math.lerp(v.tb, q.property('war:tb'), 0.5);",
-          "v.tg = math.abs(q.property('war:tg') - v.tg) > 120 ? q.property('war:tg') : math.lerp(v.tg, q.property('war:tg'), 0.5);",
-          "v.ha = math.abs(q.property('war:ha') - v.ha) > 120 ? q.property('war:ha') : math.lerp(v.ha, q.property('war:ha'), 0.5);",
-          "v.hb = math.abs(q.property('war:hb') - v.hb) > 120 ? q.property('war:hb') : math.lerp(v.hb, q.property('war:hb'), 0.5);",
-          "v.raa = math.abs(q.property('war:raa') - v.raa) > 120 ? q.property('war:raa') : math.lerp(v.raa, q.property('war:raa'), 0.5);",
-          "v.rab = math.abs(q.property('war:rab') - v.rab) > 120 ? q.property('war:rab') : math.lerp(v.rab, q.property('war:rab'), 0.5);",
-          "v.laa = math.abs(q.property('war:laa') - v.laa) > 120 ? q.property('war:laa') : math.lerp(v.laa, q.property('war:laa'), 0.5);",
-          "v.lab = math.abs(q.property('war:lab') - v.lab) > 120 ? q.property('war:lab') : math.lerp(v.lab, q.property('war:lab'), 0.5);",
-          "v.rla = math.abs(q.property('war:rla') - v.rla) > 120 ? q.property('war:rla') : math.lerp(v.rla, q.property('war:rla'), 0.5);",
-          "v.rlb = math.abs(q.property('war:rlb') - v.rlb) > 120 ? q.property('war:rlb') : math.lerp(v.rlb, q.property('war:rlb'), 0.5);",
-          "v.lla = math.abs(q.property('war:lla') - v.lla) > 120 ? q.property('war:lla') : math.lerp(v.lla, q.property('war:lla'), 0.5);",
-          "v.llb = math.abs(q.property('war:llb') - v.llb) > 120 ? q.property('war:llb') : math.lerp(v.llb, q.property('war:llb'), 0.5);",
-          "v.ga = math.abs(q.property('war:ga') - v.ga) > 120 ? q.property('war:ga') : math.lerp(v.ga, q.property('war:ga'), 0.5);",
-          "v.gb = math.abs(q.property('war:gb') - v.gb) > 120 ? q.property('war:gb') : math.lerp(v.gb, q.property('war:gb'), 0.5);"
+          "v.ta = math.abs(q.property('war:ta') - v.ta) > 120 ? q.property('war:ta') : math.lerp(v.ta, q.property('war:ta'), 0.3);",
+          "v.tb = math.abs(q.property('war:tb') - v.tb) > 120 ? q.property('war:tb') : math.lerp(v.tb, q.property('war:tb'), 0.3);",
+          "v.tg = math.abs(q.property('war:tg') - v.tg) > 120 ? q.property('war:tg') : math.lerp(v.tg, q.property('war:tg'), 0.3);",
+          "v.ha = math.abs(q.property('war:ha') - v.ha) > 120 ? q.property('war:ha') : math.lerp(v.ha, q.property('war:ha'), 0.3);",
+          "v.hb = math.abs(q.property('war:hb') - v.hb) > 120 ? q.property('war:hb') : math.lerp(v.hb, q.property('war:hb'), 0.3);",
+          "v.raa = math.abs(q.property('war:raa') - v.raa) > 120 ? q.property('war:raa') : math.lerp(v.raa, q.property('war:raa'), 0.3);",
+          "v.rab = math.abs(q.property('war:rab') - v.rab) > 120 ? q.property('war:rab') : math.lerp(v.rab, q.property('war:rab'), 0.3);",
+          "v.laa = math.abs(q.property('war:laa') - v.laa) > 120 ? q.property('war:laa') : math.lerp(v.laa, q.property('war:laa'), 0.3);",
+          "v.lab = math.abs(q.property('war:lab') - v.lab) > 120 ? q.property('war:lab') : math.lerp(v.lab, q.property('war:lab'), 0.3);",
+          "v.rla = math.abs(q.property('war:rla') - v.rla) > 120 ? q.property('war:rla') : math.lerp(v.rla, q.property('war:rla'), 0.3);",
+          "v.rlb = math.abs(q.property('war:rlb') - v.rlb) > 120 ? q.property('war:rlb') : math.lerp(v.rlb, q.property('war:rlb'), 0.3);",
+          "v.lla = math.abs(q.property('war:lla') - v.lla) > 120 ? q.property('war:lla') : math.lerp(v.lla, q.property('war:lla'), 0.3);",
+          "v.llb = math.abs(q.property('war:llb') - v.llb) > 120 ? q.property('war:llb') : math.lerp(v.llb, q.property('war:llb'), 0.3);",
+          "v.rac = math.abs(q.property('war:rac') - v.rac) > 120 ? q.property('war:rac') : math.lerp(v.rac, q.property('war:rac'), 0.3);",
+          "v.rad = math.abs(q.property('war:rad') - v.rad) > 120 ? q.property('war:rad') : math.lerp(v.rad, q.property('war:rad'), 0.3);",
+          "v.lac = math.abs(q.property('war:lac') - v.lac) > 120 ? q.property('war:lac') : math.lerp(v.lac, q.property('war:lac'), 0.3);",
+          "v.lad = math.abs(q.property('war:lad') - v.lad) > 120 ? q.property('war:lad') : math.lerp(v.lad, q.property('war:lad'), 0.3);",
+          "v.rlc = math.abs(q.property('war:rlc') - v.rlc) > 120 ? q.property('war:rlc') : math.lerp(v.rlc, q.property('war:rlc'), 0.3);",
+          "v.rld = math.abs(q.property('war:rld') - v.rld) > 120 ? q.property('war:rld') : math.lerp(v.rld, q.property('war:rld'), 0.3);",
+          "v.llc = math.abs(q.property('war:llc') - v.llc) > 120 ? q.property('war:llc') : math.lerp(v.llc, q.property('war:llc'), 0.3);",
+          "v.lld = math.abs(q.property('war:lld') - v.lld) > 120 ? q.property('war:lld') : math.lerp(v.lld, q.property('war:lld'), 0.3);",
+          "v.ga = math.abs(q.property('war:ga') - v.ga) > 120 ? q.property('war:ga') : math.lerp(v.ga, q.property('war:ga'), 0.3);",
+          "v.gb = math.abs(q.property('war:gb') - v.gb) > 120 ? q.property('war:gb') : math.lerp(v.gb, q.property('war:gb'), 0.3);"
         ],
         "animate": [
           {

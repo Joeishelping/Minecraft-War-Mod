@@ -1391,7 +1391,7 @@ function oneShot(v, ev, cause) {
 // on its own joint), so nothing comes apart unless it's meant to: a limb or the head torn off is its own tumbling
 // piece. Each body runs only while it moves (a second or two) and then sleeps; a later blast wakes it again.
 const RD = new Map();                      // entity id -> sim { c, pts, cons, gib, act, still, t, sent, ... }
-const RD_ACTIVE_MAX = 10;
+const RD_ACTIVE_MAX = 8;
 const RD_G = 0.075;
 const V3 = (x, y, z) => ({ x, y, z });
 const vadd = (a, b) => V3(a.x + b.x, a.y + b.y, a.z + b.z), vsub = (a, b) => V3(a.x - b.x, a.y - b.y, a.z - b.z), vmul = (a, k) => V3(a.x * k, a.y * k, a.z * k);
@@ -1399,13 +1399,15 @@ const vdot = (a, b) => a.x * b.x + a.y * b.y + a.z * b.z, vcross = (a, b) => V3(
 const vlen = (a) => Math.hypot(a.x, a.y, a.z), vnorm = (a) => { const L = vlen(a) || 1; return V3(a.x / L, a.y / L, a.z / L); };
 const DEG = 180 / Math.PI, clamp1 = (x) => Math.max(-1, Math.min(1, x));
 const RD_F0 = V3(0, 0, 1), RD_R0 = V3(-1, 0, 0), RD_U0 = V3(0, 1, 0);      // (the body model's own front / right / up: entity yaw 0)
-// points: 0 left hip, 1 right hip, 2 left shoulder, 3 right shoulder, 4 head, 5 right hand, 6 left hand, 7 right foot, 8 left foot
+// points: 0 left hip, 1 right hip, 2 left shoulder, 3 right shoulder, 4 head, 5 right hand, 6 left hand, 7 right foot, 8 left foot,
+// 9 right elbow, 10 left elbow, 11 right knee, 12 left knee
 // rest offsets from the middle of the hips, in blocks, as [right, up, front]
-const RD_REST = [[-1.9 / 16, 0, 0], [1.9 / 16, 0, 0], [-5 / 16, 10 / 16, 0], [5 / 16, 10 / 16, 0], [0, 16 / 16, 0], [5 / 16, 0, 0], [-5 / 16, 0, 0], [1.9 / 16, -12 / 16, 0], [-1.9 / 16, -12 / 16, 0]];
-const RD_RAD = [0.13, 0.13, 0.13, 0.13, 0.25, 0.12, 0.12, 0.12, 0.12];
-const RD_MASS = [1.4, 1.4, 1.2, 1.2, 0.8, 0.45, 0.45, 0.6, 0.6];
+const RD_REST = [[-1.9 / 16, 0, 0], [1.9 / 16, 0, 0], [-5 / 16, 10 / 16, 0], [5 / 16, 10 / 16, 0], [0, 16 / 16, 0], [5 / 16, 0, 0], [-5 / 16, 0, 0], [1.9 / 16, -12 / 16, 0], [-1.9 / 16, -12 / 16, 0],
+  [5 / 16, 6 / 16, -0.02], [-5 / 16, 6 / 16, -0.02], [1.9 / 16, -6 / 16, 0.03], [-1.9 / 16, -6 / 16, 0.03]];   // (knees a touch forward: they buckle, not lock)
+const RD_RAD = [0.13, 0.13, 0.13, 0.13, 0.25, 0.12, 0.12, 0.12, 0.12, 0.12, 0.12, 0.12, 0.12];
+const RD_MASS = [1.4, 1.4, 1.2, 1.2, 0.8, 0.35, 0.35, 0.45, 0.45, 0.4, 0.4, 0.6, 0.6];
 const RD_LIMB = { 1: [4], 2: [5], 3: [6], 4: [7], 5: [8] };   // limb -> its end point (head, right arm, left arm, right leg, left leg)
-const RD_BODY_PROPS = ["war:ta", "war:tb", "war:tg", "war:ha", "war:hb", "war:raa", "war:rab", "war:laa", "war:lab", "war:rla", "war:rlb", "war:lla", "war:llb"];
+const RD_BODY_PROPS = ["war:ta", "war:tb", "war:tg", "war:ha", "war:hb", "war:raa", "war:rab", "war:laa", "war:lab", "war:rla", "war:rlb", "war:lla", "war:llb", "war:rac", "war:rad", "war:lac", "war:lad", "war:rlc", "war:rld", "war:llc", "war:lld"];
 const hardAt = (dim, l) => { try { const b = dim.getBlock(l); return !!b && !b.isLiquid && !passable(b); } catch { return false; } };
 const rdSolid = (s, x, y, z) => {
   const bx = Math.floor(x), by = Math.floor(y), bz = Math.floor(z), k = bx + "," + by + "," + bz;
@@ -1418,11 +1420,11 @@ function rdCons(lying, mask) {
   const cs = [], rig = (i, j) => cs.push([i, j, d(i, j), d(i, j)]), rng = (i, j, lo, hi) => cs.push([i, j, lo, hi]);
   for (const [i, j] of [[0, 1], [0, 2], [0, 3], [1, 2], [1, 3], [2, 3]]) rig(i, j);                   // (the torso: one rigid piece)
   if (!(mask & 1)) { rig(4, 2); rig(4, 3); rng(4, 0, d(4, 0) * 0.86, d(4, 0)); rng(4, 1, d(4, 1) * 0.86, d(4, 1)); }   // (the neck: a nod, no more)
-  if (!(mask & 2)) { rig(3, 5); rng(5, 2, 0.42, 9); rng(5, 1, 0.2, 9); }
-  if (!(mask & 4)) { rig(2, 6); rng(6, 3, 0.42, 9); rng(6, 0, 0.2, 9); }
-  if (!(mask & 8)) { rig(1, 7); rng(7, 3, 0.98, 9); rng(7, 2, 1.0, 9); }                               // (a leg folds up to a right angle, not over his chest)
-  if (!(mask & 16)) { rig(0, 8); rng(8, 2, 0.98, 9); rng(8, 3, 1.0, 9); }
-  if (!(mask & 24)) rng(7, 8, 0.14, 9);
+  if (!(mask & 2)) { rig(3, 9); rig(9, 5); rng(5, 3, 0.33, 9); rng(5, 2, 0.4, 9); rng(9, 2, 0.4, 9); }        // (arms: elbow; the hand can't go through the chest)
+  if (!(mask & 4)) { rig(2, 10); rig(10, 6); rng(6, 2, 0.33, 9); rng(6, 3, 0.4, 9); rng(10, 3, 0.4, 9); }
+  if (!(mask & 8)) { rig(1, 11); rig(11, 7); rng(7, 1, 0.32, 9); rng(11, 3, 0.72, 9); rng(7, 3, 0.75, 9); }   // (legs: knee; the thigh no further up than a right angle)
+  if (!(mask & 16)) { rig(0, 12); rig(12, 8); rng(8, 0, 0.32, 9); rng(12, 2, 0.72, 9); rng(8, 2, 0.75, 9); }
+  if (!(mask & 24)) { rng(7, 8, 0.14, 9); rng(11, 12, 0.12, 9); }
   return cs;
 }
 function rdFrame(p) {
@@ -1452,8 +1454,15 @@ function rdAngles(s) {
   }
   const fr = rdFrame(p), out = rdTorsoAngles(fr);
   const J = (r, u) => vadd(fr.hc, vadd(vmul(fr.R, r), vmul(fr.U, u)));                    // (the joints where the model has them)
-  const lim = [[J(0, 12 / 16), p[4], true], [J(5 / 16, 10 / 16), p[5], false], [J(-5 / 16, 10 / 16), p[6], false], [J(1.9 / 16, 0), p[7], false], [J(-1.9 / 16, 0), p[8], false]];
-  lim.forEach(([from, to, up], i) => { const [a, b] = rdLimbAngles(fr.F, fr.R, fr.U, vnorm(vsub(to, from)), up, s.sent[3 + i * 2]); out.push(a, b); });
+  const lim = [[J(0, 12 / 16), p[4], true], [J(5 / 16, 10 / 16), p[9], false], [J(-5 / 16, 10 / 16), p[10], false], [J(1.9 / 16, 0), p[11], false], [J(-1.9 / 16, 0), p[12], false]];
+  const seg = [];
+  lim.forEach(([from, to, up], i) => { const [a, b] = rdLimbAngles(fr.F, fr.R, fr.U, vnorm(vsub(to, from)), up, s.sent[3 + i * 2]); out.push(a, b); seg.push([a, b]); });
+  [[9, 5], [10, 6], [11, 7], [12, 8]].forEach(([j, e], i) => {                                    // (forearm / shin: turned from the upper segment)
+    const [a, b] = seg[i + 1], c1 = Math.cos(a / DEG), s1 = Math.sin(a / DEG), c2 = Math.cos(b / DEG), s2 = Math.sin(b / DEG);
+    const F1 = vadd(vmul(fr.F, c1), vmul(fr.R, s1)), R1 = vsub(vmul(fr.R, c1), vmul(fr.F, s1));   // (Y turn)
+    const F2 = vsub(vmul(F1, c2), vmul(fr.U, s2)), U2 = vadd(vmul(fr.U, c2), vmul(F1, s2));          // (then X turn)
+    const r = rdLimbAngles(F2, R1, U2, vnorm(vsub(p[e], p[j])), false, s.sent[13 + i * 2]); out.push(r[0], r[1]);
+  });
   return out;
 }
 function rdStep(s) {
@@ -1469,11 +1478,20 @@ function rdStep(s) {
     if (ground || rdSolid(s, x, y - r - 0.03, z)) { vx *= 0.55; vz *= 0.55; }                   // (dragging on the ground)
     q.o = V3(x - vx, y - vy, z - vz); q.p = V3(x, y, z);
   }
-  for (let it = 0; it < 6; it++) for (const [i, j, lo, hi] of s.cons) {
-    const a = s.pts[i], b = s.pts[j], dv = vsub(b.p, a.p), L = vlen(dv) || 1e-6;
-    const t = L < lo ? lo : L > hi ? hi : L; if (t === L) continue;
-    const wa = 1 / s.mass[i], wb = 1 / s.mass[j], k = (L - t) / L / (wa + wb);
-    a.p = vadd(a.p, vmul(dv, k * wa)); b.p = vsub(b.p, vmul(dv, k * wb));
+  for (let it = 0; it < 8; it++) {
+    for (const [i, j, lo, hi] of s.cons) {
+      const a = s.pts[i], b = s.pts[j], dv = vsub(b.p, a.p), L = vlen(dv) || 1e-6;
+      const t = L < lo ? lo : L > hi ? hi : L; if (t === L) continue;
+      const wa = 1 / s.mass[i], wb = 1 / s.mass[j], k = (L - t) / L / (wa + wb);
+      a.p = vadd(a.p, vmul(dv, k * wa)); b.p = vsub(b.p, vmul(dv, k * wb));
+    }
+    if (!s.gib && it % 2 === 1) {                                                                  // (knees bend forward only, elbows back only)
+      const F = rdFrame(s.pts.map((q) => q.p)).F;
+      for (const [top, mid, end, sg] of s.hinges) {
+        const m = vmul(vadd(s.pts[top].p, s.pts[end].p), 0.5), off = vdot(vsub(s.pts[mid].p, m), F) * sg;
+        if (off < -0.004) s.pts[mid].p = vadd(s.pts[mid].p, vmul(F, -off * sg));
+      }
+    }
   }
   let mv = 0;
   for (let i = 0; i < s.pts.length; i++) {                                                         // (nothing ends up inside a block)
@@ -1501,7 +1519,7 @@ function rdStart(c, gibIdx, pts, vel, mask, squirt) {
   const s = { c, dim: c.dimension, gib: gibIdx, cells: new Map(), t: 0, still: 0, sent: [], squirt,
     pts: pts.map((p, i) => ({ p, o: vsub(p, vel[i]) })) };
   if (gibIdx) { const L = vlen(vsub(pts[1], pts[0])); s.cons = [[0, 1, L, L]]; s.rad = [0.12, 0.12]; s.mass = [1, 1]; }
-  else { s.cons = rdCons(false, mask); s.rad = RD_RAD; s.mass = RD_MASS; }
+  else { s.cons = rdCons(false, mask); s.rad = RD_RAD; s.mass = RD_MASS; s.hinges = [[3, 9, 5, -1], [2, 10, 6, -1], [1, 11, 7, 1], [0, 12, 8, 1]].filter(([, , e]) => !(mask & { 5: 2, 6: 4, 7: 8, 8: 16 }[e])); }
   RD.set(c.id, s); s.act = true;
   const actives = [...RD.values()].filter((q) => q.act).length;
   if (actives > RD_ACTIVE_MAX) { for (let i = 0; i < 160; i++) if (rdStep(s)) break; s.act = false; rdRender(s, true); }   // (too many falling at once: this one falls in one go)
@@ -1516,7 +1534,7 @@ system.runInterval(() => {
       if (!s.c?.isValid) { RD.delete(id); continue; }
       if (!s.act) continue;
       const done = rdStep(s);
-      rdRender(s, done);
+      if (done || s.t % 2 === 0 || s.t < 4) rdRender(s, done);                                 // (the client smooths in between)
       if (done) { s.act = false; s.cells.clear(); }
     } catch (err) { RD.delete(id); oops("ragdoll", err); }
   }
@@ -1540,11 +1558,14 @@ function sprayBlood(dim, at, crit) {
 }
 function spawnCorpse(v, how) {
   const dim = v.dimension, l = v.location, now = tick();
-  const f = Number(P(v, "war:faction") ?? 0), sk = Number(P(v, "war:skin") ?? 0), med = !!P(v, "war:medic"), yaw = (() => { try { return v.getRotation().y; } catch { return 0; } })();
+  const f = Number(P(v, "war:faction") ?? 0), med = !!P(v, "war:medic"), yaw = (() => { try { return v.getRotation().y; } catch { return 0; } })();
+  let sk = 0, cav = false; try { sk = Number(v.getProperty("war:skin") ?? 0); cav = !!v.getProperty("war:cav"); } catch {}   // (the skin he's drawn with: his own, or his faction's)
+  if (!sk) sk = Number(gdp(v, "p_war:skin") ?? 0) || factionSkin(f);
+  let mo = V3(0, 0, 0); try { const q = v.getVelocity(); mo = V3(Math.max(-0.4, Math.min(0.4, q.x)), 0, Math.max(-0.4, Math.min(0.4, q.z))); } catch {}
   const mask = gore() ? (how?.mask ?? (how?.limb ? 1 << (how.limb - 1) : 0)) : 0;
   const make = (at, gibIdx) => {
     const c = dim.spawnEntity("war:corpse", at);
-    try { c.setProperty("war:faction", Math.max(0, Math.min(40, f))); c.setProperty("war:skin", Math.max(0, Math.min(64, sk))); c.setProperty("war:medic", med); if (gibIdx) { c.setProperty("war:gib", true); c.setProperty("war:limb", gibIdx); } else c.setProperty("war:limb", mask); c.setRotation({ x: 0, y: 0 }); } catch {}
+    try { c.setProperty("war:faction", Math.max(0, Math.min(40, f))); c.setProperty("war:skin", Math.max(0, Math.min(64, sk))); c.setProperty("war:medic", med); try { c.setProperty("war:cav", cav); } catch {} if (gibIdx) { c.setProperty("war:gib", true); c.setProperty("war:limb", gibIdx); } else c.setProperty("war:limb", mask); c.setRotation({ x: 0, y: 0 }); } catch {}
     CORPSES.push({ id: c.id, t: now });
     return c;
   };
@@ -1555,13 +1576,14 @@ function spawnCorpse(v, how) {
   const pts = RD_REST.map(([r, u, fw]) => vadd(hc, vadd(vmul(R, r), vadd(vmul(U, u), vmul(F, fw)))));
   // how the blow moves each part: a round pushes the upper body most (he folds), a headshot snaps the head, a blast throws everything
   const dir = how?.dir ?? vmul(Fs, -1), pw = how?.power ?? 0.15, blast = pw >= 0.45;
-  const base = blast ? 0.12 + pw * 0.22 : 0.06 + pw * 0.22, share = [0.6, 0.6, 1.25, 1.25, 1.5, 1.3, 1.3, 0.15, 0.15];
+  const base = blast ? 0.12 + pw * 0.22 : 0.06 + pw * 0.22, share = [0.6, 0.6, 1.25, 1.25, 1.5, 1.3, 1.3, 0.15, 0.15, 1.25, 1.25, 0.35, 0.35];
   const vel = pts.map((p, i) => {
     let v0 = vmul(V3(dir.x, 0, dir.z), base * (blast ? 1 : share[i]));
     if (blast) v0 = vadd(v0, V3((Math.random() - 0.5) * 0.18, 0.2 + pw * 0.2 + Math.random() * 0.1, (Math.random() - 0.5) * 0.18));
     else v0 = vadd(v0, V3((Math.random() - 0.5) * 0.03, 0, (Math.random() - 0.5) * 0.03));
     if (i === 4 && how?.head) v0 = vadd(v0, vmul(V3(dir.x, 0.15, dir.z), 0.22));
-    return v0;
+    if (i === 11 || i === 12) v0 = vadd(v0, vmul(R, (Math.random() < 0.5 ? -1 : 1) * (0.02 + Math.random() * 0.03)));   // (knees fall to a side)
+    return vadd(v0, vmul(mo, i >= 7 && i !== 9 && i !== 10 ? 0.4 : 1));                       // (a running man keeps going: his feet catch)
   });
   const squirt = mask & 1 ? [2, 3] : mask & 2 ? [3] : mask & 4 ? [2] : mask & 8 ? [1] : mask & 16 ? [0] : undefined;
   const body = make(hc, 0);
