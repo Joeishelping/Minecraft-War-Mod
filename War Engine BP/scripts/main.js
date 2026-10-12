@@ -1358,13 +1358,27 @@ const CORPSES = [];          // [{ id, t }]
 const gore = () => setting("gore", true) !== false;
 const LIMB_ANY = () => 1 + Math.floor(Math.random() * 5), LIMB_ARMLEG = () => 2 + Math.floor(Math.random() * 4);
 function oneShot(v, ev, cause) {
+  // v9.7 (rev.): it's the force of the blow that decides. A blow far bigger than what he had left (a second round
+  // into a man already hurt, buckshot at close range) kills outright; one that only just takes him down leaves him
+  // wounded. A blast kills outright and throws him away from it the closer he was, and very close tears him apart.
   const now = tick(), lh = lastHit.get(v.id), fresh = !!lh && now - lh.t <= 1;
+  const hp = v.getComponent("minecraft:health")?.currentValue ?? 1, over = ev.damage - hp;
+  const src = ev.damageSource?.damagingEntity;
+  const away = (from) => { const dx = v.location.x - from.x, dz = v.location.z - from.z, L = Math.hypot(dx, dz) || 1; return { x: dx / L, y: 0, z: dz / L }; };
   let how;
-  if ((cause.includes("xplosion") || cause === "fireworks") && ev.damage >= 8) { if (Math.random() < 0.5) how = { limb: Math.random() < 0.35 ? LIMB_ANY() : 0, power: 0.55 }; }
-  else if (fresh && lh.head && ["sniper", "rifle", "semi"].includes(lh.weapon)) { if (Math.random() < 0.6) how = { limb: lh.weapon === "sniper" && Math.random() < 0.12 ? 1 : 0, dir: lh.dir, power: 0.25 }; }
-  else if (fresh && lh.weapon === "shotgun" && lh.dd < 5) { if (Math.random() < 0.35) how = { limb: Math.random() < 0.15 ? LIMB_ARMLEG() : 0, dir: lh.dir, power: 0.5 }; }
-  else if (fresh && lh.weapon === "mg") { if (Math.random() < 0.08) how = { limb: 0, dir: lh.dir, power: 0.3 }; }
-  else if (Math.random() < (fresh ? 0.1 : cause === "projectile" ? 0.12 : 0)) how = { limb: 0, dir: lh?.dir, power: 0.25 };   // (now and then a man just doesn't get up)
+  if (cause.includes("xplosion")) {
+    const c = { x: v.location.x, y: v.location.y + 0.9, z: v.location.z };
+    let b, bd = 1e9; for (const q of BLASTS) { if (q.dim !== v.dimension.id || now - q.t > 3) continue; const dd = dist(q.at, c); if (dd < bd) { bd = dd; b = q; } }
+    const pw = b?.power ?? 3, dd = b ? bd : ev.damage >= 12 ? 1 : 4, dir = b ? away(b.at) : src?.isValid ? away(src.location) : undefined;
+    if (dd <= pw * 0.75 || over >= 8) how = { limb: Math.random() < (dd <= pw * 0.45 ? 0.55 : 0.25) ? LIMB_ANY() : 0, dir, power: 0.45 + 0.2 * Math.max(0, pw * 1.2 - dd) };
+    else if (dd <= pw * 1.3 && Math.random() < 0.5) how = { limb: 0, dir, power: 0.35 };
+  } else {
+    const dir = fresh ? lh.dir : src?.isValid ? away(src.location) : undefined;
+    if (fresh && lh.head && ["sniper", "rifle", "semi"].includes(lh.weapon)) { if (Math.random() < 0.75) how = { limb: lh.weapon === "sniper" && over >= 4 && Math.random() < 0.25 ? 1 : 0, dir, power: 0.25 }; }
+    else if (fresh && lh.weapon === "shotgun" && lh.dd < 6 && over >= 2) how = { limb: Math.random() < 0.2 ? LIMB_ARMLEG() : 0, dir, power: 0.55 };
+    else if (over >= 4) { if (Math.random() < 0.8) how = { limb: 0, dir, power: Math.min(0.5, 0.2 + over * 0.03) }; }
+    else if (cause === "fall" && ev.damage >= 10) how = { limb: 0, power: 0.05 };
+  }
   if (!how) return false;
   if (!gore()) how.limb = 0;
   killHow.set(v.id, how); v9stat(how.limb ? "dismember" : "oneShot");
@@ -1399,7 +1413,7 @@ world.afterEvents.entityDie.subscribe((ev) => {
   } catch {}
 });
 world.afterEvents.entityHurt.subscribe((ev) => {                                  // blood on every hit
-  try { const v = ev.hurtEntity; if (v?.typeId !== SOLDIER || !gore() || ev.damage < 1) return; const now = tick(); if (now - (bloodT.get(v.id) ?? -99) < 4) return; bloodT.set(v.id, now); v.dimension.spawnParticle("war:blood", chest(v)); } catch {}
+  try { const v = ev.hurtEntity; if (v?.typeId !== SOLDIER || !gore() || ev.damage < 1) return; const now = tick(); if (now - (bloodT.get(v.id) ?? -99) < 4) return; bloodT.set(v.id, now); const c = chest(v); try { v.dimension.spawnParticle("war:blood", c); } catch {} for (let i = 0; i < 4; i++) { try { v.dimension.spawnParticle("minecraft:redstone_wire_dust_particle", { x: c.x + (Math.random() - 0.5) * 0.5, y: c.y + (Math.random() - 0.5) * 0.6, z: c.z + (Math.random() - 0.5) * 0.5 }); } catch {} } } catch {}
 });
 const bloodT = new Map();
 system.runInterval(() => {
@@ -3257,7 +3271,9 @@ world.afterEvents.entitySpawn.subscribe((ev) => {
 
 // ================================================================ Explosions that always go off
 // If crediting the blast to someone is refused by the game, explode anyway without credit.
+const BLASTS = []; // v9.7: recent explosions { dim, at, power, t } (bodies thrown away from them, the nearest ones torn apart)
 function explode(dim, loc, power, opts) {
+  BLASTS.push({ dim: dim.id, at: { x: loc.x, y: loc.y, z: loc.z }, power, t: tick() }); if (BLASTS.length > 40) BLASTS.shift();
   try { dim.createExplosion(loc, power, opts); }
   catch { const o = { ...opts }; delete o.source; try { dim.createExplosion(loc, power, o); } catch {} }
   try { blastDamage(dim, loc, power, opts?.source); } catch {}
@@ -3342,7 +3358,7 @@ function playerFair(p) {
   return fair;
 }
 function isTargetFor(e, d, o) {
-  if (o.id === e.id) return false;
+  if (o.id === e.id || o.typeId === "war:corpse") return false;                 // (v9.7: a body is never a target)
   if (SAFE.size && (SAFE.has(o.id) || SAFE.has(e.id)) && !isMob(o)) return false;   // (v9.1: a neutral zone: nobody fights in or into it; a zombie is still a zombie)
   if (o.typeId === SOLDIER && (downed.has(o.id) || pows.has(o.id))) return false;   // nobody shoots the downed or prisoners
   if (d.weapon === "at" && (VEHICLES.includes(o.typeId) || d.div !== "grenadier")) return VEHICLES.includes(o.typeId) && isHostile(d.faction, vehicleFaction(o));   // (v6.9.1: the Demolition bazooka fires at men too)
@@ -3513,7 +3529,7 @@ system.runInterval(() => {
 const HIT_DMG = { rifle: 7, semi: 6, smg: 4, mg: 5, shotgun: 9, pistol: 5, sniper: 12 };
 const HIT_CHANCE = { rifle: [0.7, 0.25, 70], semi: [0.65, 0.22, 60], smg: [0.6, 0.08, 40], mg: [0.5, 0.15, 70], shotgun: [0.8, 0.05, 25], pistol: [0.55, 0.08, 35], sniper: [0.85, 0.5, 150] };   // [chance close (8 blocks), chance far, "far" in blocks]
 const preciseHits = () => setting("bullets", "precise") !== "pack";
-const NOT_HITTABLE = [WAYPOINT, FLAG, "war:blank", "war:bomb", "war:shell", "minecraft:item", "minecraft:xp_orb", "minecraft:arrow", "minecraft:armor_stand"];
+const NOT_HITTABLE = ["war:corpse", WAYPOINT, FLAG, "war:blank", "war:bomb", "war:shell", "minecraft:item", "minecraft:xp_orb", "minecraft:arrow", "minecraft:armor_stand"];
 function hittable(o, shooter) {
   try {
     if (!o?.isValid || o.id === shooter.id || NOT_HITTABLE.includes(o.typeId) || o.typeId.includes("projectile")) return false;
@@ -4006,7 +4022,7 @@ function hpRatio(o) {
   hpMemo.set(o.id, { t: now, r }); if (hpMemo.size > 4000) hpMemo.clear();
   return r;
 }
-const isMob = (o) => o.typeId !== SOLDIER && o.typeId !== HOUND && o.typeId !== "minecraft:player" && !VEHICLES.includes(o.typeId);
+const isMob = (o) => o.typeId !== "war:corpse" && o.typeId !== SOLDIER && o.typeId !== HOUND && o.typeId !== "minecraft:player" && !VEHICLES.includes(o.typeId);
 function threatScore(e, d, o, dd, now) {
   let s = 100 - dd;                                              // closer = more dangerous
   if (isMob(o)) s -= 90;                                         // zombies are a nuisance, soldiers are the threat
@@ -6760,7 +6776,7 @@ function goDown(e, killer) {
     if (!ke) { const k = hurtBy.get(e.id); if (k && now - k.t < 40) ke = world.getEntity(k.id); }
     if (ke?.typeId === SOLDIER) callout(ke, "Target down!");
   } catch {}
-  downed.set(e.id, now + 600);
+  downed.set(e.id, now + 600); v9stat("wentDown");
   downPos.set(e.id, { ...e.location });
   noteKillzone(e);
   sdp(e, "war:downed", now + 600);
@@ -9871,40 +9887,54 @@ function chooseArm(e, d, now, calm) {
 // nearest spot the enemy can't see, then patches him up: ~5 s of first aid and he's back on his feet, weak (4 hearts
 // of 20 for most). A man down out of sight gets the same first aid where he lies. A medic coming takes over.
 const DRAG = new Map();    // downed id -> { by, phase: "go" | "drag" | "aid", to, t0, phaseT }
-// v9.7: a wounded man in the open crawls for cover: a spot 2-5 blocks away no enemy who can see him now can see, and
-// he inches there (about a third of a block a second). Not while someone's dragging him or a medic is on the way.
+// v9.7 (rev.): a wounded man in the open crawls for cover. In the open = any enemy near who can see him, or the
+// line of sight from where his squad knows the enemy is. He drags himself (about 0.6 blocks a second, arms pulling)
+// to the nearest spot within 6 blocks out of their sight; with none, away from them. Not while someone's dragging
+// him or a medic is on the way.
 const crawlTo = new Map(); // downed id -> { to, t }
 system.runInterval(() => {
   const now = tick(); let n = 0;
   for (const [id] of downed) {
-    if (n >= 6) break;
+    if (n >= 12) break;
     try {
-      if (DRAG.has(id) || held.has(id) || pows.has(id) || medicComing(id, now)) { crawlTo.delete(id); continue; }
-      const v = world.getEntity(id); if (!v?.isValid) { crawlTo.delete(id); continue; }
+      const v = world.getEntity(id);
+      const stop = () => { crawlTo.delete(id); try { if (v?.isValid) setP(v, "war:crawl", false); } catch {} };
+      if (!v?.isValid || DRAG.has(id) || held.has(id) || pows.has(id) || medicComing(id, now)) { stop(); continue; }
       n++;
       let c = crawlTo.get(id);
-      if (!c || now - c.t > 200) {
-        const f = Number(P(v, "war:faction") ?? 0), seers = enemiesSeeing(v, f, 40).slice(0, 4);
-        const eyes = seers.map((o) => (o.type === SOLDIER ? { x: o.x, y: o.y + 1.6, z: o.z } : { x: o.x, y: o.y + 1.6, z: o.z }));
+      if (!c || now - c.t > 40 || (!c.to && now - c.t > 20)) {
+        const d = sd(v), S = squads.get(squadKey(v, d)), eyes = [];
+        for (const o of enemiesSeeing(v, d.faction, 48).slice(0, 4)) eyes.push({ x: o.x, y: o.y + 1.6, z: o.z });
+        if (S) for (const q of S.known.values()) { if (eyes.length >= 6) break; if (!q.heard && now - q.t < 200 && Math.hypot(q.x - v.location.x, q.z - v.location.z) < 60) eyes.push({ x: q.x, y: q.y + 1.6, z: q.z }); }
         const body = { x: v.location.x, y: v.location.y + 0.4, z: v.location.z };
-        if (!eyes.length || !eyes.some((h) => clearShot(v.dimension, h, body))) { crawlTo.set(id, { to: undefined, t: now }); continue; }   // (nobody sees him: he stays put)
+        if (!eyes.length || !eyes.some((h) => clearShot(v.dimension, h, body))) { stop(); crawlTo.set(id, { to: undefined, t: now }); continue; }
         let best;
-        for (const r of [2, 3.5, 5]) { for (let i = 0; i < 8 && !best; i++) {
-          const a = (i / 8) * Math.PI * 2, w = walkableNear(v.dimension, v.location.x + Math.cos(a) * r, v.location.z + Math.sin(a) * r, v.location.y);
+        for (const r of [1.5, 3, 4.5, 6]) { for (let k = 0; k < 12 && !best; k++) {
+          const a = (k / 12) * Math.PI * 2, w = walkableNear(v.dimension, v.location.x + Math.cos(a) * r, v.location.z + Math.sin(a) * r, v.location.y);
           if (!w || Math.abs(w.y - v.location.y) > 0.6 || dangerNear(v.dimension, w) || !straightReach(v.dimension, v.location, w)) continue;
           if (eyes.every((h) => !clearShot(v.dimension, h, { x: w.x, y: w.y + 0.4, z: w.z }))) best = w;
         } if (best) break; }
+        if (!best) {                                                     // (nowhere hidden: away from them)
+          const ex = eyes.reduce((t, h) => t + h.x, 0) / eyes.length, ez = eyes.reduce((t, h) => t + h.z, 0) / eyes.length;
+          const dx = v.location.x - ex, dz = v.location.z - ez, L = Math.hypot(dx, dz) || 1;
+          const w = walkableNear(v.dimension, v.location.x + (dx / L) * 4, v.location.z + (dz / L) * 4, v.location.y);
+          if (w && Math.abs(w.y - v.location.y) <= 0.6 && !dangerNear(v.dimension, w) && straightReach(v.dimension, v.location, w)) best = w;
+        }
         c = { to: best, t: now }; crawlTo.set(id, c);
         if (best) { note(v, "crawling for cover"); v9stat("crawl"); }
       }
       if (c.to && flat(c.to, v.location) > 0.5) {
         const dx = c.to.x - v.location.x, dz = c.to.z - v.location.z, L = Math.hypot(dx, dz) || 1;
-        v.applyImpulse({ x: (dx / L) * 0.07, y: 0, z: (dz / L) * 0.07 });
-      }
+        setP(v, "war:crawl", true);
+        // (a downed man is far too slowed for a push to move him: he's moved in small checked steps, ~0.6 blocks a second)
+        const st = Math.min(0.15, L), to = { x: v.location.x + (dx / L) * st, y: v.location.y, z: v.location.z + (dz / L) * st };
+        if (!solidAt(v.dimension, { x: to.x, y: to.y + 0.3, z: to.z }) && solidAt(v.dimension, { x: to.x, y: to.y - 0.2, z: to.z })) { try { v.teleport(to, { keepVelocity: false, checkForBlocks: true }); downPos.set(id, { ...to }); } catch {} }   // (and where he lies pinned moves with him)
+        else { c.to = undefined; stop(); }
+      } else stop();
     } catch {}
   }
-  for (const id of [...crawlTo.keys()]) if (!downed.has(id)) crawlTo.delete(id);
-}, 10);
+  for (const id of [...crawlTo.keys()]) if (!downed.has(id)) { crawlTo.delete(id); try { const e = world.getEntity(id); if (e?.isValid) setP(e, "war:crawl", false); } catch {} }
+}, 5);
 const dragOf = new Map();  // rescuer id -> downed id
 const dragCool = new Map(); // rescuer id -> tick he may go out again
 const enemiesSeeing = (v, f, r = 48) => {

@@ -275,6 +275,40 @@
           ]
         }
       }
+    },
+    "animation.war.crawl": {
+      "loop": true,
+      "animation_length": 1.2,
+      "bones": {
+        "rightArm": {
+          "rotation": [
+            "-150 + math.sin(q.anim_time * 300) * 35",
+            "0",
+            "10"
+          ]
+        },
+        "leftArm": {
+          "rotation": [
+            "-150 - math.sin(q.anim_time * 300) * 35",
+            "0",
+            "-10"
+          ]
+        },
+        "rightLeg": {
+          "rotation": [
+            "math.sin(q.anim_time * 300) * 18",
+            "0",
+            "0"
+          ]
+        },
+        "leftLeg": {
+          "rotation": [
+            "-math.sin(q.anim_time * 300) * 18",
+            "0",
+            "0"
+          ]
+        }
+      }
     }
   }
 }

@@ -472,6 +472,19 @@ KS.gib = async (o, ox, oz) => {
   const cs = ow().getEntities({ type: "war:corpse", location: { x: ox, y: Y, z: oz }, maxDistance: 12 });
   return { n: cs.length, parts: cs.map((c) => ({ limb: c.getProperty("war:limb"), gib: c.getProperty("war:gib"), d: Math.round(Math.hypot(c.location.x - ox, c.location.z - oz) * 10) / 10 })), soldierGone: !v.isValid };
 };
+// v9.7: a downed man in plain view of the enemy (who hold their fire) next to a wall: does he crawl behind it?
+KS.crawl = async (o, ox, oz) => {
+  floorAt(ox - 20, oz - 20, ox + 30, oz + 20);
+  kfill(ox + 3, Y, oz - 2, ox + 3, Y + 1, oz + 2, "stone_bricks");            // (a low wall 2 blocks from him, between him and them)
+  setRelPair(1, 2, "1", false);
+  const v = kitSoldier(1, { x: ox + 0.5, y: Y, z: oz + 4.5 }, "rifle", "hold");
+  const foes = []; for (let i = 0; i < 2; i++) { const f = kitSoldier(2, { x: ox + 20.5, y: Y, z: oz + 4.5 + i * 2 }, "rifle", "hold"); sdp(f, "war:stance", "holdfire"); foes.push(f); }
+  await kitWait(40);
+  const p0 = { ...v.location };
+  goDown(v, foes[0]);
+  await kitWait(200);
+  return { moved: Math.round(flat(p0, v.location) * 10) / 10, behindWall: v.location.z < oz + 2.6 && v.location.x < ox + 3, downed: downed.has(v.id), crawlProp: !!v.getProperty("war:crawl") };
+};
 KS.trip = async (o, ox, oz) => {
   const N = Number(o.n ?? 8), mode = o.mode ?? "down";
   let start, dest, okFn;

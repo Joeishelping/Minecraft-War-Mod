@@ -558,6 +558,9 @@
           },
           {
             "sit": "q.property('war:sit') && !q.is_riding && !q.property('war:down')"
+          },
+          {
+            "crawl": "q.property('war:down') && q.property('war:crawl')"
           }
         ]
       },
@@ -658,7 +661,8 @@
         "gun_fire": "controller.animation.war.gun_fire",
         "kneel": "animation.war.kneel",
         "prone": "animation.war.prone",
-        "sit": "animation.war.sit"
+        "sit": "animation.war.sit",
+        "crawl": "animation.war.crawl"
       },
       "enable_attachables": true
     }

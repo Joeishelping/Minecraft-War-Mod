@@ -95,6 +95,11 @@
           "type": "bool",
           "default": false,
           "client_sync": true
+        },
+        "war:crawl": {
+          "type": "bool",
+          "default": false,
+          "client_sync": true
         }
       }
     },

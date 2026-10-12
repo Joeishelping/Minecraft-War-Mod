@@ -1,5 +1,31 @@
 # War Engine changelog
 
+## v9.8 (Outright kills that make sense, wounded who actually crawl, blood you can see)
+
+- **Outright kills by the force of the blow.** v9.7 almost always left a wounded man: a headshot was the main way
+  to die outright, and soldiers aim at the chest; a player's own gun pack bullets killed outright only 12% of the
+  time. Now:
+  - A blow far bigger than what he had left kills outright (80%): a second round into a man already hurt, buckshot
+    at close range, a big hit from your own gun. One that only just takes him down leaves him wounded.
+  - A blast kills outright and throws the body away from it, the harder the closer he was. Very close tears him
+    apart (about half the time), and a limb lands a little way off. Every explosion now records where it went
+    off.
+  - Rifle and sniper headshots kill outright (75%). A sniper's headshot with power to spare sometimes takes the
+    head (25%). Buckshot at point blank sometimes takes an arm or a leg (20%).
+  - On a real server, about 55% of lethal hits now kill outright (25 of 45 over three 8-v-8 fights). A grenade at a
+    man's feet tore one apart.
+- **The wounded really crawl.**
+  - They were pinned where they fell: every half second the game put them back if they'd moved more than 0.6
+    blocks, so the crawl never got anywhere. Now the pin moves with him.
+  - He's moved in small checked steps (a downed man is too slowed for a push to move him), about 0.6 blocks a
+    second, with an arms-pulling crawl animation.
+  - It starts far more readily. "In the open" means any enemy near who can see him, or the line of sight from
+    where his squad knows the enemy is. With nowhere hidden within 6 blocks, he crawls away from them.
+  - In the test, a man downed in plain view dragged himself 2.7 blocks behind a low wall.
+- **Blood.** A burst of the game's own red dust now joins the blood spray on every hit, so it shows even if the
+  custom spray doesn't.
+- Bodies are never targets and never stop a round.
+
 ## v9.7 (Squad tactics, roles, two new orders, gunfire by distance, tracers, bodies, blood and dismemberment)
 
 Tested on a real Bedrock server. The bounding numbers come from 10 fights per version on the same map: a squad
