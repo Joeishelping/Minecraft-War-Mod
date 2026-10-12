@@ -6226,9 +6226,9 @@ function brainMove(e, d, now, melee, anchor, leash) {
         opts.push(["sandbag", (holding ? 2.2 : 1.2) + (underFire ? 0.5 : 0)]);  // once there, he stays while the bags shield him
       }
     }
-    if (bMove) opts.push(["advance", 3]);                                // (v9.7: his team's turn to dash)
-    if (bCover) {                                                       // (v9.7: his team covers: no advancing, shoot or pin them down)
-      for (const o of opts) { if (o[0] === "advance" || o[0] === "flank") o[1] = -9; if (o[0] === "fire" || o[0] === "suppress") o[1] += 1.5; }
+    if (bMove) opts.push(["advance", 1.4]);                              // (v9.7: his team's turn to dash; pinned in the open he may still dive for cover)
+    if (bCover) {                                                       // (v9.7: his team covers: no advancing; shoot or pin them down, from cover if he's exposed)
+      for (const o of opts) { if (o[0] === "advance" || o[0] === "flank") o[1] = -9; if (o[0] === "fire" || o[0] === "suppress") o[1] += 0.4; }
       if (!opts.some((o) => (o[0] === "fire" || o[0] === "suppress") && o[1] > 0)) opts.push(["hold", 1.2]);
     }
     opts.sort((a, b) => b[1] - a[1]);
