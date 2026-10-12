@@ -43,6 +43,69 @@
           "type": "bool",
           "default": false,
           "client_sync": true
+        },
+        "war:fall": {
+          "type": "float",
+          "range": [
+            -180.0,
+            180.0
+          ],
+          "default": -90.0,
+          "client_sync": true
+        },
+        "war:la": {
+          "type": "float",
+          "range": [
+            -150.0,
+            150.0
+          ],
+          "default": 0.0,
+          "client_sync": true
+        },
+        "war:ra": {
+          "type": "float",
+          "range": [
+            -150.0,
+            150.0
+          ],
+          "default": 0.0,
+          "client_sync": true
+        },
+        "war:ll": {
+          "type": "float",
+          "range": [
+            -150.0,
+            150.0
+          ],
+          "default": 0.0,
+          "client_sync": true
+        },
+        "war:rl": {
+          "type": "float",
+          "range": [
+            -150.0,
+            150.0
+          ],
+          "default": 0.0,
+          "client_sync": true
+        },
+        "war:hd": {
+          "type": "float",
+          "range": [
+            -150.0,
+            150.0
+          ],
+          "default": 0.0,
+          "client_sync": true
+        },
+        "war:pose": {
+          "type": "int",
+          "range": [
+            0,
+            15
+          ],
+          "default": 0,
+          "client_sync": true
         }
       }
     },

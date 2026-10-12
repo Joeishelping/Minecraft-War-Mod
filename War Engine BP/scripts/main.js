@@ -1396,6 +1396,7 @@ function spawnCorpse(v, how) {
   const dir = how?.dir ?? (() => { const a = Math.random() * Math.PI * 2; return { x: Math.cos(a), y: 0, z: Math.sin(a) }; })(), pw = how?.power ?? 0.15;
   const body = make({ x: l.x, y: l.y + 0.1, z: l.z }, false);
   try { body.applyImpulse({ x: dir.x * pw, y: 0.12 + pw * 0.3, z: dir.z * pw }); } catch {}
+  ragdoll(body, how, !!how?.lying);
   if (how?.limb) {
     const g = make({ x: l.x, y: l.y + 0.8, z: l.z }, true), a = Math.random() * Math.PI * 2;
     try { g.applyImpulse({ x: dir.x * pw * 1.4 + Math.cos(a) * 0.25, y: 0.35, z: dir.z * pw * 1.4 + Math.sin(a) * 0.25 }); } catch {}
@@ -1403,12 +1404,79 @@ function spawnCorpse(v, how) {
   bleed(v, how?.dir, !!how?.limb);
   while (CORPSES.length > 24) { const o = CORPSES.shift(); try { world.getEntity(o.id)?.remove(); } catch {} }
 }
+// v9.10: ragdoll deaths. Each body gets a few seconds of physics, then lies still and costs nothing more: it
+// topples away from the round that killed him (onto his back if he faced the shooter, onto his face if hit from
+// behind), flies and somersaults from a blast, slams down and bounces, and the limbs flail and settle. With a wall
+// in the way he falls another way, or slumps against it. The angles drive the body's bones on the client.
+const RAG = new Map();       // corpse id -> { c, th, w, max, x[5], v[5], t }
+const RAG_MAX = 12;
+const hardAt = (dim, l) => { try { const b = dim.getBlock(l); return !!b && !b.isLiquid && !passable(b); } catch { return false; } };
+function ragdoll(c, how, lying) {
+  try {
+    const dim = c.dimension, l = c.location, R = Math.PI / 180;
+    try { c.setProperty("war:pose", Math.floor(Math.random() * 16)); } catch {}
+    let yaw = 0; try { yaw = c.getRotation().y; } catch {}
+    const dir = how?.dir, pw = how?.power ?? 0.15;
+    const f = { x: -Math.sin(yaw * R), z: Math.cos(yaw * R) };
+    let sg = dir ? (f.x * dir.x + f.z * dir.z > 0 ? 1 : -1) : Math.random() < 0.5 ? 1 : -1;   // (+: on his face, -: on his back)
+    const room = (yw, s) => { const fx = -Math.sin(yw * R) * s, fz = Math.cos(yw * R) * s; let n = 0; for (const k of [0.6, 1.2, 1.8]) { if (hardAt(dim, { x: l.x + fx * k, y: l.y + 0.4, z: l.z + fz * k })) break; n = k; } return n; };
+    let best = { yw: yaw, s: sg, n: room(yaw, sg) };
+    if (best.n < 1.8) for (const [yw, s] of [[yaw, -sg], [yaw + 90, sg], [yaw - 90, sg], [yaw + 45, sg], [yaw - 45, sg]]) { const n = room(yw, s); if (n > best.n) best = { yw, s, n }; if (n >= 1.8) break; }
+    if (best.yw !== yaw) try { c.setRotation({ x: 0, y: best.yw }); } catch {}
+    sg = best.s;
+    const max = best.n >= 1.8 ? 90 : best.n >= 1.2 ? 60 : best.n >= 0.6 ? 35 : 18;            // (no room: slumped against the wall)
+    if (lying || RAG.size >= RAG_MAX) { try { c.setProperty("war:fall", sg * max); } catch {} return; }
+    const blast = pw >= 0.45;
+    const st = { c, th: sg * 4, w: sg * (blast ? 9 + pw * 18 : 1.2 + pw * 10), max, x: [0, 0, 0, 0, 0], v: [0, 0, 0, 0, 0], t: 0, sent: [] };
+    for (let i = 0; i < 5; i++) st.v[i] = (Math.random() - 0.5) * (blast ? 30 : 8);
+    try { c.setProperty("war:fall", st.th); } catch {}
+    RAG.set(c.id, st);
+  } catch {}
+}
+const RAG_PROPS = ["war:la", "war:ra", "war:ll", "war:rl", "war:hd"];
+system.runInterval(() => {
+  if (!RAG.size) return;
+  for (const [id, s] of RAG) {
+    try {
+      const c = s.c; if (!c.isValid) { RAG.delete(id); continue; }
+      s.t++;
+      let ground = false; try { ground = c.isOnGround; } catch {}
+      const w0 = s.w, phi = ((((s.th + 180) % 360) + 360) % 360) - 180;
+      let lie = false;
+      if (ground) {
+        if (Math.abs(phi) < s.max) s.w += 1.7 * Math.sin(phi * Math.PI / 180);              // (gravity tips him over)
+        if (Math.abs(phi + s.w) >= s.max) {                                                    // (he hits the ground)
+          const imp = Math.abs(s.w);
+          s.th += Math.sign(phi || s.w) * s.max - phi; s.w = -s.w * 0.3; if (Math.abs(s.w) < 1.2) s.w = 0;
+          if (imp > 2) for (let i = 0; i < 5; i++) s.v[i] += (Math.random() - 0.5) * imp * 3;
+          lie = true;
+        } else s.th += s.w;
+        s.w *= 0.97;
+      } else { s.th += s.w; s.w *= 0.995; }                                                    // (in the air: he tumbles)
+      if (Math.abs(((((s.th + 180) % 360) + 360) % 360) - 180) >= s.max - 0.5 && ground) lie = true;
+      const dw = s.w - w0;
+      let still = ground && s.w === 0;
+      for (let i = 0; i < 5; i++) {
+        s.v[i] += -0.12 * s.x[i] - 0.2 * s.v[i] - 0.9 * dw * (i === 4 ? 0.5 : i < 2 ? 1 : 0.6);   // (the limbs lag the body)
+        s.x[i] = Math.max(-150, Math.min(150, s.x[i] + s.v[i]));
+        if (lie) { s.x[i] *= 0.82; s.v[i] *= 0.6; }                                            // (on the ground they flop flat)
+        if (Math.abs(s.v[i]) > 0.3 || Math.abs(s.x[i]) > 1) still = false;
+      }
+      const done = (still && s.t > 8) || s.t > 160;
+      if (done) { s.w = 0; for (let i = 0; i < 5; i++) s.x[i] = 0; }
+      const out = [((((s.th + 180) % 360) + 360) % 360) - 180, ...s.x];
+      ["war:fall", ...RAG_PROPS].forEach((k, i) => { const val = Math.round(out[i] * 10) / 10; if (done || s.sent[i] === undefined || Math.abs(val - s.sent[i]) >= 0.5) { try { c.setProperty(k, val); s.sent[i] = val; } catch {} } });
+      if (done) RAG.delete(id);
+    } catch { RAG.delete(id); }
+  }
+}, 1);
 world.afterEvents.entityDie.subscribe((ev) => {
   const v = ev.deadEntity;
   try {
     if (v?.typeId !== SOLDIER || held.has(v.id)) return;
     const how = killHow.get(v.id); killHow.delete(v.id); lastHit.delete(v.id);
-    spawnCorpse(v, how ?? { dir: undefined, power: 0.12 });
+    const h2 = how ?? { dir: undefined, power: 0.12 }; if (downed.has(v.id)) h2.lying = true;   // (killed where he lay: he's already down)
+    spawnCorpse(v, h2);
     system.run(() => { try { if (v.isValid) v.remove(); } catch {} });          // (the body takes his place: no death spin)
   } catch {}
 });
@@ -1437,7 +1505,7 @@ try {
       const c = ev.removedEntity; if (c?.typeId !== "war:corpse") return;
       const now = tick(), at = c.location, dimId = c.dimension.id;
       const b = BLASTS.find((q) => q.dim === dimId && now - q.t <= 3 && dist(q.at, at) <= q.power * 2 + 1); if (!b) return;
-      const pr = {}; for (const k of ["war:faction", "war:skin", "war:medic", "war:limb", "war:gib"]) { try { pr[k] = c.getProperty(k); } catch {} }
+      const pr = {}; for (const k of ["war:faction", "war:skin", "war:medic", "war:limb", "war:gib", "war:fall", "war:pose"]) { try { pr[k] = c.getProperty(k); } catch {} }
       const yaw = (() => { try { return c.getRotation().y; } catch { return 0; } })(), old = c.id;
       system.run(() => {
         try {

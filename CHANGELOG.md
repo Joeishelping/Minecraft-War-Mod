@@ -1,5 +1,20 @@
 # War Engine changelog
 
+## v9.10 (Ragdoll deaths)
+
+- **Bodies fall with physics.** Every body gets a few seconds of physics of its own, then lies still and costs nothing
+  more. At most 12 bodies are simulated at once; any more just drop flat as before.
+  - A man shot from the front goes over backwards; shot from behind, he falls on his face. He topples with the
+    weight of the blow, slams down, bounces a little, and settles.
+  - His arms, legs and head lag behind the body as it falls, flail on impact, then flop flat. Each body comes to
+    rest in its own pose (arms out, one arm up, legs apart, and so on).
+  - A grenade throws him and he somersaults through the air, then lands flat.
+  - With a wall where he'd land, he falls another way. Pinned in a corner, he slumps against the wall.
+  - A man killed where he already lay wounded stays down.
+- **The wounded drop to the ground.** A man who goes down wounded now falls and thumps down instead of snapping flat.
+- Tested on a real server: front, behind, wall and blast cases all fall the right way, and all bodies are still
+  within about a second and a half.
+
 ## v9.9 (Blood you can actually see, dismemberment that renders, bodies that never shove anyone)
 
 - **Dismemberment renders now.** The torn-off limb was invisible: hiding the body also hid the arms and head that

@@ -508,6 +508,35 @@ KS.bodyhit = async (o, ox, oz) => {
   for (const c of all) { try { c.remove(); } catch {} } try { pig.remove(); } catch {}
   return r;
 };
+// v9.10: ragdoll deaths: shot from the front he goes over backwards, from behind onto his face, a blast throws and
+// somersaults him; with a wall behind him he falls another way; every body ends flat and still within a few seconds
+KS.ragdoll = async (o, ox, oz) => {
+  floorAt(ox - 15, oz - 15, ox + 15, oz + 15);
+  for (const c of ow().getEntities({ type: "war:corpse" })) { try { c.remove(); } catch {} }
+  kfill(ox - 6, Y, oz + 9, ox + 6, Y + 2, oz + 9, "stone_bricks");                    // (a wall right behind the third man)
+  const cases = [
+    { at: { x: ox - 6, z: oz }, dir: { x: 0, y: 0, z: 1 }, power: 0.25, yaw: 180 },    // (faces -z, hit from -z side: travels +z = from the front)
+    { at: { x: ox, z: oz }, dir: { x: 0, y: 0, z: 1 }, power: 0.25, yaw: 0 },          // (faces +z, hit from behind)
+    { at: { x: ox + 6, z: oz + 8.5 }, dir: { x: 0, y: 0, z: 1 }, power: 0.25, yaw: 180 },  // (wall behind him)
+    { at: { x: ox + 12, z: oz }, dir: { x: 1, y: 0, z: 0 }, power: 0.9, yaw: 90 },     // (a blast)
+  ];
+  const men = cases.map((k) => { const v = kitSoldier(1, { x: k.at.x + 0.5, y: Y, z: k.at.z + 0.5 }, "rifle", "hold"); return v; });
+  await kitWait(20);
+  men.forEach((v, i) => { try { v.setRotation({ x: 0, y: cases[i].yaw }); } catch {} });
+  await kitWait(2);
+  const t0 = tick();
+  men.forEach((v, i) => { killHow.set(v.id, { limb: 0, dir: cases[i].dir, power: cases[i].power }); killReal(v); });
+  const trace = [[], [], [], []], peakRag = { n: 0 };
+  let bodies = [];
+  for (let k = 0; k < 120; k++) {
+    await kitWait(1);
+    peakRag.n = Math.max(peakRag.n, RAG.size);
+    bodies = cases.map((cs) => ow().getEntities({ type: "war:corpse", location: { x: cs.at.x + 0.5, y: Y, z: cs.at.z + 0.5 }, maxDistance: 5 })[0]);
+    if (k % 6 === 0) bodies.forEach((b, i) => { try { if (b) trace[i].push(Math.round(b.getProperty("war:fall"))); } catch {} });
+  }
+  return { settledIn: RAG.size === 0, peakRag: peakRag.n, trace: trace.map((t) => t.join(" ")),
+    final: bodies.map((b) => b ? { fall: b.getProperty("war:fall"), yaw: Math.round(b.getRotation().y), arms: [b.getProperty("war:la"), b.getProperty("war:ra")], moved: 0 } : null) };
+};
 // v9.7: a downed man in plain view of the enemy (who hold their fire) next to a wall: does he crawl behind it?
 KS.crawl = async (o, ox, oz) => {
   floorAt(ox - 20, oz - 20, ox + 30, oz + 20);

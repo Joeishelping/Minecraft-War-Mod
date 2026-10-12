@@ -240,14 +240,31 @@
         "gib_lleg": "geometry.war_gib_lleg"
       },
       "animations": {
-        "corpse": "animation.war.corpse"
+        "corpse": "animation.war.corpse",
+        "ragdoll": "animation.war.ragdoll"
       },
       "scripts": {
+        "initialize": [
+          "v.fall = q.property('war:fall'); v.la = 0; v.ra = 0; v.ll = 0; v.rl = 0; v.hd = 0;"
+        ],
         "pre_animation": [
-          "v.spin = q.is_on_ground ? (v.spin ?? 0) : q.life_time * 720;"
+          "v.spin = q.is_on_ground ? (v.spin ?? 0) : q.life_time * 720;",
+          "v.fall = math.abs(q.property('war:fall') - v.fall) > 90 ? q.property('war:fall') : math.lerp(v.fall, q.property('war:fall'), 0.45);",
+          "v.la = math.lerp(v.la, q.property('war:la'), 0.45);",
+          "v.ra = math.lerp(v.ra, q.property('war:ra'), 0.45);",
+          "v.ll = math.lerp(v.ll, q.property('war:ll'), 0.45);",
+          "v.rl = math.lerp(v.rl, q.property('war:rl'), 0.45);",
+          "v.hd = math.lerp(v.hd, q.property('war:hd'), 0.45);",
+          "v.ly = math.abs(math.sin(v.fall));",
+          "v.p = q.property('war:pose');"
         ],
         "animate": [
-          "corpse"
+          {
+            "corpse": "q.property('war:gib')"
+          },
+          {
+            "ragdoll": "!q.property('war:gib')"
+          }
         ]
       },
       "render_controllers": [
