@@ -1,5 +1,62 @@
 # War Engine changelog
 
+## v9.7 (Squad tactics, roles, two new orders, gunfire by distance, tracers, bodies, blood and dismemberment)
+
+Tested on a real Bedrock server. The bounding numbers come from 10 fights per version on the same map: a squad
+ordered down a terrace's stairs to a bridge 40 blocks from six posted riflemen, with pillars and low walls on the
+way.
+
+- **Bounding.**
+  - A squad on the move, in contact and under fire (4+ riflemen, the enemy 14-80 blocks off) first lays 2 s of
+    covering fire from everyone.
+  - Then two teams take turns: one dashes 3-8 blocks to real cover ("Cover me!") while the other stays put and keeps
+    the enemy's heads down. They swap about every 3.5 s until 14 blocks out, then the assault goes in.
+  - A man with no cover to dash to stays and covers. A dashing man pinned in the open may still dive for cover.
+  - The MG and the sniper cover from their own spots.
+  - Result: 8 of 10 won with 4.4 men left on average, against 7 of 10 and 4.0 before.
+- **Falling back by bounds.** Two or more men pulling back with the enemy in sight take turns: half turn and fire
+  for ~3 s while the rest run. A man under 30% health just runs.
+- **Covered routes.** On first contact, anyone still walking a route worked out before the enemy was known
+  re-plans it once, keeping out of the enemy's sight where there's a way.
+- **Pin and flank.**
+  - A squad that's losing, or mostly pinned down for 3 s, calls nearby free squads, who come in from the side.
+  - Fixed: enemies a squad only heard about on the radio counted as "busy with our own fight", so no squad ever
+    came to help.
+- **A grenade up the stairs.** A stack at the foot of the stairs with an enemy known near the top lobs a grenade up
+  first, and goes once it's gone off.
+- **Sniper and MG.**
+  - A sniper moves to a new spot after three shots from the same one.
+  - The MG sets up 10 blocks to the side of its squad, with a line on the enemy, so its fire crosses their front.
+- **The wounded crawl.** A downed man the enemy can see inches (about a third of a block a second) to a spot 2-5
+  blocks away out of their sight. Not while someone is dragging him or a medic is coming.
+- **A sergeant.** One man runs each squad. If he goes down in a fight, the squad hesitates ~5 s (no new plan, no
+  bounding, slower decisions) until the next man takes over ("Follow me!").
+- **Morale.** A squad that wins a fight with hardly a loss is braver and pushes harder for a minute. One that lost
+  half its men is jumpier for a minute.
+- **New orders.**
+  - "Cover the spot I'm looking at": they stay on their order, face that spot, and anything that shows up there
+    comes first (2 minutes).
+  - "Hold fire until I shoot": they hold fire until you fire a gun or bow or hit anyone, then everyone opens up at
+    once.
+- **Gunfire by distance.** Each player hears every shot by distance:
+  - the sharp report within 40 blocks;
+  - the distant one from the right direction out to 120;
+  - a faint, low crack out to 260.
+- **Tracers at night.** Bullet tracers glow orange in the dark.
+- **Bodies.** A soldier who dies leaves a body in his own uniform, lying where he fell. The hit or blast throws it a
+  little, and it slides, falls and gets shoved like anything else. Bodies stay a minute, with never more than 24 at
+  once (the oldest go first), and have no brain, so they cost next to nothing.
+- **Outright kills, blood, dismemberment.**
+  - Not every lethal hit leaves a wounded man. These kill outright:
+    - a rifle or sniper headshot (60%);
+    - a shotgun blast within 5 blocks (35%);
+    - a big explosion (50%);
+    - now and then a burst of MG fire or any other hit.
+  - Blood sprays on every hit.
+  - Rarely a limb comes off: from a grenade or shell (about 1 in 6 of those kills), a sniper's headshot (about 1 in
+    14), or a point-blank shotgun (about 1 in 20). The body is missing it, and it lies a little way off.
+  - War Table -> Settings -> Gore turns the blood and the limbs off. Bodies and outright kills stay either way.
+
 ## v9.6 (Falling back ends when it's safe; smoke over an ordered move)
 
 - **Falling back ends when the danger's gone.** A man pulled back only once his health was over 75%, and alone he

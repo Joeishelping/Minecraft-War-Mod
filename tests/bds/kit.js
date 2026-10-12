@@ -460,6 +460,18 @@ KS.orders2 = async (o, ox, oz) => {
   r.afterFire = men.map((e) => String(gdp(e, "war:stance")));
   return r;
 };
+// v9.7: a forced dismemberment: the body is missing the limb and the limb lies apart
+KS.gib = async (o, ox, oz) => {
+  floorAt(ox - 10, oz - 10, ox + 10, oz + 10);
+  for (const c of ow().getEntities({ type: "war:corpse" })) { try { c.remove(); } catch {} }
+  const v = kitSoldier(1, { x: ox + 0.5, y: Y, z: oz + 0.5 }, "rifle", "hold");
+  await kitWait(20);
+  killHow.set(v.id, { limb: 2, dir: { x: 1, y: 0, z: 0 }, power: 0.4 });
+  killReal(v);
+  await kitWait(40);
+  const cs = ow().getEntities({ type: "war:corpse", location: { x: ox, y: Y, z: oz }, maxDistance: 12 });
+  return { n: cs.length, parts: cs.map((c) => ({ limb: c.getProperty("war:limb"), gib: c.getProperty("war:gib"), d: Math.round(Math.hypot(c.location.x - ox, c.location.z - oz) * 10) / 10 })), soldierGone: !v.isValid };
+};
 KS.trip = async (o, ox, oz) => {
   const N = Number(o.n ?? 8), mode = o.mode ?? "down";
   let start, dest, okFn;
