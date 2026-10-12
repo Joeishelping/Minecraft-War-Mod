@@ -394,6 +394,40 @@ KS.talk = async (o, ox, oz) => {
   r.said = Object.fromEntries(Object.entries(globalThis.__v9 ?? {}).filter(([k]) => k.startsWith("say:")));
   return r;
 };
+// v9.5: wounded men falling back with nobody after them: how long until they go back to their order?
+KS.retreat = async (o, ox, oz) => {
+  floorAt(ox - 20, oz - 20, ox + 20, oz + 20);
+  const men = []; for (let i = 0; i < 3; i++) men.push(kitSoldier(1, { x: ox + 20 + i * 3 + 0.5, y: Y, z: oz + 0.5 }, "rifle", "hold"));
+  await kitWait(40);
+  for (const m of men) { try { m.getComponent("minecraft:health").setCurrentValue(4); sdp(m, "war:retreat", true); sdp(m, "war:hurt", tick() - 400); } catch {} }
+  const t0 = tick(); let back = -1;
+  await kitLoop(2400, () => { if (men.every((m) => !sd(m).retreat)) { back = tick() - t0; return true; } return false; });
+  return { backTicks: back, hp: men.map((m) => Math.round(m.getComponent("minecraft:health").currentValue)) };
+};
+// v9.5: the user's fight: a squad on a high terrace ordered down open stairs to a bridge, the enemy holding beyond it and
+// shooting. Does someone throw smoke over the move, and do they get down and across instead of standing there?
+KS.bridge = async (o, ox, oz) => {
+  floorAt(ox - 20, oz - 30, ox + 80, oz + 30);
+  kfill(ox, Y, oz - 8, ox + 14, Y + 5, oz + 8, "stone");
+  for (let k = 0; k < 6; k++) kfill(ox + 15 + k, Y + 5 - k, oz - 3, ox + 15 + k, Y + 5 - k, oz + 3, STAIR("-x"));
+  setRelPair(1, 2, "1", false);
+  const att = [], def = [];
+  for (let i = 0; i < 6; i++) att.push(kitSoldier(1, { x: ox + 4 + i * 1.6 + 0.5, y: Y + 6, z: oz - 4 + (i % 3) * 4 + 0.5 }, ["rifle", "smg", "semi", "rifle", "mg", "rifle"][i], "hold"));
+  for (let i = 0; i < 6; i++) def.push(kitSoldier(2, { x: ox + 56.5, y: Y, z: oz - 7.5 + i * 3 }, ["rifle", "semi", "rifle", "smg", "rifle", "mg"][i], "post"));
+  await kitWait(140);                                                             // (the firefight gets going)
+  const dest = { x: ox + 42, y: Y, z: oz };
+  await kitOrder(1, dest);
+  const t0 = tick(); let firstDown = -1, allDown = -1, there = -1, maxThere = 0;
+  await kitLoop(Number(o.ticks ?? 1600), () => {
+    const A = att.filter((e) => e.isValid && !isDown(e));
+    const dn = A.filter((e) => e.location.y < Y + 1).length;
+    if (dn && firstDown < 0) firstDown = tick() - t0;
+    if (A.length && dn === A.length && allDown < 0) allDown = tick() - t0;
+    const th = A.filter((e) => flat(e.location, dest) < 9).length; maxThere = Math.max(maxThere, th);
+    if (th >= Math.ceil(A.length / 2) && A.length && there < 0) there = tick() - t0;
+    return false; });
+  return { firstDown, allDown, halfThere: there, maxThere, attLeft: att.filter((e) => e.isValid && !isDown(e)).length, defLeft: def.filter((e) => e.isValid && !isDown(e)).length };
+};
 KS.trip = async (o, ox, oz) => {
   const N = Number(o.n ?? 8), mode = o.mode ?? "down";
   let start, dest, okFn;

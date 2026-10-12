@@ -783,8 +783,11 @@ function think(e) {
     sdp(e, "war:retreat", true);
     if (gdp(e, "war:ordergoal") !== undefined) { setGoal(e, Number(gdp(e, "war:ordergoal"))); sdp(e, "war:ordergoal", undefined); }
     updateName(e);
-  } else if (retreat && hpr > 0.75 && foes <= friends + 1 && now > Number(gdp(e, "war:retreatUntil") ?? 0) &&
-             (hpr >= 0.95 || !nearestFlag(e.dimension, e.location, (f) => !!P(f, "war:rally") && isFriendly(d.faction, Number(P(f, "war:faction"))), 128))) {
+  } else if (retreat && now > Number(gdp(e, "war:retreatUntil") ?? 0) && (
+             (hpr > 0.75 && foes <= friends + 1 && (hpr >= 0.95 || !nearestFlag(e.dimension, e.location, (f) => !!P(f, "war:rally") && isFriendly(d.faction, Number(P(f, "war:faction"))), 128))) ||
+             // v9.5: or simply safe: nobody hostile near, not hit for 15 s, no fight going on for his squad: he goes back to
+             // his order wounded (he heals on the way), instead of hiding for minutes with nobody after him
+             (foes === 0 && now - lastHurt > 300 && !inFight(e, squads.get(squadKey(e, d)), now)))) {
     retreat = false;
     sdp(e, "war:retreat", false);
     const home = Number(gdp(e, "war:home") ?? 0);
@@ -9534,12 +9537,26 @@ function squadSmoke(S, ours, known, now) {
   if (!screenAt && nd >= 8 && nd <= 40 && ours.filter((e) => sd(e).retreat || shaken.has(e.id)).length * 2 > ours.length && look.length) {
     const L = nd; screenAt = { x: oc.x + ((near.x - oc.x) / L) * 5, y: oc.y, z: oc.z + ((near.z - oc.z) / L) * 5 }; why = "covering the pull-back";
   }
+  // v9.5: covering the move: most of the squad is carrying out a fresh order (moving), they're under fire and the enemy is
+  // in sight: one screen between them and the enemy, once per order (they still fight their way forward as before:
+  // committing to the move under the smoke instead of fighting was tested, and lost the fight)
+  if (!screenAt && nd >= 8 && nd <= 45 && look.length) {
+    let t0 = -1;
+    const movers = ours.filter((e) => { const d = sd(e), t = Number(gdp(e, "war:ordt") ?? -99999); if (now - t < 600 && t > (S.moveSmokedFor ?? -1) && (d.func === "charge" || personal.has(e.id))) { t0 = Math.max(t0, t); return true; } return false; });
+    const going = movers.filter((e) => { try { const v = e.getVelocity(); return Math.hypot(v.x, v.z) > 0.06; } catch { return false; } });
+    if (movers.length * 2 > ours.length && going.length * 2 >= movers.length && nd >= 16) {      // (they're actually on the way, and it's open ground ahead)
+      S.moveSmokedFor = t0;
+      const L = nd, k = Math.min(12, nd * 0.45); screenAt = { x: oc.x + ((near.x - oc.x) / L) * k, y: oc.y, z: oc.z + ((near.z - oc.z) / L) * k }; why = "covering the move";   // (ahead of them, on the way: they walk into its cover)
+    }
+  }
   if (!screenAt) return;
   let who, wd = 1e9;
   for (const e of ours) { const d = sd(e); if (!canSmoke(e, d, now) || (S.plan === "fix" && S.flankers?.has(e.id))) continue; const dd = flat(e.location, screenAt); if (dd < wd && dd <= SMOKE.reach) { wd = dd; who = e; } }
   if (!who) return;
   S.smokeT = now;
   throwSmoke(who, screenAt, why);
+  callout(who, "Smoke out!", { event: true });
+  if (why === "covering the move") radio(who, "smoke's out, moving under it", true);
 }
 
 // ---- v9.2: fire into smoke. A man who lost sight of his enemy in the last 4 s, and it's a smoke cloud between them

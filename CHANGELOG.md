@@ -1,5 +1,22 @@
 # War Engine changelog
 
+## v9.6 (Falling back ends when it's safe; smoke over an ordered move)
+
+- **Falling back ends when the danger's gone.** A man pulled back only once his health was over 75%, and alone he
+  heals about 1 point every 17 s, so a badly wounded man hid for minutes with nobody after him. Now he also goes
+  back to his order as soon as it's safe: no enemy within 12 blocks, not hit for 15 s, and no fight going on for his
+  squad. He keeps healing on the way. In the test, men at 5/20 health went back within 2-10 s of it going quiet.
+- **Smoke over an ordered move.** When most of a squad is on its way to an ordered spot across open ground (the
+  enemy 16+ blocks off), under fire, one man throws smoke ahead of them on the way, once per order ("Smoke out!").
+- **What was tried and left out.** Two other versions were tested on a real server, with a squad ordered down a
+  terrace's stairs to a bridge 40 blocks from six posted riflemen:
+  - Making the squad keep walking under the smoke instead of fighting lost every run (0 of 2).
+  - Smoke thrown in front of a squad that was still standing lost every run (0 of 3): the dug-in enemy kept
+    firing into the cloud.
+  - The old behaviour won 3 of 5, and so does this version (3 of 5). The men weren't slow to move: the first one
+    was down the stairs in about 4 s. They stop on the way because they fight the enemy that's shooting at them.
+- Test kit: new real-server scenarios `bridge` and `retreat`.
+
 ## v9.5 (New voice lines: replies, situation callouts, idle back-and-forth, campfire stories)
 
 21 new US English lines, recorded with ElevenLabs in the Luke voice from your workspace (about 860 credits: one take
