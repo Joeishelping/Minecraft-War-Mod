@@ -428,6 +428,37 @@ KS.bridge = async (o, ox, oz) => {
     return false; });
   return { firstDown, allDown, halfThere: there, maxThere, attLeft: att.filter((e) => e.isValid && !isDown(e)).length, defLeft: def.filter((e) => e.isValid && !isDown(e)).length };
 };
+// v9.7: two lines fight it out in the open: bodies, outright kills, limbs, and the bodies go after a minute
+KS.gore = async (o, ox, oz) => {
+  floorAt(ox - 30, oz - 30, ox + 50, oz + 30);
+  for (const c of ow().getEntities({ type: "war:corpse" })) { try { c.remove(); } catch {} }
+  setRelPair(1, 2, "1", false);
+  const W = ["rifle", "sniper", "shotgun", "mg", "rifle", "semi", "smg", "rifle"];
+  for (let i = 0; i < 8; i++) { kitSoldier(1, { x: ox + 0.5, y: Y, z: oz - 10 + i * 3 + 0.5 }, W[i], "hold"); kitSoldier(2, { x: ox + 22.5, y: Y, z: oz - 10 + i * 3 + 0.5 }, W[(i + 3) % 8], "hold"); }
+  await kitLoop(Number(o.ticks ?? 1600), () => kitSoldiers(1).filter((e) => !isDown(e)).length === 0 || kitSoldiers(2).filter((e) => !isDown(e)).length === 0);
+  const cs = ow().getEntities({ type: "war:corpse" });
+  const r = { corpses: cs.length, gibs: cs.filter((c) => c.getProperty("war:gib")).length, limbless: cs.filter((c) => !c.getProperty("war:gib") && c.getProperty("war:limb") > 0).length, skins: [...new Set(cs.map((c) => c.getProperty("war:faction")))] };
+  await kitWait(1260);
+  r.corpsesAfterMinute = ow().getEntities({ type: "war:corpse" }).length;
+  return r;
+};
+// v9.7: the two new orders: Cover the spot (they face it) and Hold fire until I shoot (stance back when you fire)
+KS.orders2 = async (o, ox, oz) => {
+  floorAt(ox - 20, oz - 20, ox + 30, oz + 20);
+  const men = []; for (let i = 0; i < 3; i++) men.push(kitSoldier(1, { x: ox + 20 + i * 2 + 0.5, y: Y, z: oz + 0.5 }, "rifle", "hold"));
+  await kitWait(40);
+  const base = { faction: 1, squad: 0, count: 0, radius: 200, stance: "aggressive", ao: 100, free: true, target: 5, cx: ox, cz: oz, cy: Y };
+  await giveOrderInner(KIT_PLAYER, { ...base, order: ORDERS.findIndex((q) => q[0] === "cover") });
+  await kitWait(60);
+  const r = { covering: men.filter((e) => coverWatch.has(e.id)).length, cone: men.filter((e) => hornCone.has(e.id)).length };
+  await giveOrderInner(KIT_PLAYER, { ...base, order: ORDERS.findIndex((q) => q[0] === "waitfire") });
+  await kitWait(10);
+  r.holding = men.filter((e) => String(gdp(e, "war:stance")) === "holdfire").length;
+  openFireFor(KIT_PLAYER.id);
+  await kitWait(5);
+  r.afterFire = men.map((e) => String(gdp(e, "war:stance")));
+  return r;
+};
 KS.trip = async (o, ox, oz) => {
   const N = Number(o.n ?? 8), mode = o.mode ?? "down";
   let start, dest, okFn;

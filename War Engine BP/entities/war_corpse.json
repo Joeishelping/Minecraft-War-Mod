@@ -1,0 +1,89 @@
+{
+  "format_version": "1.21.50",
+  "minecraft:entity": {
+    "description": {
+      "identifier": "war:corpse",
+      "is_spawnable": false,
+      "is_summonable": true,
+      "properties": {
+        "war:faction": {
+          "type": "int",
+          "range": [
+            0,
+            40
+          ],
+          "default": 0,
+          "client_sync": true
+        },
+        "war:skin": {
+          "type": "int",
+          "range": [
+            0,
+            64
+          ],
+          "default": 0,
+          "client_sync": true
+        },
+        "war:medic": {
+          "type": "bool",
+          "default": false,
+          "client_sync": true
+        },
+        "war:limb": {
+          "type": "int",
+          "range": [
+            0,
+            5
+          ],
+          "default": 0,
+          "client_sync": true
+        },
+        "war:gib": {
+          "type": "bool",
+          "default": false,
+          "client_sync": true
+        }
+      }
+    },
+    "components": {
+      "minecraft:type_family": {
+        "family": [
+          "war_corpse",
+          "inanimate"
+        ]
+      },
+      "minecraft:collision_box": {
+        "width": 0.7,
+        "height": 0.35
+      },
+      "minecraft:health": {
+        "value": 100,
+        "max": 100
+      },
+      "minecraft:damage_sensor": {
+        "triggers": [
+          {
+            "cause": "all",
+            "deals_damage": "no"
+          }
+        ]
+      },
+      "minecraft:physics": {},
+      "minecraft:pushable": {
+        "is_pushable": true,
+        "is_pushable_by_piston": true
+      },
+      "minecraft:knockback_resistance": {
+        "value": 0.0
+      },
+      "minecraft:movement": {
+        "value": 0.0
+      },
+      "minecraft:conditional_bandwidth_optimization": {},
+      "minecraft:nameable": {
+        "always_show": false,
+        "allow_name_tag_renaming": false
+      }
+    }
+  }
+}
