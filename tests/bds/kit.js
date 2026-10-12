@@ -511,31 +511,41 @@ KS.bodyhit = async (o, ox, oz) => {
 // v9.10: ragdoll deaths: shot from the front he goes over backwards, from behind onto his face, a blast throws and
 // somersaults him; with a wall behind him he falls another way; every body ends flat and still within a few seconds
 KS.ragdoll = async (o, ox, oz) => {
+  floorAt(ox - 15, oz - 15, ox + 25, oz + 15);
+  for (const c of ow().getEntities({ type: "war:corpse" })) { try { c.remove(); } catch {} }
+  kfill(ox + 4, Y, oz - 1, ox + 4, Y + 1, oz + 1, "stone_bricks");                     // (low cover: the second man folds over it)
+  kfill(ox + 12, Y, oz - 3, ox + 16, Y, oz + 3, "stone_bricks"); kfill(ox + 13, Y + 1, oz - 3, ox + 16, Y + 1, oz + 3, "stone_bricks");   // (a step down for the third)
+  const cases = [
+    { at: { x: ox - 6, z: oz }, dir: { x: 0, y: 0, z: 1 }, power: 0.25 },
+    { at: { x: ox + 3, z: oz }, dir: { x: 1, y: 0, z: 0 }, power: 0.3 },
+    { at: { x: ox + 13, z: oz }, dir: { x: -1, y: 0, z: 0 }, power: 0.3, y: 2 },
+    { at: { x: ox + 20, z: oz }, dir: { x: 1, y: 0, z: 0 }, power: 0.9, mask: 1 | 2 | 16 },
+  ];
+  const men = cases.map((k) => kitSoldier(1, { x: k.at.x + 0.5, y: Y + (k.y ?? 0), z: k.at.z + 0.5 }, "rifle", "hold"));
+  await kitWait(20);
+  men.forEach((v, i) => { const k = cases[i]; killHow.set(v.id, { limb: k.mask ? 1 : 0, mask: k.mask, dir: k.dir, power: k.power }); killReal(v); });
+  let peak = 0, firstStill = -1;
+  for (let k = 0; k < 120; k++) { await kitWait(1); const act = [...RD.values()].filter((q) => q.act).length; peak = Math.max(peak, act); if (act === 0 && firstStill < 0) firstStill = k; }
+  const all = ow().getEntities({ type: "war:corpse", location: { x: ox + 5, y: Y, z: oz }, maxDistance: 30 });
+  const rep = all.map((c) => ({ gib: c.getProperty("war:gib"), limb: c.getProperty("war:limb"), x: Math.round((c.location.x - ox) * 10) / 10, y: Math.round((c.location.y - Y) * 100) / 100, tb: c.getProperty("war:tb"), sim: RD.has(c.id) }));
+  // a grenade among the bodies wakes them
+  const b0 = all.find((c) => !c.getProperty("war:gib") && Math.abs(c.location.x - (ox - 5.5)) < 2), p0 = b0 ? { ...b0.location } : undefined;
+  explode(ow(), { x: ox - 6.5, y: Y + 0.5, z: oz + (p0 ? p0.z - oz : 0) - 1 }, 3, { breaksBlocks: false });
+  await kitWait(60);
+  const nb = p0 && ow().getEntities({ type: "war:corpse", location: p0, maxDistance: 10 }).filter((c) => !c.getProperty("war:gib"))[0];
+  const after = nb ? { moved: Math.round(Math.hypot(nb.location.x - p0.x, nb.location.z - p0.z) * 10) / 10, sameEntity: nb.id === b0.id, tracked: RD.has(nb.id) } : "gone";
+  return { peakActive: peak, allStillAfterTicks: firstStill, bodies: rep, blastMoved: after };
+};
+// v9.11: 20 men killed in the same instant: how long does the ragdoll work take per tick?
+KS.ragperf = async (o, ox, oz) => {
   floorAt(ox - 15, oz - 15, ox + 15, oz + 15);
   for (const c of ow().getEntities({ type: "war:corpse" })) { try { c.remove(); } catch {} }
-  kfill(ox - 6, Y, oz + 9, ox + 6, Y + 2, oz + 9, "stone_bricks");                    // (a wall right behind the third man)
-  const cases = [
-    { at: { x: ox - 6, z: oz }, dir: { x: 0, y: 0, z: 1 }, power: 0.25, yaw: 180 },    // (faces -z, hit from -z side: travels +z = from the front)
-    { at: { x: ox, z: oz }, dir: { x: 0, y: 0, z: 1 }, power: 0.25, yaw: 0 },          // (faces +z, hit from behind)
-    { at: { x: ox + 6, z: oz + 8.5 }, dir: { x: 0, y: 0, z: 1 }, power: 0.25, yaw: 180 },  // (wall behind him)
-    { at: { x: ox + 12, z: oz }, dir: { x: 1, y: 0, z: 0 }, power: 0.9, yaw: 90 },     // (a blast)
-  ];
-  const men = cases.map((k) => { const v = kitSoldier(1, { x: k.at.x + 0.5, y: Y, z: k.at.z + 0.5 }, "rifle", "hold"); return v; });
+  const men = []; for (let i = 0; i < 20; i++) men.push(kitSoldier(1, { x: ox - 8 + (i % 5) * 4 + 0.5, y: Y, z: oz - 8 + Math.floor(i / 5) * 4 + 0.5 }, "rifle", "hold"));
   await kitWait(20);
-  men.forEach((v, i) => { try { v.setRotation({ x: 0, y: cases[i].yaw }); } catch {} });
-  await kitWait(2);
-  const t0 = tick();
-  men.forEach((v, i) => { killHow.set(v.id, { limb: 0, dir: cases[i].dir, power: cases[i].power }); killReal(v); });
-  const trace = [[], [], [], []], peakRag = { n: 0 };
-  let bodies = [];
-  for (let k = 0; k < 120; k++) {
-    await kitWait(1);
-    peakRag.n = Math.max(peakRag.n, RAG.size);
-    bodies = cases.map((cs) => ow().getEntities({ type: "war:corpse", location: { x: cs.at.x + 0.5, y: Y, z: cs.at.z + 0.5 }, maxDistance: 5 })[0]);
-    if (k % 6 === 0) bodies.forEach((b, i) => { try { if (b) trace[i].push(Math.round(b.getProperty("war:fall"))); } catch {} });
-  }
-  return { settledIn: RAG.size === 0, peakRag: peakRag.n, trace: trace.map((t) => t.join(" ")),
-    final: bodies.map((b) => b ? { fall: b.getProperty("war:fall"), yaw: Math.round(b.getRotation().y), arms: [b.getProperty("war:la"), b.getProperty("war:ra")], moved: 0 } : null) };
+  globalThis.__rdMs = 0;
+  men.forEach((v, i) => { killHow.set(v.id, { limb: 0, mask: i % 4 === 0 ? 2 : 0, dir: { x: 1, y: 0, z: 0 }, power: i % 3 === 0 ? 0.9 : 0.3 }); killReal(v); });
+  let peak = 0; for (let k = 0; k < 100; k++) { await kitWait(1); peak = Math.max(peak, [...RD.values()].filter((q) => q.act).length); }
+  return { worstTickMs: globalThis.__rdMs, peakActive: peak, tracked: RD.size, stillActive: [...RD.values()].filter((q) => q.act).length };
 };
 // v9.7: a downed man in plain view of the enemy (who hold their fire) next to a wall: does he crawl behind it?
 KS.crawl = async (o, ox, oz) => {

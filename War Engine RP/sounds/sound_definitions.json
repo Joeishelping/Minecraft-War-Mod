@@ -4605,6 +4605,18 @@
           "volume": 1.0
         }
       ]
+    },
+    "war.gibs": {
+      "category": "neutral",
+      "min_distance": 2.0,
+      "max_distance": 24.0,
+      "sounds": [
+        {
+          "name": "sounds/war_gibs",
+          "volume": 0.9,
+          "load_on_low_memory": true
+        }
+      ]
     }
   }
 }

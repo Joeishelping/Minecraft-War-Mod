@@ -328,54 +328,117 @@
         }
       }
     },
-    "animation.war.ragdoll": {
+    "animation.war.rag": {
       "loop": true,
       "bones": {
-        "root": {
+        "t_a": {
           "rotation": [
-            "v.fall",
             0,
-            0
-          ],
-          "position": [
-            0,
-            "v.ly * 2",
+            "v.ta",
             0
           ]
         },
-        "head": {
+        "t_b": {
           "rotation": [
-            "v.hd",
+            "v.tb",
             0,
             0
           ]
         },
-        "rightArm": {
+        "t_g": {
           "rotation": [
-            "v.ra",
             0,
-            "(10 + math.mod(v.p, 4) * 16) * v.ly"
+            "v.tg",
+            0
           ]
         },
-        "leftArm": {
+        "h_a": {
           "rotation": [
-            "v.la",
             0,
-            "-(10 + math.mod(math.floor(v.p / 4), 4) * 16) * v.ly"
+            "v.ha",
+            0
           ]
         },
-        "rightLeg": {
+        "h_b": {
           "rotation": [
-            "v.rl",
+            "v.hb",
             0,
-            "(3 + math.mod(v.p, 3) * 7) * v.ly"
+            0
           ]
         },
-        "leftLeg": {
+        "ra_a": {
           "rotation": [
-            "v.ll",
             0,
-            "-(3 + math.mod(v.p, 5) * 5) * v.ly"
+            "v.raa",
+            0
+          ]
+        },
+        "ra_b": {
+          "rotation": [
+            "v.rab",
+            0,
+            0
+          ]
+        },
+        "la_a": {
+          "rotation": [
+            0,
+            "v.laa",
+            0
+          ]
+        },
+        "la_b": {
+          "rotation": [
+            "v.lab",
+            0,
+            0
+          ]
+        },
+        "rl_a": {
+          "rotation": [
+            0,
+            "v.rla",
+            0
+          ]
+        },
+        "rl_b": {
+          "rotation": [
+            "v.rlb",
+            0,
+            0
+          ]
+        },
+        "ll_a": {
+          "rotation": [
+            0,
+            "v.lla",
+            0
+          ]
+        },
+        "ll_b": {
+          "rotation": [
+            "v.llb",
+            0,
+            0
+          ]
+        }
+      }
+    },
+    "animation.war.gib2": {
+      "loop": true,
+      "bones": {
+        "g_a": {
+          "rotation": [
+            0,
+            "v.ga",
+            0
+          ]
+        },
+        "g_b": {
+          "rotation": [
+            "v.gb",
+            0,
+            0
           ]
         }
       }

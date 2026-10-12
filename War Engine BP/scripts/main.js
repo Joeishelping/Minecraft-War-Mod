@@ -1,5 +1,5 @@
 // War Engine v7.1: faction NPC war framework
-import { world, system, Player, ItemStack, EquipmentSlot, GameMode } from "@minecraft/server";
+import { world, system, Player, ItemStack, EquipmentSlot, GameMode, MolangVariableMap } from "@minecraft/server";
 import { ActionFormData, ModalFormData, FormCancelationReason } from "@minecraft/server-ui";
 import { SKINS } from "./skins.js";
 import { WarAPI } from "./api.js";
@@ -1370,11 +1370,12 @@ function oneShot(v, ev, cause) {
     const c = { x: v.location.x, y: v.location.y + 0.9, z: v.location.z };
     let b, bd = 1e9; for (const q of BLASTS) { if (q.dim !== v.dimension.id || now - q.t > 3) continue; const dd = dist(q.at, c); if (dd < bd) { bd = dd; b = q; } }
     const pw = b?.power ?? 3, dd = b ? bd : ev.damage >= 12 ? 1 : 4, dir = b ? away(b.at) : src?.isValid ? away(src.location) : undefined;
-    if (dd <= pw * 0.75 || over >= 8) how = { limb: Math.random() < (dd <= pw * 0.45 ? 0.55 : 0.25) ? LIMB_ANY() : 0, dir, power: 0.45 + 0.2 * Math.max(0, pw * 1.2 - dd) };
+    if (dd <= pw * 0.75 || over >= 8) { how = { limb: Math.random() < (dd <= pw * 0.45 ? 0.55 : 0.25) ? LIMB_ANY() : 0, dir, power: 0.45 + 0.2 * Math.max(0, pw * 1.2 - dd) };
+      if (how.limb && dd <= pw * 0.3) { how.mask = 1 << (how.limb - 1); for (let k = 0; k < 2; k++) if (Math.random() < 0.6) how.mask |= 1 << (LIMB_ANY() - 1); } }
     else if (dd <= pw * 1.3 && Math.random() < 0.5) how = { limb: 0, dir, power: 0.35 };
   } else {
     const dir = fresh ? lh.dir : src?.isValid ? away(src.location) : undefined;
-    if (fresh && lh.head && ["sniper", "rifle", "semi"].includes(lh.weapon)) { if (Math.random() < 0.75) how = { limb: over >= 4 && Math.random() < (lh.weapon === "sniper" ? 0.35 : over >= 8 ? 0.12 : 0) ? 1 : 0, dir, power: 0.25 }; }
+    if (fresh && lh.head && ["sniper", "rifle", "semi"].includes(lh.weapon)) { if (Math.random() < 0.75) how = { head: true, limb: over >= 4 && Math.random() < (lh.weapon === "sniper" ? 0.35 : over >= 8 ? 0.12 : 0) ? 1 : 0, dir, power: 0.25 }; }
     else if (fresh && lh.weapon === "shotgun" && lh.dd < 6 && over >= 2) how = { limb: Math.random() < 0.2 ? LIMB_ARMLEG() : 0, dir, power: 0.55 };
     else if (over >= 4) { if (Math.random() < 0.8) how = { limb: over >= 6 && Math.random() < 0.12 ? LIMB_ARMLEG() : 0, dir, power: Math.min(0.5, 0.2 + over * 0.03) }; }
     else if (cause === "fall" && ev.damage >= 10) how = { limb: 0, power: 0.05 };
@@ -1384,92 +1385,204 @@ function oneShot(v, ev, cause) {
   killHow.set(v.id, how); v9stat(how.limb ? "dismember" : "oneShot");
   return true;
 }
+// v9.11: real ragdolls. A dead man is a jointed body of 9 points (hips, shoulders, head, hands, feet) held together
+// by bones: gravity, the shot that killed him, a blast, the ground and walls do the rest. He crumples, tumbles down
+// stairs, flops over ledges, folds over cover. The points drive one body model (torso, head, two arms, two legs, each
+// on its own joint), so nothing comes apart unless it's meant to: a limb or the head torn off is its own tumbling
+// piece. Each body runs only while it moves (a second or two) and then sleeps; a later blast wakes it again.
+const RD = new Map();                      // entity id -> sim { c, pts, cons, gib, act, still, t, sent, ... }
+const RD_ACTIVE_MAX = 10;
+const RD_G = 0.075;
+const V3 = (x, y, z) => ({ x, y, z });
+const vadd = (a, b) => V3(a.x + b.x, a.y + b.y, a.z + b.z), vsub = (a, b) => V3(a.x - b.x, a.y - b.y, a.z - b.z), vmul = (a, k) => V3(a.x * k, a.y * k, a.z * k);
+const vdot = (a, b) => a.x * b.x + a.y * b.y + a.z * b.z, vcross = (a, b) => V3(a.y * b.z - a.z * b.y, a.z * b.x - a.x * b.z, a.x * b.y - a.y * b.x);
+const vlen = (a) => Math.hypot(a.x, a.y, a.z), vnorm = (a) => { const L = vlen(a) || 1; return V3(a.x / L, a.y / L, a.z / L); };
+const DEG = 180 / Math.PI, clamp1 = (x) => Math.max(-1, Math.min(1, x));
+const RD_F0 = V3(0, 0, 1), RD_R0 = V3(-1, 0, 0), RD_U0 = V3(0, 1, 0);      // (the body model's own front / right / up: entity yaw 0)
+// points: 0 left hip, 1 right hip, 2 left shoulder, 3 right shoulder, 4 head, 5 right hand, 6 left hand, 7 right foot, 8 left foot
+// rest offsets from the middle of the hips, in blocks, as [right, up, front]
+const RD_REST = [[-1.9 / 16, 0, 0], [1.9 / 16, 0, 0], [-5 / 16, 10 / 16, 0], [5 / 16, 10 / 16, 0], [0, 16 / 16, 0], [5 / 16, 0, 0], [-5 / 16, 0, 0], [1.9 / 16, -12 / 16, 0], [-1.9 / 16, -12 / 16, 0]];
+const RD_RAD = [0.13, 0.13, 0.13, 0.13, 0.25, 0.12, 0.12, 0.12, 0.12];
+const RD_MASS = [1.4, 1.4, 1.2, 1.2, 0.8, 0.45, 0.45, 0.6, 0.6];
+const RD_LIMB = { 1: [4], 2: [5], 3: [6], 4: [7], 5: [8] };   // limb -> its end point (head, right arm, left arm, right leg, left leg)
+const RD_BODY_PROPS = ["war:ta", "war:tb", "war:tg", "war:ha", "war:hb", "war:raa", "war:rab", "war:laa", "war:lab", "war:rla", "war:rlb", "war:lla", "war:llb"];
+const hardAt = (dim, l) => { try { const b = dim.getBlock(l); return !!b && !b.isLiquid && !passable(b); } catch { return false; } };
+const rdSolid = (s, x, y, z) => {
+  const bx = Math.floor(x), by = Math.floor(y), bz = Math.floor(z), k = bx + "," + by + "," + bz;
+  let v = s.cells.get(k);
+  if (v === undefined) { v = hardAt(s.dim, { x: bx + 0.5, y: by + 0.5, z: bz + 0.5 }); s.cells.set(k, v); }
+  return v;
+};
+function rdCons(lying, mask) {
+  const P = RD_REST.map(([r, u, f]) => V3(r, u, f)), d = (i, j) => vlen(vsub(P[i], P[j]));
+  const cs = [], rig = (i, j) => cs.push([i, j, d(i, j), d(i, j)]), rng = (i, j, lo, hi) => cs.push([i, j, lo, hi]);
+  for (const [i, j] of [[0, 1], [0, 2], [0, 3], [1, 2], [1, 3], [2, 3]]) rig(i, j);                   // (the torso: one rigid piece)
+  if (!(mask & 1)) { rig(4, 2); rig(4, 3); rng(4, 0, d(4, 0) * 0.86, d(4, 0)); rng(4, 1, d(4, 1) * 0.86, d(4, 1)); }   // (the neck: a nod, no more)
+  if (!(mask & 2)) { rig(3, 5); rng(5, 2, 0.42, 9); rng(5, 1, 0.2, 9); }
+  if (!(mask & 4)) { rig(2, 6); rng(6, 3, 0.42, 9); rng(6, 0, 0.2, 9); }
+  if (!(mask & 8)) { rig(1, 7); rng(7, 3, 0.98, 9); rng(7, 2, 1.0, 9); }                               // (a leg folds up to a right angle, not over his chest)
+  if (!(mask & 16)) { rig(0, 8); rng(8, 2, 0.98, 9); rng(8, 3, 1.0, 9); }
+  if (!(mask & 24)) rng(7, 8, 0.14, 9);
+  return cs;
+}
+function rdFrame(p) {
+  const hc = vmul(vadd(p[0], p[1]), 0.5), sc = vmul(vadd(p[2], p[3]), 0.5);
+  const U = vnorm(vsub(sc, hc)); let R = vsub(p[3], p[2]); R = vnorm(vsub(R, vmul(U, vdot(R, U))));
+  return { hc, U, R, F: vcross(U, R) };
+}
+// the angles that turn the model's bones to match the points: torso Y-X-Y (t_a, t_b, t_g); a limb Y then X from hanging down;
+// the head Y then X from pointing up. (Bone X turns his top toward his front, bone Y turns his front toward his right.)
+function rdTorsoAngles(fr) {
+  const uF = vdot(fr.U, RD_F0), uR = vdot(fr.U, RD_R0), uU = vdot(fr.U, RD_U0);
+  const b = Math.acos(clamp1(uU)), a = Math.sin(b) < 1e-3 ? 0 : Math.atan2(uR, uF);
+  const Fp = vsub(vmul(vadd(vmul(RD_F0, Math.cos(a)), vmul(RD_R0, Math.sin(a))), Math.cos(b)), vmul(RD_U0, Math.sin(b)));
+  const Rp = vsub(vmul(RD_R0, Math.cos(a)), vmul(RD_F0, Math.sin(a)));
+  return [a * DEG, b * DEG, Math.atan2(vdot(fr.F, Rp), vdot(fr.F, Fp)) * DEG];
+}
+function rdLimbAngles(F, R, U, d, up, prevA) {
+  const dF = vdot(d, F), dR = vdot(d, R), dU = vdot(d, U), s = up ? 1 : -1;
+  const b = Math.acos(clamp1(s * dU));
+  return [Math.sin(b) < 0.03 ? (prevA ?? 0) : Math.atan2(s * dR, s * dF) * DEG, b * DEG];
+}
+function rdAngles(s) {
+  const p = s.pts.map((q) => q.p);
+  if (s.gib) {
+    const d = vnorm(vsub(p[1], p[0]));
+    return rdLimbAngles(RD_F0, RD_R0, RD_U0, d, s.gib === 1, s.sent[0]);
+  }
+  const fr = rdFrame(p), out = rdTorsoAngles(fr);
+  const J = (r, u) => vadd(fr.hc, vadd(vmul(fr.R, r), vmul(fr.U, u)));                    // (the joints where the model has them)
+  const lim = [[J(0, 12 / 16), p[4], true], [J(5 / 16, 10 / 16), p[5], false], [J(-5 / 16, 10 / 16), p[6], false], [J(1.9 / 16, 0), p[7], false], [J(-1.9 / 16, 0), p[8], false]];
+  lim.forEach(([from, to, up], i) => { const [a, b] = rdLimbAngles(fr.F, fr.R, fr.U, vnorm(vsub(to, from)), up, s.sent[3 + i * 2]); out.push(a, b); });
+  return out;
+}
+function rdStep(s) {
+  for (let i = 0; i < s.pts.length; i++) {
+    const q = s.pts[i], r = s.rad[i];
+    let vx = (q.p.x - q.o.x) * 0.99, vy = (q.p.y - q.o.y) * 0.99 - RD_G, vz = (q.p.z - q.o.z) * 0.99;
+    let x = q.p.x, y = q.p.y, z = q.p.z, ground = false;
+    if (vy < 0 && rdSolid(s, x, y + vy - r, z)) { y = Math.floor(y + vy - r) + 1 + r; vy = vy < -0.2 ? -vy * 0.15 : 0; ground = true; }
+    else if (vy > 0 && rdSolid(s, x, y + vy + r, z)) { vy = -vy * 0.2; }
+    else y += vy;
+    if (vx && rdSolid(s, x + vx + Math.sign(vx) * r, y, z)) vx = -vx * 0.2; else x += vx;
+    if (vz && rdSolid(s, x, y, z + vz + Math.sign(vz) * r)) vz = -vz * 0.2; else z += vz;
+    if (ground || rdSolid(s, x, y - r - 0.03, z)) { vx *= 0.55; vz *= 0.55; }                   // (dragging on the ground)
+    q.o = V3(x - vx, y - vy, z - vz); q.p = V3(x, y, z);
+  }
+  for (let it = 0; it < 6; it++) for (const [i, j, lo, hi] of s.cons) {
+    const a = s.pts[i], b = s.pts[j], dv = vsub(b.p, a.p), L = vlen(dv) || 1e-6;
+    const t = L < lo ? lo : L > hi ? hi : L; if (t === L) continue;
+    const wa = 1 / s.mass[i], wb = 1 / s.mass[j], k = (L - t) / L / (wa + wb);
+    a.p = vadd(a.p, vmul(dv, k * wa)); b.p = vsub(b.p, vmul(dv, k * wb));
+  }
+  let mv = 0;
+  for (let i = 0; i < s.pts.length; i++) {                                                         // (nothing ends up inside a block)
+    const q = s.pts[i], r = s.rad[i];
+    if (rdSolid(s, q.p.x, q.p.y - r, q.p.z) && !rdSolid(s, q.p.x, q.p.y - r + 1, q.p.z)) { const ny = Math.floor(q.p.y - r) + 1 + r; q.o = V3(q.o.x, q.o.y + (ny - q.p.y), q.o.z); q.p = V3(q.p.x, ny, q.p.z); }
+    mv = Math.max(mv, vlen(vsub(q.p, q.o)));
+  }
+  s.t++; s.still = mv < 0.006 ? s.still + 1 : 0;
+  return s.still >= 8 || s.t >= 160;
+}
+function rdRender(s, final) {
+  const c = s.c; if (!c?.isValid) return;
+  const p = s.pts.map((q) => q.p);
+  const at = s.gib ? vmul(vadd(p[0], p[1]), 0.5) : vmul(vadd(p[0], p[1]), 0.5);
+  try { c.teleport(at, { rotation: { x: 0, y: 0 } }); } catch {}
+  const ang = rdAngles(s), keys = s.gib ? ["war:ga", "war:gb"] : RD_BODY_PROPS;
+  ang.forEach((v, i) => { const val = Math.round(v * 10) / 10; if (final || s.sent[i] === undefined || Math.abs(val - s.sent[i]) >= 0.6) { try { c.setProperty(keys[i], Math.max(-180, Math.min(180, val))); s.sent[i] = val; } catch {} } });
+  if (s.squirt && s.t < 50 && s.t % 4 === 0 && gore()) {                                            // (a stump keeps pumping for a while)
+    const from = s.gib ? p[0] : s.squirt.map((i) => p[i]).reduce((a, b) => vadd(a, vmul(b, 1 / s.squirt.length)), V3(0, 0, 0));
+    sprayBlood(s.dim, from, 0);
+  }
+}
+// a new body (or a torn-off piece) from where the man stood
+function rdStart(c, gibIdx, pts, vel, mask, squirt) {
+  const s = { c, dim: c.dimension, gib: gibIdx, cells: new Map(), t: 0, still: 0, sent: [], squirt,
+    pts: pts.map((p, i) => ({ p, o: vsub(p, vel[i]) })) };
+  if (gibIdx) { const L = vlen(vsub(pts[1], pts[0])); s.cons = [[0, 1, L, L]]; s.rad = [0.12, 0.12]; s.mass = [1, 1]; }
+  else { s.cons = rdCons(false, mask); s.rad = RD_RAD; s.mass = RD_MASS; }
+  RD.set(c.id, s); s.act = true;
+  const actives = [...RD.values()].filter((q) => q.act).length;
+  if (actives > RD_ACTIVE_MAX) { for (let i = 0; i < 160; i++) if (rdStep(s)) break; s.act = false; rdRender(s, true); }   // (too many falling at once: this one falls in one go)
+  else rdRender(s, true);
+  return s;
+}
+system.runInterval(() => {
+  if (!RD.size) return;
+  const t0 = Date.now();
+  for (const [id, s] of RD) {
+    try {
+      if (!s.c?.isValid) { RD.delete(id); continue; }
+      if (!s.act) continue;
+      const done = rdStep(s);
+      rdRender(s, done);
+      if (done) { s.act = false; s.cells.clear(); }
+    } catch (err) { RD.delete(id); oops("ragdoll", err); }
+  }
+  const ms = Date.now() - t0; if (ms > (globalThis.__rdMs ?? 0)) globalThis.__rdMs = ms;
+}, 1);
+function rdBlast(dim, at, power) {                                                                 // (a blast throws the dead too)
+  for (const s of RD.values()) {
+    if (s.dim.id !== dim.id) continue;
+    for (const q of s.pts) {
+      const dv = vsub(q.p, at), L = vlen(dv); if (L > power * 2.2) continue;
+      const k = Math.min(0.9, (power * 2.2 - L) * 0.16), n = vnorm(V3(dv.x, Math.max(0.3, dv.y + 0.4), dv.z));
+      q.o = vsub(q.o, vmul(n, k * (0.8 + Math.random() * 0.4)));
+      s.act = true; s.still = 0; s.t = Math.min(s.t, 60);
+    }
+  }
+}
+// blood: a spray of drops that fly, land and leave splats on the ground (crit: a big burst)
+function sprayBlood(dim, at, crit) {
+  if (!gore()) return;
+  try { const m = new MolangVariableMap(); m.setFloat("variable.crit", crit ? 1 : 0); dim.spawnParticle("war:bspray", at, m); } catch { try { dim.spawnParticle("war:bspray", at); } catch {} }
+}
 function spawnCorpse(v, how) {
   const dim = v.dimension, l = v.location, now = tick();
   const f = Number(P(v, "war:faction") ?? 0), sk = Number(P(v, "war:skin") ?? 0), med = !!P(v, "war:medic"), yaw = (() => { try { return v.getRotation().y; } catch { return 0; } })();
-  const make = (at, gib) => {
+  const mask = gore() ? (how?.mask ?? (how?.limb ? 1 << (how.limb - 1) : 0)) : 0;
+  const make = (at, gibIdx) => {
     const c = dim.spawnEntity("war:corpse", at);
-    try { c.setProperty("war:faction", Math.max(0, Math.min(40, f))); c.setProperty("war:skin", Math.max(0, Math.min(64, sk))); c.setProperty("war:medic", med); if (how?.limb) c.setProperty("war:limb", how.limb); if (gib) c.setProperty("war:gib", true); c.setRotation({ x: 0, y: yaw }); } catch {}
+    try { c.setProperty("war:faction", Math.max(0, Math.min(40, f))); c.setProperty("war:skin", Math.max(0, Math.min(64, sk))); c.setProperty("war:medic", med); if (gibIdx) { c.setProperty("war:gib", true); c.setProperty("war:limb", gibIdx); } else c.setProperty("war:limb", mask); c.setRotation({ x: 0, y: 0 }); } catch {}
     CORPSES.push({ id: c.id, t: now });
     return c;
   };
-  const dir = how?.dir ?? (() => { const a = Math.random() * Math.PI * 2; return { x: Math.cos(a), y: 0, z: Math.sin(a) }; })(), pw = how?.power ?? 0.15;
-  const body = make({ x: l.x, y: l.y + 0.1, z: l.z }, false);
-  try { body.applyImpulse({ x: dir.x * pw, y: 0.12 + pw * 0.3, z: dir.z * pw }); } catch {}
-  ragdoll(body, how, !!how?.lying);
-  if (how?.limb) {
-    const g = make({ x: l.x, y: l.y + 0.8, z: l.z }, true), a = Math.random() * Math.PI * 2;
-    try { g.applyImpulse({ x: dir.x * pw * 1.4 + Math.cos(a) * 0.25, y: 0.35, z: dir.z * pw * 1.4 + Math.sin(a) * 0.25 }); } catch {}
+  // where his joints are now: standing (or lying, if he was already down), facing where he faced
+  const Fs = V3(-Math.sin(yaw / DEG), 0, Math.cos(yaw / DEG)), Us = V3(0, 1, 0), Rs = vcross(Fs, Us);
+  let F = Fs, U = Us, R = Rs, hc = V3(l.x, l.y + 0.76, l.z);
+  if (how?.lying) { U = vmul(Fs, -1); F = Us; hc = vadd(V3(l.x, l.y + 0.14, l.z), vmul(Fs, -0.75)); }
+  const pts = RD_REST.map(([r, u, fw]) => vadd(hc, vadd(vmul(R, r), vadd(vmul(U, u), vmul(F, fw)))));
+  // how the blow moves each part: a round pushes the upper body most (he folds), a headshot snaps the head, a blast throws everything
+  const dir = how?.dir ?? vmul(Fs, -1), pw = how?.power ?? 0.15, blast = pw >= 0.45;
+  const base = blast ? 0.12 + pw * 0.22 : 0.06 + pw * 0.22, share = [0.6, 0.6, 1.25, 1.25, 1.5, 1.3, 1.3, 0.15, 0.15];
+  const vel = pts.map((p, i) => {
+    let v0 = vmul(V3(dir.x, 0, dir.z), base * (blast ? 1 : share[i]));
+    if (blast) v0 = vadd(v0, V3((Math.random() - 0.5) * 0.18, 0.2 + pw * 0.2 + Math.random() * 0.1, (Math.random() - 0.5) * 0.18));
+    else v0 = vadd(v0, V3((Math.random() - 0.5) * 0.03, 0, (Math.random() - 0.5) * 0.03));
+    if (i === 4 && how?.head) v0 = vadd(v0, vmul(V3(dir.x, 0.15, dir.z), 0.22));
+    return v0;
+  });
+  const squirt = mask & 1 ? [2, 3] : mask & 2 ? [3] : mask & 4 ? [2] : mask & 8 ? [1] : mask & 16 ? [0] : undefined;
+  const body = make(hc, 0);
+  rdStart(body, 0, pts, vel, mask, squirt);
+  // torn-off pieces: their own physics, thrown harder
+  const GIB = { 1: [[2, 3], 4, 1], 2: [[3], 5, 2], 3: [[2], 6, 3], 4: [[1], 7, 4], 5: [[0], 8, 5] };
+  for (let k = 1; k <= 5; k++) {
+    if (!(mask & (1 << (k - 1)))) continue;
+    const [js, end, gi] = GIB[k];
+    let a = js.map((j) => pts[j]).reduce((s2, q) => vadd(s2, vmul(q, 1 / js.length)), V3(0, 0, 0));
+    if (k === 1) a = vadd(a, vmul(U, 2 / 16));
+    const b = k === 1 ? vadd(a, vmul(U, 0.5)) : pts[end];
+    const g = make(vmul(vadd(a, b), 0.5), gi), kick = blast ? 0.25 : 0.12;
+    const ga = Math.random() * Math.PI * 2, side = V3(Math.cos(ga) * kick, 0.2 + Math.random() * 0.15, Math.sin(ga) * kick);
+    const va = vadd(vmul(vel[end], 0.85), side), vb = vadd(va, V3((Math.random() - 0.5) * 0.3, 0.1, (Math.random() - 0.5) * 0.3));
+    rdStart(g, gi, [a, b], [va, vb], 0, [0]);
+    try { dim.playSound("war.gibs", a, { volume: 0.9 }); } catch {}
   }
-  bleed(v, how?.dir, !!how?.limb);
-  while (CORPSES.length > 24) { const o = CORPSES.shift(); try { world.getEntity(o.id)?.remove(); } catch {} }
+  sprayBlood(dim, chest(v), mask || how?.head || blast ? 1 : 0);
+  while (CORPSES.length > 24) { const o = CORPSES.shift(); try { world.getEntity(o.id)?.remove(); } catch {} RD.delete(o.id); }
 }
-// v9.10: ragdoll deaths. Each body gets a few seconds of physics, then lies still and costs nothing more: it
-// topples away from the round that killed him (onto his back if he faced the shooter, onto his face if hit from
-// behind), flies and somersaults from a blast, slams down and bounces, and the limbs flail and settle. With a wall
-// in the way he falls another way, or slumps against it. The angles drive the body's bones on the client.
-const RAG = new Map();       // corpse id -> { c, th, w, max, x[5], v[5], t }
-const RAG_MAX = 12;
-const hardAt = (dim, l) => { try { const b = dim.getBlock(l); return !!b && !b.isLiquid && !passable(b); } catch { return false; } };
-function ragdoll(c, how, lying) {
-  try {
-    const dim = c.dimension, l = c.location, R = Math.PI / 180;
-    try { c.setProperty("war:pose", Math.floor(Math.random() * 16)); } catch {}
-    let yaw = 0; try { yaw = c.getRotation().y; } catch {}
-    const dir = how?.dir, pw = how?.power ?? 0.15;
-    const f = { x: -Math.sin(yaw * R), z: Math.cos(yaw * R) };
-    let sg = dir ? (f.x * dir.x + f.z * dir.z > 0 ? 1 : -1) : Math.random() < 0.5 ? 1 : -1;   // (+: on his face, -: on his back)
-    const room = (yw, s) => { const fx = -Math.sin(yw * R) * s, fz = Math.cos(yw * R) * s; let n = 0; for (const k of [0.6, 1.2, 1.8]) { if (hardAt(dim, { x: l.x + fx * k, y: l.y + 0.4, z: l.z + fz * k })) break; n = k; } return n; };
-    let best = { yw: yaw, s: sg, n: room(yaw, sg) };
-    if (best.n < 1.8) for (const [yw, s] of [[yaw, -sg], [yaw + 90, sg], [yaw - 90, sg], [yaw + 45, sg], [yaw - 45, sg]]) { const n = room(yw, s); if (n > best.n) best = { yw, s, n }; if (n >= 1.8) break; }
-    if (best.yw !== yaw) try { c.setRotation({ x: 0, y: best.yw }); } catch {}
-    sg = best.s;
-    const max = best.n >= 1.8 ? 90 : best.n >= 1.2 ? 60 : best.n >= 0.6 ? 35 : 18;            // (no room: slumped against the wall)
-    if (lying || RAG.size >= RAG_MAX) { try { c.setProperty("war:fall", sg * max); } catch {} return; }
-    const blast = pw >= 0.45;
-    const st = { c, th: sg * 4, w: sg * (blast ? 9 + pw * 18 : 1.2 + pw * 10), max, x: [0, 0, 0, 0, 0], v: [0, 0, 0, 0, 0], t: 0, sent: [] };
-    for (let i = 0; i < 5; i++) st.v[i] = (Math.random() - 0.5) * (blast ? 30 : 8);
-    try { c.setProperty("war:fall", st.th); } catch {}
-    RAG.set(c.id, st);
-  } catch {}
-}
-const RAG_PROPS = ["war:la", "war:ra", "war:ll", "war:rl", "war:hd"];
-system.runInterval(() => {
-  if (!RAG.size) return;
-  for (const [id, s] of RAG) {
-    try {
-      const c = s.c; if (!c.isValid) { RAG.delete(id); continue; }
-      s.t++;
-      let ground = false; try { ground = c.isOnGround; } catch {}
-      const w0 = s.w, phi = ((((s.th + 180) % 360) + 360) % 360) - 180;
-      let lie = false;
-      if (ground) {
-        if (Math.abs(phi) < s.max) s.w += 1.7 * Math.sin(phi * Math.PI / 180);              // (gravity tips him over)
-        if (Math.abs(phi + s.w) >= s.max) {                                                    // (he hits the ground)
-          const imp = Math.abs(s.w);
-          s.th += Math.sign(phi || s.w) * s.max - phi; s.w = -s.w * 0.3; if (Math.abs(s.w) < 1.2) s.w = 0;
-          if (imp > 2) for (let i = 0; i < 5; i++) s.v[i] += (Math.random() - 0.5) * imp * 3;
-          lie = true;
-        } else s.th += s.w;
-        s.w *= 0.97;
-      } else { s.th += s.w; s.w *= 0.995; }                                                    // (in the air: he tumbles)
-      if (Math.abs(((((s.th + 180) % 360) + 360) % 360) - 180) >= s.max - 0.5 && ground) lie = true;
-      const dw = s.w - w0;
-      let still = ground && s.w === 0;
-      for (let i = 0; i < 5; i++) {
-        s.v[i] += -0.12 * s.x[i] - 0.2 * s.v[i] - 0.9 * dw * (i === 4 ? 0.5 : i < 2 ? 1 : 0.6);   // (the limbs lag the body)
-        s.x[i] = Math.max(-150, Math.min(150, s.x[i] + s.v[i]));
-        if (lie) { s.x[i] *= 0.82; s.v[i] *= 0.6; }                                            // (on the ground they flop flat)
-        if (Math.abs(s.v[i]) > 0.3 || Math.abs(s.x[i]) > 1) still = false;
-      }
-      const done = (still && s.t > 8) || s.t > 160;
-      if (done) { s.w = 0; for (let i = 0; i < 5; i++) s.x[i] = 0; }
-      const out = [((((s.th + 180) % 360) + 360) % 360) - 180, ...s.x];
-      ["war:fall", ...RAG_PROPS].forEach((k, i) => { const val = Math.round(out[i] * 10) / 10; if (done || s.sent[i] === undefined || Math.abs(val - s.sent[i]) >= 0.5) { try { c.setProperty(k, val); s.sent[i] = val; } catch {} } });
-      if (done) RAG.delete(id);
-    } catch { RAG.delete(id); }
-  }
-}, 1);
 world.afterEvents.entityDie.subscribe((ev) => {
   const v = ev.deadEntity;
   try {
@@ -1480,19 +1593,9 @@ world.afterEvents.entityDie.subscribe((ev) => {
     system.run(() => { try { if (v.isValid) v.remove(); } catch {} });          // (the body takes his place: no death spin)
   } catch {}
 });
-function bleed(v, dir, big) {                                                       // v9.9: a red spray where he's hit, a puff of mist, blood on the ground
+function bleed(v, dir, big) {                                                       // v9.11: blood where he's hit
   if (!gore()) return;
-  try {
-    const dim = v.dimension, c = chest(v), l = v.location;
-    try { dim.spawnParticle(big ? "war:blood_burst" : "war:blood", c); } catch {}
-    try { dim.spawnParticle("war:blood_mist", dir ? { x: c.x + dir.x * 0.3, y: c.y, z: c.z + dir.z * 0.3 } : c); } catch {}
-    const n = big ? 2 : 1;
-    for (let i = 0; i < n; i++) {
-      const k = 0.5 + Math.random() * (big ? 1.4 : 0.9), gx = l.x + (dir ? dir.x * k : (Math.random() - 0.5)), gz = l.z + (dir ? dir.z * k : (Math.random() - 0.5));
-      let gy; try { const b = dim.getBlockBelow({ x: gx, y: l.y + 0.6, z: gz }, { maxDistance: 4 }); if (b) gy = b.location.y + 1.02; } catch {}
-      if (gy !== undefined) try { dim.spawnParticle("war:blood_splat", { x: gx, y: gy, z: gz }); } catch {}
-    }
-  } catch {}
+  try { const c = chest(v); sprayBlood(v.dimension, dir ? { x: c.x + dir.x * 0.25, y: c.y, z: c.z + dir.z * 0.25 } : c, big); } catch {}
 }
 const hitDir = (v, src) => { try { const lh = lastHit.get(v.id); if (lh && tick() - lh.t <= 1 && lh.dir) return lh.dir; if (src?.isValid) { const dx = v.location.x - src.location.x, dz = v.location.z - src.location.z, L = Math.hypot(dx, dz) || 1; return { x: dx / L, y: 0, z: dz / L }; } } catch {} return undefined; };
 world.afterEvents.entityHurt.subscribe((ev) => {                                  // blood on every hit
@@ -1505,15 +1608,14 @@ try {
       const c = ev.removedEntity; if (c?.typeId !== "war:corpse") return;
       const now = tick(), at = c.location, dimId = c.dimension.id;
       const b = BLASTS.find((q) => q.dim === dimId && now - q.t <= 3 && dist(q.at, at) <= q.power * 2 + 1); if (!b) return;
-      const pr = {}; for (const k of ["war:faction", "war:skin", "war:medic", "war:limb", "war:gib", "war:fall", "war:pose"]) { try { pr[k] = c.getProperty(k); } catch {} }
-      const yaw = (() => { try { return c.getRotation().y; } catch { return 0; } })(), old = c.id;
+      const pr = {}; for (const k of ["war:faction", "war:skin", "war:medic", "war:limb", "war:gib", "war:ga", "war:gb", ...RD_BODY_PROPS]) { try { pr[k] = c.getProperty(k); } catch {} }
+      const old = c.id, st = RD.get(old);
       system.run(() => {
         try {
           const dim = world.getDimension(dimId), n = dim.spawnEntity("war:corpse", { x: at.x, y: at.y + 0.1, z: at.z });
           for (const k in pr) try { if (pr[k] !== undefined) n.setProperty(k, pr[k]); } catch {}
-          try { n.setRotation({ x: 0, y: yaw }); } catch {}
-          const dx = at.x - b.at.x, dz = at.z - b.at.z, L = Math.hypot(dx, dz) || 1, k = Math.max(0.1, 0.6 - dist(b.at, at) * 0.08);
-          try { n.applyImpulse({ x: (dx / L) * k, y: 0.15 + k * 0.5, z: (dz / L) * k }); } catch {}
+          try { n.setRotation({ x: 0, y: 0 }); } catch {}
+          if (st) { RD.delete(old); st.c = n; st.sent = []; RD.set(n.id, st); st.act = true; st.still = 0; }
           const e = CORPSES.find((q) => q.id === old); if (e) e.id = n.id; else CORPSES.push({ id: n.id, t: now });
         } catch {}
       });
@@ -1532,9 +1634,8 @@ const CIVILIANS = ["minecraft:villager_v2", "minecraft:villager", "minecraft:wan
 world.beforeEvents.entityHurt.subscribe((ev) => {
   try {
     const v = ev.hurtEntity;
-    if (v?.typeId === "war:corpse") {                                        // v9.9: a body can't be broken; a blast throws it
+    if (v?.typeId === "war:corpse") {                                        // v9.9: a body can't be broken (v9.11: blasts throw it through its ragdoll)
       ev.cancel = true;
-      if (String(ev.damageSource?.cause ?? "").includes("xplosion")) system.run(() => { try { if (!v.isValid) return; const now = tick(); let b, bd = 1e9; for (const q of BLASTS) { if (q.dim !== v.dimension.id || now - q.t > 3) continue; const dd = dist(q.at, v.location); if (dd < bd) { bd = dd; b = q; } } if (!b) return; const dx = v.location.x - b.at.x, dz = v.location.z - b.at.z, L = Math.hypot(dx, dz) || 1, k = Math.max(0, 0.6 - bd * 0.1); if (k > 0) v.applyImpulse({ x: (dx / L) * k, y: 0.15 + k * 0.5, z: (dz / L) * k }); } catch {} });
       return;
     }
     if (v && held.has(v.id)) { ev.cancel = true; return; }                   // v6.3: carried with the TP wand: untouchable
@@ -3385,6 +3486,7 @@ world.afterEvents.entitySpawn.subscribe((ev) => {
 const BLASTS = []; // v9.7: recent explosions { dim, at, power, t } (bodies thrown away from them, the nearest ones torn apart)
 function explode(dim, loc, power, opts) {
   BLASTS.push({ dim: dim.id, at: { x: loc.x, y: loc.y, z: loc.z }, power, t: tick() }); if (BLASTS.length > 40) BLASTS.shift();
+  try { rdBlast(dim, loc, power); } catch {}
   try { dim.createExplosion(loc, power, opts); }
   catch { const o = { ...opts }; delete o.source; try { dim.createExplosion(loc, power, o); } catch {} }
   try { blastDamage(dim, loc, power, opts?.source); } catch {}
@@ -10037,7 +10139,7 @@ system.runInterval(() => {
       if (c.to && flat(c.to, v.location) > 0.5) {
         const dx = c.to.x - v.location.x, dz = c.to.z - v.location.z, L = Math.hypot(dx, dz) || 1;
         setP(v, "war:crawl", true);
-        if (gore() && now % 20 < 5) try { const l = v.location; v.dimension.spawnParticle("war:blood_splat", { x: l.x, y: l.y + 0.03, z: l.z }); } catch {}   // (a trail behind him)
+        if (gore() && now % 20 < 5) try { const l = v.location; v.dimension.spawnParticle("war:bsplat", { x: l.x, y: l.y + 0.05, z: l.z }); } catch {}   // (a trail behind him)
         // (a downed man is far too slowed for a push to move him: he's moved in small checked steps, ~0.6 blocks a second)
         const st = Math.min(0.15, L), to = { x: v.location.x + (dx / L) * st, y: v.location.y, z: v.location.z + (dz / L) * st };
         if (!solidAt(v.dimension, { x: to.x, y: to.y + 0.3, z: to.z }) && solidAt(v.dimension, { x: to.x, y: to.y - 0.2, z: to.z })) { try { v.teleport(to, { keepVelocity: false, checkForBlocks: true }); downPos.set(id, { ...to }); } catch {} }   // (and where he lies pinned moves with him)

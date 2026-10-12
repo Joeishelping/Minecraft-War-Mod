@@ -1167,12 +1167,7 @@
         },
         "geometries": {
           "Array.g": [
-            "Geometry.full",
-            "Geometry.no_head",
-            "Geometry.no_rarm",
-            "Geometry.no_larm",
-            "Geometry.no_rleg",
-            "Geometry.no_lleg",
+            "Geometry.ragdoll",
             "Geometry.gib_head",
             "Geometry.gib_rarm",
             "Geometry.gib_larm",
@@ -1181,7 +1176,7 @@
           ]
         }
       },
-      "geometry": "Array.g[q.property('war:gib') ? (q.property('war:limb') > 0 ? 5 + q.property('war:limb') : 0) : q.property('war:limb')]",
+      "geometry": "Array.g[q.property('war:gib') ? math.clamp(q.property('war:limb'), 1, 5) : 0]",
       "materials": [
         {
           "*": "Material.default"
@@ -1190,6 +1185,21 @@
       "part_visibility": [
         {
           "*": "true"
+        },
+        {
+          "h_a": "(q.property('war:gib') || math.mod(math.floor(q.property('war:limb') / 1), 2) == 0)"
+        },
+        {
+          "ra_a": "(q.property('war:gib') || math.mod(math.floor(q.property('war:limb') / 2), 2) == 0)"
+        },
+        {
+          "la_a": "(q.property('war:gib') || math.mod(math.floor(q.property('war:limb') / 4), 2) == 0)"
+        },
+        {
+          "rl_a": "(q.property('war:gib') || math.mod(math.floor(q.property('war:limb') / 8), 2) == 0)"
+        },
+        {
+          "ll_a": "(q.property('war:gib') || math.mod(math.floor(q.property('war:limb') / 16), 2) == 0)"
         }
       ],
       "textures": [

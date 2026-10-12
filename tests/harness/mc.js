@@ -322,6 +322,7 @@ export const GameMode = { Creative: "Creative", Survival: "Survival", Adventure:
 export const EquipmentSlot = { Mainhand: "Mainhand", Offhand: "Offhand", Head: "Head", Chest: "Chest", Legs: "Legs", Feet: "Feet" };
 export class ItemStack { constructor(id, n = 1) { this.typeId = id.includes(":") ? id : `minecraft:${id}`; this.amount = n; } }
 export const EntityDamageCause = {};
+export class MolangVariableMap { setFloat() {} setColorRGB() {} setColorRGBA() {} setVector3() {} setSpeedAndDirection() {} }
 export const BlockPermutation = { resolve: (id) => ({ id }) };
 
 // ---------------------------------------------------------------- vanilla-ish navigation (A* on the grid; no ladders)

@@ -1,5 +1,24 @@
 # War Engine changelog
 
+## v9.11 (Real ragdolls, real dismemberment, the blood pack's blood)
+
+- **Full ragdoll deaths.** A dead man is now a jointed body:
+  - Hips, shoulders, head, hands and feet are joined by bones, with gravity, block collisions and friction on the
+    ground. Torso, head, both arms and both legs are each on their own joint, driven by the physics every tick.
+  - He crumples where he's shot, folds over low cover, falls off ledges and steps, and gets thrown and tumbles in a
+    blast. A headshot snaps the head back. A grenade among the dead throws the bodies again.
+  - The legs fold no further than a right angle, the neck only nods, and nothing ends up inside a block.
+  - Each body simulates only while it moves (about 1 to 3 seconds), then sleeps.
+  - Lag test on a real server: 20 men killed in the same instant cost at most 8 ms in the worst tick, against a
+    50 ms budget. At most 10 bodies fall at once; any more fall in one go and simply appear where they land.
+- **Real dismemberment.** The head, an arm or a leg comes off as its own tumbling piece, and a grenade at a man's
+  feet can take two or three. The stump keeps pumping blood for a couple of seconds, and there's a gibs sound.
+- **Blood from the blood pack.** Its blood texture and its spray are built in:
+  - drops fly, land, and leave splats on the ground that last about 10 seconds;
+  - kills, headshots, blasts and torn-off limbs throw a big burst;
+  - every hit sprays, and the wounded leave a trail when they crawl.
+- Gore off still turns blood and dismemberment off; bodies still fall as ragdolls.
+
 ## v9.10 (Ragdoll deaths)
 
 - **Bodies fall with physics.** Every body gets a few seconds of physics of its own, then lies still and costs nothing

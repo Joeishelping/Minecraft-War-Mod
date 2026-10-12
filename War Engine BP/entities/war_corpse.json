@@ -34,7 +34,7 @@
           "type": "int",
           "range": [
             0,
-            5
+            31
           ],
           "default": 0,
           "client_sync": true
@@ -44,7 +44,16 @@
           "default": false,
           "client_sync": true
         },
-        "war:fall": {
+        "war:ta": {
+          "type": "float",
+          "range": [
+            -180.0,
+            180.0
+          ],
+          "default": 0.0,
+          "client_sync": true
+        },
+        "war:tb": {
           "type": "float",
           "range": [
             -180.0,
@@ -53,58 +62,121 @@
           "default": -90.0,
           "client_sync": true
         },
-        "war:la": {
+        "war:tg": {
           "type": "float",
           "range": [
-            -150.0,
-            150.0
+            -180.0,
+            180.0
           ],
           "default": 0.0,
           "client_sync": true
         },
-        "war:ra": {
+        "war:ha": {
           "type": "float",
           "range": [
-            -150.0,
-            150.0
+            -180.0,
+            180.0
           ],
           "default": 0.0,
           "client_sync": true
         },
-        "war:ll": {
+        "war:hb": {
           "type": "float",
           "range": [
-            -150.0,
-            150.0
+            -180.0,
+            180.0
           ],
           "default": 0.0,
           "client_sync": true
         },
-        "war:rl": {
+        "war:raa": {
           "type": "float",
           "range": [
-            -150.0,
-            150.0
+            -180.0,
+            180.0
           ],
           "default": 0.0,
           "client_sync": true
         },
-        "war:hd": {
+        "war:rab": {
           "type": "float",
           "range": [
-            -150.0,
-            150.0
+            -180.0,
+            180.0
           ],
           "default": 0.0,
           "client_sync": true
         },
-        "war:pose": {
-          "type": "int",
+        "war:laa": {
+          "type": "float",
           "range": [
-            0,
-            15
+            -180.0,
+            180.0
           ],
-          "default": 0,
+          "default": 0.0,
+          "client_sync": true
+        },
+        "war:lab": {
+          "type": "float",
+          "range": [
+            -180.0,
+            180.0
+          ],
+          "default": 0.0,
+          "client_sync": true
+        },
+        "war:rla": {
+          "type": "float",
+          "range": [
+            -180.0,
+            180.0
+          ],
+          "default": 0.0,
+          "client_sync": true
+        },
+        "war:rlb": {
+          "type": "float",
+          "range": [
+            -180.0,
+            180.0
+          ],
+          "default": 0.0,
+          "client_sync": true
+        },
+        "war:lla": {
+          "type": "float",
+          "range": [
+            -180.0,
+            180.0
+          ],
+          "default": 0.0,
+          "client_sync": true
+        },
+        "war:llb": {
+          "type": "float",
+          "range": [
+            -180.0,
+            180.0
+          ],
+          "default": 0.0,
+          "client_sync": true
+        },
+        "war:ga": {
+          "type": "float",
+          "range": [
+            -180.0,
+            180.0
+          ],
+          "default": 0.0,
+          "client_sync": true
+        },
+        "war:gb": {
+          "type": "float",
+          "range": [
+            -180.0,
+            180.0
+          ],
+          "default": 0.0,
           "client_sync": true
         }
       }
@@ -132,7 +204,10 @@
           }
         ]
       },
-      "minecraft:physics": {},
+      "minecraft:physics": {
+        "has_gravity": false,
+        "has_collision": false
+      },
       "minecraft:pushable": {
         "is_pushable": false,
         "is_pushable_by_piston": false
