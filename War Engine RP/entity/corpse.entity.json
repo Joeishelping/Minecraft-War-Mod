@@ -226,14 +226,28 @@
         "s64": "textures/war_skins/skin_64"
       },
       "geometry": {
-        "default": "geometry.humanoid.custom"
+        "default": "geometry.war_body_full",
+        "full": "geometry.war_body_full",
+        "no_head": "geometry.war_body_no_head",
+        "no_rarm": "geometry.war_body_no_rarm",
+        "no_larm": "geometry.war_body_no_larm",
+        "no_rleg": "geometry.war_body_no_rleg",
+        "no_lleg": "geometry.war_body_no_lleg",
+        "gib_head": "geometry.war_gib_head",
+        "gib_rarm": "geometry.war_gib_rarm",
+        "gib_larm": "geometry.war_gib_larm",
+        "gib_rleg": "geometry.war_gib_rleg",
+        "gib_lleg": "geometry.war_gib_lleg"
       },
       "animations": {
-        "downed": "animation.war.downed"
+        "corpse": "animation.war.corpse"
       },
       "scripts": {
+        "pre_animation": [
+          "v.spin = q.is_on_ground ? (v.spin ?? 0) : q.life_time * 720;"
+        ],
         "animate": [
-          "downed"
+          "corpse"
         ]
       },
       "render_controllers": [

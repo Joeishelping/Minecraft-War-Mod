@@ -3,6 +3,7 @@
   "minecraft:entity": {
     "description": {
       "identifier": "war:corpse",
+      "runtime_identifier": "minecraft:armor_stand",
       "is_spawnable": false,
       "is_summonable": true,
       "properties": {
@@ -53,8 +54,8 @@
         ]
       },
       "minecraft:collision_box": {
-        "width": 0.7,
-        "height": 0.35
+        "width": 0.01,
+        "height": 0.01
       },
       "minecraft:health": {
         "value": 100,
@@ -70,8 +71,8 @@
       },
       "minecraft:physics": {},
       "minecraft:pushable": {
-        "is_pushable": true,
-        "is_pushable_by_piston": true
+        "is_pushable": false,
+        "is_pushable_by_piston": false
       },
       "minecraft:knockback_resistance": {
         "value": 0.0

@@ -472,6 +472,42 @@ KS.gib = async (o, ox, oz) => {
   const cs = ow().getEntities({ type: "war:corpse", location: { x: ox, y: Y, z: oz }, maxDistance: 12 });
   return { n: cs.length, parts: cs.map((c) => ({ limb: c.getProperty("war:limb"), gib: c.getProperty("war:gib"), d: Math.round(Math.hypot(c.location.x - ox, c.location.z - oz) * 10) / 10 })), soldierGone: !v.isValid };
 };
+// v9.9: bodies don't shove the living: a man standing where a body lands stays put, and the body lands on the ground
+KS.noshove = async (o, ox, oz) => {
+  floorAt(ox - 10, oz - 10, ox + 10, oz + 10);
+  for (const c of ow().getEntities({ type: "war:corpse" })) { try { c.remove(); } catch {} }
+  const a = kitSoldier(1, { x: ox + 0.5, y: Y, z: oz + 0.5 }, "rifle", "hold");
+  const z = ow().spawnEntity("minecraft:pig", { x: ox + 3.5, y: Y, z: oz + 0.5 });
+  try { z.addEffect("slowness", 400, { amplifier: 255, showParticles: false }); } catch {}
+  await kitWait(20);
+  const p0 = { ...a.location }, z0 = { ...z.location };
+  const cs = [];
+  for (let i = 0; i < 4; i++) { cs.push(ow().spawnEntity("war:corpse", { x: ox + 0.5 + (i % 2) * 0.2, y: Y + 0.5, z: oz + 0.5 })); if (!o.ctrl) cs.push(ow().spawnEntity("war:corpse", { x: ox + 3.5, y: Y + 0.5, z: oz + 0.5 + (i % 2) * 0.2 })); }
+  await kitWait(60);
+  const r = { soldierMoved: Math.round(Math.hypot(a.location.x - p0.x, a.location.z - p0.z) * 100) / 100, pigMoved: Math.round(Math.hypot(z.location.x - z0.x, z.location.z - z0.z) * 100) / 100,
+    bodyY: cs.map((c) => Math.round((c.location.y - Y) * 100) / 100), bodySpread: Math.round(Math.max(...cs.slice(0, 8).filter((c, i) => i % 2 === 0).map((c) => Math.hypot(c.location.x - ox - 0.5, c.location.z - oz - 0.5))) * 100) / 100 };
+  for (const c of cs) { try { c.remove(); } catch {} } try { z.remove(); } catch {}
+  return r;
+};
+// v9.9: a body can't be broken: punches, fire, lava and blasts leave it (and drop nothing)
+KS.bodyhit = async (o, ox, oz) => {
+  floorAt(ox - 10, oz - 10, ox + 10, oz + 10);
+  for (const c of ow().getEntities({ type: "war:corpse" })) { try { c.remove(); } catch {} }
+  for (const c of ow().getEntities({ type: "minecraft:item", location: { x: ox, y: Y, z: oz }, maxDistance: 20 })) { try { c.remove(); } catch {} }
+  const cs = [0, 1, 2, 3].map((i) => ow().spawnEntity("war:corpse", { x: ox + 0.5 + i * 3, y: Y, z: oz + 0.5 }));
+  await kitWait(10);
+  const pig = ow().spawnEntity("minecraft:pig", { x: ox + 0.5, y: Y, z: oz + 3.5 });
+  try { cs[0].applyDamage(50, { cause: "entityAttack", damagingEntity: pig }); } catch (e) { console.warn("dmg " + e); }
+  try { cs[1].applyDamage(50); } catch {}
+  try { cs[2].setOnFire(5); } catch {}
+  try { explode(ow(), { x: ox + 9.5, y: Y + 0.5, z: oz + 1.5 }, 3, { breaksBlocks: false }); } catch (e) { console.warn("ex " + e); }
+  await kitWait(40);
+  const items = ow().getEntities({ type: "minecraft:item", location: { x: ox, y: Y, z: oz }, maxDistance: 20 }).map((i) => { try { return i.getComponent("minecraft:item")?.itemStack?.typeId; } catch { return "?"; } });
+  const all = ow().getEntities({ type: "war:corpse", location: { x: ox, y: Y, z: oz }, maxDistance: 20 });
+  const r = { alive: cs.map((c) => c.isValid), bodies: all.length, at: all.map((c) => Math.round((c.location.x - ox) * 10) / 10), items };
+  for (const c of all) { try { c.remove(); } catch {} } try { pig.remove(); } catch {}
+  return r;
+};
 // v9.7: a downed man in plain view of the enemy (who hold their fire) next to a wall: does he crawl behind it?
 KS.crawl = async (o, ox, oz) => {
   floorAt(ox - 20, oz - 20, ox + 30, oz + 20);

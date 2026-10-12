@@ -1374,9 +1374,9 @@ function oneShot(v, ev, cause) {
     else if (dd <= pw * 1.3 && Math.random() < 0.5) how = { limb: 0, dir, power: 0.35 };
   } else {
     const dir = fresh ? lh.dir : src?.isValid ? away(src.location) : undefined;
-    if (fresh && lh.head && ["sniper", "rifle", "semi"].includes(lh.weapon)) { if (Math.random() < 0.75) how = { limb: lh.weapon === "sniper" && over >= 4 && Math.random() < 0.25 ? 1 : 0, dir, power: 0.25 }; }
+    if (fresh && lh.head && ["sniper", "rifle", "semi"].includes(lh.weapon)) { if (Math.random() < 0.75) how = { limb: over >= 4 && Math.random() < (lh.weapon === "sniper" ? 0.35 : over >= 8 ? 0.12 : 0) ? 1 : 0, dir, power: 0.25 }; }
     else if (fresh && lh.weapon === "shotgun" && lh.dd < 6 && over >= 2) how = { limb: Math.random() < 0.2 ? LIMB_ARMLEG() : 0, dir, power: 0.55 };
-    else if (over >= 4) { if (Math.random() < 0.8) how = { limb: 0, dir, power: Math.min(0.5, 0.2 + over * 0.03) }; }
+    else if (over >= 4) { if (Math.random() < 0.8) how = { limb: over >= 6 && Math.random() < 0.12 ? LIMB_ARMLEG() : 0, dir, power: Math.min(0.5, 0.2 + over * 0.03) }; }
     else if (cause === "fall" && ev.damage >= 10) how = { limb: 0, power: 0.05 };
   }
   if (!how) return false;
@@ -1399,8 +1399,8 @@ function spawnCorpse(v, how) {
   if (how?.limb) {
     const g = make({ x: l.x, y: l.y + 0.8, z: l.z }, true), a = Math.random() * Math.PI * 2;
     try { g.applyImpulse({ x: dir.x * pw * 1.4 + Math.cos(a) * 0.25, y: 0.35, z: dir.z * pw * 1.4 + Math.sin(a) * 0.25 }); } catch {}
-    try { dim.spawnParticle("war:blood_burst", { x: l.x, y: l.y + (how.limb === 1 ? 1.5 : 1.0), z: l.z }); } catch {}
   }
+  bleed(v, how?.dir, !!how?.limb);
   while (CORPSES.length > 24) { const o = CORPSES.shift(); try { world.getEntity(o.id)?.remove(); } catch {} }
 }
 world.afterEvents.entityDie.subscribe((ev) => {
@@ -1412,10 +1412,46 @@ world.afterEvents.entityDie.subscribe((ev) => {
     system.run(() => { try { if (v.isValid) v.remove(); } catch {} });          // (the body takes his place: no death spin)
   } catch {}
 });
+function bleed(v, dir, big) {                                                       // v9.9: a red spray where he's hit, a puff of mist, blood on the ground
+  if (!gore()) return;
+  try {
+    const dim = v.dimension, c = chest(v), l = v.location;
+    try { dim.spawnParticle(big ? "war:blood_burst" : "war:blood", c); } catch {}
+    try { dim.spawnParticle("war:blood_mist", dir ? { x: c.x + dir.x * 0.3, y: c.y, z: c.z + dir.z * 0.3 } : c); } catch {}
+    const n = big ? 2 : 1;
+    for (let i = 0; i < n; i++) {
+      const k = 0.5 + Math.random() * (big ? 1.4 : 0.9), gx = l.x + (dir ? dir.x * k : (Math.random() - 0.5)), gz = l.z + (dir ? dir.z * k : (Math.random() - 0.5));
+      let gy; try { const b = dim.getBlockBelow({ x: gx, y: l.y + 0.6, z: gz }, { maxDistance: 4 }); if (b) gy = b.location.y + 1.02; } catch {}
+      if (gy !== undefined) try { dim.spawnParticle("war:blood_splat", { x: gx, y: gy, z: gz }); } catch {}
+    }
+  } catch {}
+}
+const hitDir = (v, src) => { try { const lh = lastHit.get(v.id); if (lh && tick() - lh.t <= 1 && lh.dir) return lh.dir; if (src?.isValid) { const dx = v.location.x - src.location.x, dz = v.location.z - src.location.z, L = Math.hypot(dx, dz) || 1; return { x: dx / L, y: 0, z: dz / L }; } } catch {} return undefined; };
 world.afterEvents.entityHurt.subscribe((ev) => {                                  // blood on every hit
-  try { const v = ev.hurtEntity; if (v?.typeId !== SOLDIER || !gore() || ev.damage < 1) return; const now = tick(); if (now - (bloodT.get(v.id) ?? -99) < 4) return; bloodT.set(v.id, now); const c = chest(v); try { v.dimension.spawnParticle("war:blood", c); } catch {} for (let i = 0; i < 4; i++) { try { v.dimension.spawnParticle("minecraft:redstone_wire_dust_particle", { x: c.x + (Math.random() - 0.5) * 0.5, y: c.y + (Math.random() - 0.5) * 0.6, z: c.z + (Math.random() - 0.5) * 0.5 }); } catch {} } } catch {}
+  try { const v = ev.hurtEntity; if (v?.typeId !== SOLDIER || !gore() || ev.damage < 1) return; const now = tick(); if (now - (bloodT.get(v.id) ?? -99) < 4) return; bloodT.set(v.id, now); let src; try { src = ev.damageSource?.damagingEntity; } catch {} bleed(v, hitDir(v, src), false); } catch {}
 });
 const bloodT = new Map();
+try {
+  world.beforeEvents.entityRemove.subscribe((ev) => {                          // v9.9: a blast that would break a body throws it instead
+    try {
+      const c = ev.removedEntity; if (c?.typeId !== "war:corpse") return;
+      const now = tick(), at = c.location, dimId = c.dimension.id;
+      const b = BLASTS.find((q) => q.dim === dimId && now - q.t <= 3 && dist(q.at, at) <= q.power * 2 + 1); if (!b) return;
+      const pr = {}; for (const k of ["war:faction", "war:skin", "war:medic", "war:limb", "war:gib"]) { try { pr[k] = c.getProperty(k); } catch {} }
+      const yaw = (() => { try { return c.getRotation().y; } catch { return 0; } })(), old = c.id;
+      system.run(() => {
+        try {
+          const dim = world.getDimension(dimId), n = dim.spawnEntity("war:corpse", { x: at.x, y: at.y + 0.1, z: at.z });
+          for (const k in pr) try { if (pr[k] !== undefined) n.setProperty(k, pr[k]); } catch {}
+          try { n.setRotation({ x: 0, y: yaw }); } catch {}
+          const dx = at.x - b.at.x, dz = at.z - b.at.z, L = Math.hypot(dx, dz) || 1, k = Math.max(0.1, 0.6 - dist(b.at, at) * 0.08);
+          try { n.applyImpulse({ x: (dx / L) * k, y: 0.15 + k * 0.5, z: (dz / L) * k }); } catch {}
+          const e = CORPSES.find((q) => q.id === old); if (e) e.id = n.id; else CORPSES.push({ id: n.id, t: now });
+        } catch {}
+      });
+    } catch {}
+  });
+} catch {}
 system.runInterval(() => {
   const now = tick();
   while (CORPSES.length && now - CORPSES[0].t > 1200) { const o = CORPSES.shift(); try { world.getEntity(o.id)?.remove(); } catch {} }   // (a minute, then gone)
@@ -1428,6 +1464,11 @@ const CIVILIANS = ["minecraft:villager_v2", "minecraft:villager", "minecraft:wan
 world.beforeEvents.entityHurt.subscribe((ev) => {
   try {
     const v = ev.hurtEntity;
+    if (v?.typeId === "war:corpse") {                                        // v9.9: a body can't be broken; a blast throws it
+      ev.cancel = true;
+      if (String(ev.damageSource?.cause ?? "").includes("xplosion")) system.run(() => { try { if (!v.isValid) return; const now = tick(); let b, bd = 1e9; for (const q of BLASTS) { if (q.dim !== v.dimension.id || now - q.t > 3) continue; const dd = dist(q.at, v.location); if (dd < bd) { bd = dd; b = q; } } if (!b) return; const dx = v.location.x - b.at.x, dz = v.location.z - b.at.z, L = Math.hypot(dx, dz) || 1, k = Math.max(0, 0.6 - bd * 0.1); if (k > 0) v.applyImpulse({ x: (dx / L) * k, y: 0.15 + k * 0.5, z: (dz / L) * k }); } catch {} });
+      return;
+    }
     if (v && held.has(v.id)) { ev.cancel = true; return; }                   // v6.3: carried with the TP wand: untouchable
     const src = ev.damageSource?.damagingEntity;
     if (v?.typeId === SOLDIER && src?.typeId === "minecraft:player" && mainhand(src) === TP_WAND) {   // v6.3: the TP wand picks him up, no harm done
@@ -1442,7 +1483,8 @@ world.beforeEvents.entityHurt.subscribe((ev) => {
       if (h && ev.damage >= h.currentValue && cause !== "void" && !dying.has(v.id) && !noDown && !oneShot(v, ev, cause)) {   // (v9.7: some hits kill outright)
         ev.cancel = true;                                            // falls wounded instead of dying
         let killer; try { killer = ev.damageSource?.damagingEntity; } catch {}
-        system.run(() => { try { if (v.isValid) { const hh = v.getComponent("minecraft:health"); if (hh) hh.setCurrentValue(1); goDown(v, killer); } } catch {} });
+        const bd = hitDir(v, killer);
+        system.run(() => { try { if (v.isValid) { const hh = v.getComponent("minecraft:health"); if (hh) hh.setCurrentValue(1); bleed(v, bd, false); goDown(v, killer); } } catch {} });
         return;
       }
     }
@@ -1976,6 +2018,7 @@ world.afterEvents.entityDie.subscribe((ev) => {
 world.beforeEvents.playerInteractWithEntity.subscribe((ev) => {
   try {
     const n = ev.target;
+    if (n?.typeId === "war:corpse") { ev.cancel = true; return; }           // v9.9: (a body takes no armour, no items)
     if (n?.typeId === NEST) {
       const r = (n.getComponent("minecraft:rideable")?.getRiders() ?? [])[0];
       if (r?.typeId === SOLDIER && isFriendly(playerFaction(ev.player), Number(P(r, "war:faction")))) {
@@ -9926,6 +9969,7 @@ system.runInterval(() => {
       if (c.to && flat(c.to, v.location) > 0.5) {
         const dx = c.to.x - v.location.x, dz = c.to.z - v.location.z, L = Math.hypot(dx, dz) || 1;
         setP(v, "war:crawl", true);
+        if (gore() && now % 20 < 5) try { const l = v.location; v.dimension.spawnParticle("war:blood_splat", { x: l.x, y: l.y + 0.03, z: l.z }); } catch {}   // (a trail behind him)
         // (a downed man is far too slowed for a push to move him: he's moved in small checked steps, ~0.6 blocks a second)
         const st = Math.min(0.15, L), to = { x: v.location.x + (dx / L) * st, y: v.location.y, z: v.location.z + (dz / L) * st };
         if (!solidAt(v.dimension, { x: to.x, y: to.y + 0.3, z: to.z }) && solidAt(v.dimension, { x: to.x, y: to.y - 0.2, z: to.z })) { try { v.teleport(to, { keepVelocity: false, checkForBlocks: true }); downPos.set(id, { ...to }); } catch {} }   // (and where he lies pinned moves with him)

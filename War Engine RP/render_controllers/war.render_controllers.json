@@ -1164,9 +1164,24 @@
             "Texture.c39",
             "Texture.c40"
           ]
+        },
+        "geometries": {
+          "Array.g": [
+            "Geometry.full",
+            "Geometry.no_head",
+            "Geometry.no_rarm",
+            "Geometry.no_larm",
+            "Geometry.no_rleg",
+            "Geometry.no_lleg",
+            "Geometry.gib_head",
+            "Geometry.gib_rarm",
+            "Geometry.gib_larm",
+            "Geometry.gib_rleg",
+            "Geometry.gib_lleg"
+          ]
         }
       },
-      "geometry": "Geometry.default",
+      "geometry": "Array.g[q.property('war:gib') ? (q.property('war:limb') > 0 ? 5 + q.property('war:limb') : 0) : q.property('war:limb')]",
       "materials": [
         {
           "*": "Material.default"
@@ -1174,35 +1189,7 @@
       ],
       "part_visibility": [
         {
-          "*": "!q.property('war:gib')"
-        },
-        {
-          "spear": "false"
-        },
-        {
-          "cape": "false"
-        },
-        {
-          "head": "q.property('war:gib') ? q.property('war:limb') == 1 : q.property('war:limb') != 1",
-          "hat": "q.property('war:gib') ? q.property('war:limb') == 1 : q.property('war:limb') != 1"
-        },
-        {
-          "rightArm": "q.property('war:gib') ? q.property('war:limb') == 2 : q.property('war:limb') != 2",
-          "rightSleeve": "q.property('war:gib') ? q.property('war:limb') == 2 : q.property('war:limb') != 2",
-          "rightItem": "q.property('war:gib') ? q.property('war:limb') == 2 : q.property('war:limb') != 2"
-        },
-        {
-          "leftArm": "q.property('war:gib') ? q.property('war:limb') == 3 : q.property('war:limb') != 3",
-          "leftSleeve": "q.property('war:gib') ? q.property('war:limb') == 3 : q.property('war:limb') != 3",
-          "leftItem": "q.property('war:gib') ? q.property('war:limb') == 3 : q.property('war:limb') != 3"
-        },
-        {
-          "rightLeg": "q.property('war:gib') ? q.property('war:limb') == 4 : q.property('war:limb') != 4",
-          "rightPants": "q.property('war:gib') ? q.property('war:limb') == 4 : q.property('war:limb') != 4"
-        },
-        {
-          "leftLeg": "q.property('war:gib') ? q.property('war:limb') == 5 : q.property('war:limb') != 5",
-          "leftPants": "q.property('war:gib') ? q.property('war:limb') == 5 : q.property('war:limb') != 5"
+          "*": "true"
         }
       ],
       "textures": [

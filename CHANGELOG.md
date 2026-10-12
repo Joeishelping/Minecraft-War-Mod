@@ -1,5 +1,26 @@
 # War Engine changelog
 
+## v9.9 (Blood you can actually see, dismemberment that renders, bodies that never shove anyone)
+
+- **Dismemberment renders now.** The torn-off limb was invisible: hiding the body also hid the arms and head that
+  hang off it in the model. Bodies now use their own models: a body missing its head, an arm or a leg, and the
+  limb on its own, centred so it lies where it lands. A thrown limb tumbles through the air and settles flat.
+- **Dismemberment a bit more often, where it makes sense.** A big blow with lots to spare can now take an arm or a
+  leg (12%). Any rifle headshot with a lot to spare can take the head (12%), and a sniper's 35%. Blasts are as
+  before.
+- **Blood spray you can see.** The old drops were a twentieth of a block and gone at once. Now every hit throws:
+  - a spray of bigger drops that fall and land;
+  - a red mist puff on the side the round came out;
+  - a pool of blood on the ground behind him, which stays about 15 seconds and fades.
+  The hit that drops a man wounded bleeds too (it never did: that blow is cancelled). A kill bleeds more, and a
+  torn-off limb sprays the most. A wounded man crawling leaves a trail.
+- **Bodies never shove the living.** They used to push you and the men around off the spot they landed on. Now a
+  man or a pig standing where a body lands doesn't move at all (tested on a real server: 1.17 blocks before, 0
+  now), and you can't push bodies around either.
+- **Bodies can't be broken.** Punches, fire and lava leave them. A grenade throws nearby bodies away from it instead
+  of deleting them. They take no armour or items when you use them.
+- Gore off still turns all of this off.
+
 ## v9.8 (Outright kills that make sense, wounded who actually crawl, blood you can see)
 
 - **Outright kills by the force of the blow.** v9.7 almost always left a wounded man: a headshot was the main way

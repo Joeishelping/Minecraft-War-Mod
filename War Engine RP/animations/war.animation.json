@@ -309,6 +309,23 @@
           ]
         }
       }
+    },
+    "animation.war.corpse": {
+      "loop": true,
+      "bones": {
+        "root": {
+          "rotation": [
+            "-90 + (q.property('war:gib') ? 0 : (q.is_on_ground ? 0 : math.sin(q.life_time * 900) * 20))",
+            "q.property('war:gib') ? v.spin * 0.6 : 0",
+            "q.property('war:gib') && !q.is_on_ground ? q.life_time * 900 : 0"
+          ],
+          "position": [
+            0,
+            "q.property('war:gib') && q.property('war:limb') == 1 ? 4 : 2",
+            0
+          ]
+        }
+      }
     }
   }
 }
