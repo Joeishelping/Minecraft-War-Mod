@@ -200,7 +200,10 @@
       ],
       "part_visibility": [
         {
-          "spear": "!q.property('war:ranged')"
+          "*": "!q.property('war:hide')"
+        },
+        {
+          "spear": "!q.property('war:ranged') && !q.property('war:hide')"
         }
       ],
       "textures": [
@@ -973,6 +976,11 @@
       ],
       "textures": [
         "Array.band[q.property('war:role')]"
+      ],
+      "part_visibility": [
+        {
+          "*": "!q.property('war:hide')"
+        }
       ]
     },
     "controller.render.war_corpse": {

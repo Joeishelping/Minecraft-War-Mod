@@ -100,6 +100,11 @@
           "type": "bool",
           "default": false,
           "client_sync": true
+        },
+        "war:hide": {
+          "type": "bool",
+          "default": false,
+          "client_sync": true
         }
       }
     },

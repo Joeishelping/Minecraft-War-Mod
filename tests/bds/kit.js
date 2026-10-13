@@ -669,6 +669,99 @@ KS.horseprobe = async (o, ox, oz) => {
   try { e.remove(); h.remove(); } catch {}
   return r;
 };
+// v9.14: a man going down wounded falls like a body, then lies where his body came to rest; a rider is thrown off
+KS.downfall = async (o, ox, oz) => {
+  floorAt(ox - 10, oz - 10, ox + 10, oz + 10);
+  for (const c of ow().getEntities({ type: "war:corpse" })) { try { c.remove(); } catch {} }
+  const a = kitSoldier(1, { x: ox + 0.5, y: Y, z: oz + 0.5 }, "rifle", "hold"), r = kitCav(1, { x: ox + 6.5, y: Y, z: oz + 0.5 }, "smg", "minecraft:horse");
+  await kitWait(60);
+  const riding0 = !!r.getComponent("minecraft:riding")?.entityRidingOn, p0 = { ...a.location };
+  const dbg = [];
+  const sub = world.beforeEvents.entityHurt.subscribe((ev) => { try { if (ev.hurtEntity.id === a.id || ev.hurtEntity.id === r.id) dbg.push({ dmg: ev.damage, hp: ev.hurtEntity.getComponent("minecraft:health")?.currentValue, cause: ev.damageSource.cause }); } catch {} });
+  for (const e of [a, r]) { const h = e.getComponent("minecraft:health"); h.setCurrentValue(2); }
+  await kitWait(2);
+  for (const e of [a, r]) { lastHit.set(e.id, { t: tick(), dir: { x: 1, y: 0, z: 0 }, weapon: "rifle", dd: 10 }); e.applyDamage(3); }
+  await kitWait(5);
+  world.beforeEvents.entityHurt.unsubscribe(sub);
+  if (!a.isValid || !r.isValid) return { dbg, kh: [killHow.get(a.id), killHow.get(r.id)] };
+  if (!a.isValid || !r.isValid) return { gone: [a.isValid, r.isValid], dying: [dying.has(a.id), dying.has(r.id)] };
+  const mid = { hidden: [a, r].map((e) => !!e.getProperty("war:hide")), falling: [a, r].map((e) => FALLS.has(e.id)) };
+  await kitWait(90);
+  const end = { downed: [a, r].map((e) => downed.has(e.id)), hidden: [a, r].map((e) => !!e.getProperty("war:hide")), falling: [a, r].map((e) => FALLS.has(e.id)), moved: Math.round(dist(a.location, p0) * 10) / 10, riderOff: !r.getComponent("minecraft:riding")?.entityRidingOn, fallBodies: ow().getEntities({ type: "war:corpse", location: { x: ox, y: Y, z: oz }, maxDistance: 20 }).length };
+  revive(a); revive(r); await kitWait(80);
+  const after = { riderBackOn: !!r.getComponent("minecraft:riding")?.entityRidingOn };
+  for (const e of [a, r]) try { e.remove(); } catch {}
+  return { riding0, mid, end, after };
+};
+// v9.14: content levels switch weapons over and back
+KS.content = async (o, ox, oz) => {
+  floorAt(ox - 6, oz - 6, ox + 6, oz + 6);
+  const keep = setting("content", "full");
+  const a = kitSoldier(1, { x: ox + 0.5, y: Y, z: oz + 0.5 }, "mg", "hold");
+  await kitWait(10);
+  const out = { full: sd(a).weapon };
+  for (const m of ["light", "vanilla", "full"]) { sdp(world, "war:set_content", m); await kitWait(60); out[m] = sd(a).weapon + "/" + String(gdp(a, "war:weapon0") ?? "-"); }
+  sdp(world, "war:set_content", keep); try { a.remove(); } catch {}
+  return out;
+};
+// v9.14: a surrendered man is taken prisoner by the enemy near him and marched to their lines; his own side frees him
+KS.prisoners = async (o, ox, oz) => {
+  floorAt(ox - 20, oz - 20, ox + 20, oz + 20);
+  const p = kitSoldier(2, { x: ox + 0.5, y: Y, z: oz + 0.5 }, "rifle", "hold");
+  const cap = kitSoldier(1, { x: ox + 5.5, y: Y, z: oz + 0.5 }, "rifle", "hold"); setGoal(cap, makeWaypoint(ow(), { x: ox + 15.5, y: Y, z: oz + 0.5 })); sdp(cap, "war:home", Number(gdp(cap, "war:goal") ?? 0));
+  await kitWait(10);
+  isoSurrender(p, 1);
+  let t = 0; while (t < 200 && !pows.has(p.id)) { await kitWait(10); t += 10; }
+  const taken = pows.has(p.id), mode = pows.get(p.id)?.mode, p0 = { ...p.location };
+  await kitWait(200);
+  const marched = Math.round(dist(p.location, p0) * 10) / 10;
+  try { cap.remove(); } catch {}
+  const fr = kitSoldier(2, { x: p.location.x + 1, y: p.location.y, z: p.location.z }, "rifle", "hold");
+  await kitWait(100);
+  const freed = !pows.has(p.id);
+  for (const e of [p, fr]) try { e.remove(); } catch {}
+  return { taken, takenAfterTicks: t, mode, marchedBlocks: marched, freedByHisSide: freed };
+};
+// v9.14: a round through a lying body kicks it; a body wears the armor he wore; bodies dropped on each other pile up
+KS.bodyfx = async (o, ox, oz) => {
+  floorAt(ox - 10, oz - 10, ox + 10, oz + 10);
+  for (const c of ow().getEntities({ type: "war:corpse" })) { try { c.remove(); } catch {} }
+  const a = kitSoldier(1, { x: ox + 0.5, y: Y, z: oz + 0.5 }, "rifle", "hold"); sdp(a, "war:armor", "iron"); equipArmor(a, "iron");
+  await kitWait(10);
+  killHow.set(a.id, { limb: 0, dir: { x: 0, y: 0, z: 1 }, power: 0.1 }); killReal(a);
+  await kitWait(60);
+  const sa = [...RD.values()].find((q) => !q.gib && dist(q.pts[0].p, { x: ox + 0.5, y: Y, z: oz + 0.5 }) < 3), hz = sa ? vmul(vadd(sa.pts[0].p, sa.pts[3].p), 0.5) : { x: ox + 0.5, z: oz + 1 };
+  const b = kitSoldier(1, { x: hz.x, y: Y, z: hz.z }, "rifle", "hold");
+  await kitWait(4);
+  killHow.set(b.id, { limb: 0, dir: { x: 0, y: 0, z: 1 }, power: 0.1 }); killReal(b);
+  await kitWait(80);
+  const cs = ow().getEntities({ type: "war:corpse", location: { x: ox, y: Y, z: oz }, maxDistance: 6 });
+  const heights = cs.map((c) => { const s2 = RD.get(c.id); return s2 ? Math.round(Math.max(...s2.pts.map((q) => q.p.y)) * 100 - Y * 100) / 100 : "?"; });
+  const armor = cs.map((c) => c.getProperty("war:armor"));
+  const s1 = RD.get(cs[0]?.id), h0 = s1 ? { ...s1.pts[3].p } : undefined, before = cs.map((c) => RD.get(c.id)?.pts.map((q) => ({ ...q.p })));
+  const sh = kitSoldier(2, { x: ox + 0.5, y: Y, z: oz - 8.5 }, "rifle", "hold");
+  if (h0) rdShot(ow(), { x: h0.x, y: h0.y + 0.05, z: h0.z - 6 }, { x: 0, y: 0, z: 1 }, 10);
+  await kitWait(20);
+  const kicked = cs.map((c, i) => { const st = RD.get(c.id); return st && before[i] ? Math.round(Math.max(...st.pts.map((q, k) => dist(q.p, before[i][k]))) * 100) / 100 : "?"; });
+  try { sh.remove(); } catch {}
+  return { bodies: cs.length, armorProps: armor, topOfEachBody: heights, kickedBy: kicked };
+};
+// v9.14: what health the game reports in the hurt event: for a vanilla blast and for a script hit
+KS.hpseen = async (o, ox, oz) => {
+  floorAt(ox - 8, oz - 8, ox + 8, oz + 8);
+  const a = kitSoldier(1, { x: ox + 0.5, y: Y, z: oz + 0.5 }, "rifle", "hold"), b = kitSoldier(1, { x: ox + 6.5, y: Y, z: oz + 0.5 }, "rifle", "hold");
+  await kitWait(10);
+  const seen = [];
+  const sub = world.beforeEvents.entityHurt.subscribe((ev) => { try { const v = ev.hurtEntity; if (v.id === a.id || v.id === b.id) seen.push({ who: v.id === a.id ? "blast" : "script", dmg: Math.round(ev.damage * 10) / 10, hpSeen: v.getComponent("minecraft:health")?.currentValue, pre: PRE_HP.get(v.id) }); ev.cancel = true; } catch {} });
+  for (const e of [a, b]) e.getComponent("minecraft:health").setCurrentValue(14);
+  await kitWait(2);
+  ow().createExplosion({ x: ox + 0.5, y: Y + 0.5, z: oz + 2.5 }, 1.5, { breaksBlocks: false });
+  preHp(b); b.applyDamage(4);
+  await kitWait(2);
+  world.beforeEvents.entityHurt.unsubscribe(sub);
+  for (const e of [a, b]) try { e.remove(); } catch {}
+  return { seen };
+};
 // v9.7: a downed man in plain view of the enemy (who hold their fire) next to a wall: does he crawl behind it?
 KS.crawl = async (o, ox, oz) => {
   floorAt(ox - 20, oz - 20, ox + 30, oz + 20);

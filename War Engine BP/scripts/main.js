@@ -780,6 +780,7 @@ function speedGroupRoll(e, urgent) {
 
 function think(e) {
   sdDrop(e);
+  try { if (!FALLS.has(e.id) && e.getProperty("war:hide")) { setP(e, "war:hide", false); equip(e, weaponItem(e)); } } catch {}   // (v9.14: never left hidden after a reload mid-fall)
   if (!downed.has(e.id) && gdp(e, "war:downed") !== undefined) downed.set(e.id, tick() + 300);   // still down after a reload
   if (downed.has(e.id)) { setGroups(e, { w: "w_none", t: "t_off", g: "g_none", s: "s_1", d: "d_off", r: "r_off" }); return; }
   if (!pows.has(e.id) && gdp(e, "war:pow") !== undefined) { try { pows.set(e.id, JSON.parse(String(gdp(e, "war:pow")))); } catch {} }
@@ -1393,12 +1394,26 @@ const killHow = new Map();   // soldier id -> { limb, dir, power }
 const CORPSES = [];          // [{ id, t }]
 const gore = () => setting("gore", true) !== false;
 const LIMB_ANY = () => 1 + Math.floor(Math.random() * 5), LIMB_ARMLEG = () => 2 + Math.floor(Math.random() * 4);
+// v9.14: damage the add-on deals itself (every soldier's round, every blast) is already off a man's health when the game
+// asks whether to allow it, so "is this the blow that drops him?" was judged against health already lowered by that
+// same blow: a man on 12 hit for 7 went down, and overkill one-shots were far too common. His health just before the
+// hit is noted here and used instead.
+const PRE_HP = new Map();
+function preHp(o) { try { if (o?.typeId !== SOLDIER) return; const h = o.getComponent("minecraft:health"); if (!h) return; PRE_HP.set(o.id, h.currentValue); if (PRE_HP.size === 1) system.run(() => PRE_HP.clear()); } catch {} }
+// (and it's the same for the game's own damage: a TNT blast, a sword. Whether this game version takes the blow off before
+// asking is learned from our own hits, where his health before is known; it was so on every version tested)
+let PRE_SUB = true;
+function hpBefore(v, h, dmg) {
+  const seen = h?.currentValue ?? 1, pre = PRE_HP.get(v.id);
+  if (pre !== undefined) { if (Math.abs(seen - (pre - dmg)) < 0.05) PRE_SUB = true; else if (Math.abs(seen - pre) < 0.05 && dmg > 0.1) PRE_SUB = false; return pre; }
+  return PRE_SUB ? seen + dmg : seen;
+}
 function oneShot(v, ev, cause) {
   // v9.7 (rev.): it's the force of the blow that decides. A blow far bigger than what he had left (a second round
   // into a man already hurt, buckshot at close range) kills outright; one that only just takes him down leaves him
   // wounded. A blast kills outright and throws him away from it the closer he was, and very close tears him apart.
   const now = tick(), lh = lastHit.get(v.id), fresh = !!lh && now - lh.t <= 1;
-  const hp = v.getComponent("minecraft:health")?.currentValue ?? 1, over = ev.damage - hp;
+  const hp = hpBefore(v, v.getComponent("minecraft:health"), ev.damage), over = ev.damage - hp;
   const src = ev.damageSource?.damagingEntity;
   const away = (from) => { const dx = v.location.x - from.x, dz = v.location.z - from.z, L = Math.hypot(dx, dz) || 1; return { x: dx / L, y: 0, z: dz / L }; };
   let how;
@@ -1531,11 +1546,15 @@ function rdStep(s) {
   }
   if (s.near) for (const o of s.near) {                                                            // (v9.14: bodies pile up on each other, no clipping)
     if (!o.c?.isValid) continue;
-    for (const q of s.pts) for (const r of o.pts) {
-      const dx = q.p.x - r.p.x, dy = q.p.y - r.p.y, dz = q.p.z - r.p.z, d2 = dx * dx + dy * dy + dz * dz;
-      if (d2 > 0.0484 || d2 < 1e-6) continue;
-      const d = Math.sqrt(d2), k = (0.22 - d) / d;
-      q.p = V3(q.p.x + dx * k, q.p.y + Math.max(0, dy * k) + (dy > -0.05 ? 0.01 : 0), q.p.z + dz * k);
+    for (const q of s.pts) for (const [i, j, lo, hi] of o.cons) {                                   // (against the other body's bones, not just its joints)
+      if (lo !== hi) continue;
+      const a = o.pts[i].p, b = o.pts[j].p, ab = vsub(b, a), L2 = vdot(ab, ab) || 1e-6;
+      const k = Math.max(0, Math.min(1, vdot(vsub(q.p, a), ab) / L2)), c = vadd(a, vmul(ab, k)), n = vsub(q.p, c), d = vlen(n);
+      if (d >= 0.24) continue;
+      const nn = d > 1e-4 ? vmul(n, 1 / d) : V3(0, 1, 0), up = nn.y > -0.2 ? V3(nn.x * 0.4, Math.max(nn.y, 0.6), nn.z * 0.4) : nn;   // (mostly up: he lands on it)
+      const L = vlen(up) || 1; q.p = vadd(c, vmul(up, 0.24 / L));
+      if (q.o.y < q.p.y - 0.02 && q.p.y - q.o.y > 0) q.o = V3(q.o.x, Math.min(q.o.y, q.p.y), q.o.z);
+      q.o = V3(q.p.x - (q.p.x - q.o.x) * 0.6, Math.max(q.o.y, q.p.y - 0.01), q.p.z - (q.p.z - q.o.z) * 0.6);   // (friction on him)
     }
   }
   let mv = 0;
@@ -1579,8 +1598,10 @@ system.runInterval(() => {
       if (!s.c?.isValid) { RD.delete(id); continue; }
       if (!s.act) continue;
       if (s.t % 10 === 0) { const h0 = s.pts[0].p; s.near = [...RD.values()].filter((o) => o !== s && !o.gib && o.dim.id === s.dim.id && Math.abs(o.pts[0].p.x - h0.x) < 2.5 && Math.abs(o.pts[0].p.z - h0.z) < 2.5 && Math.abs(o.pts[0].p.y - h0.y) < 2.5); }
-      const done = rdStep(s);
+      let done = rdStep(s);
+      if (s.fall && s.t >= 70) done = true;
       if (done || s.t % 2 === 0 || s.t < 4) rdRender(s, done);                                 // (the client smooths in between)
+      if (done && s.fall) { finishFall(s); RD.delete(id); continue; }
       if (done) { s.act = false; s.cells.clear(); if (!s.gib && !s.pooled && !s.fall && gore()) { s.pooled = true; const p0 = s.pts[0].p, p1 = s.pts[1].p, p2 = s.pts[2].p; try { s.dim.spawnParticle("war:bpool", { x: (p0.x + p1.x + p2.x) / 3, y: Math.min(p0.y, p1.y) - 0.1, z: (p0.z + p1.z + p2.z) / 3 }); } catch {} } }
     } catch (err) { RD.delete(id); oops("ragdoll", err); }
   }
@@ -1596,7 +1617,7 @@ function rdShot(dim, from, u, end) {
       const qx = q.p.x - from.x, qy = q.p.y - from.y, qz = q.p.z - from.z, t = qx * u.x + qy * u.y + qz * u.z;
       if (t < 0 || t > end) continue;
       if (Math.hypot(qx - u.x * t, qy - u.y * t, qz - u.z * t) > 0.28) continue;
-      q.o = vsub(q.o, vmul(V3(u.x, u.y * 0.3, u.z), 0.16));
+      q.o = vsub(q.o, V3(u.x * 0.34, 0.12 + u.y * 0.1, u.z * 0.34));                              // (a jolt: up off the ground and along the round)
       s.act = true; s.still = 0; s.t = Math.min(s.t, 100);
       if (gore()) sprayBlood(dim, q.p, 0);
       return;                                                                                       // (one body per round)
@@ -1619,17 +1640,45 @@ function sprayBlood(dim, at, crit) {
   if (!gore()) return;
   try { const m = new MolangVariableMap(); m.setFloat("variable.crit", crit ? 1 : 0); dim.spawnParticle("war:bspray", at, m); } catch { try { dim.spawnParticle("war:bspray", at); } catch {} }
 }
+// v9.14: a wounded man drops the way the dead do (the same physics), then lies where he fell: while his body falls the
+// soldier himself is hidden; when it comes to rest he's put down there, lying the way it lies, and carries on wounded.
+const FALLS = new Map();   // soldier id -> fall body id
+function downFall(e) {
+  try {
+    if (FALLS.has(e.id) || !e.isValid) return;
+    const on = e.getComponent("minecraft:riding")?.entityRidingOn;
+    if (on) { try { on.getComponent("minecraft:rideable")?.ejectRider(e); } catch {} mountOf.delete(e.id); }   // (thrown from the saddle)
+    const lh = lastHit.get(e.id), how = { fall: true, dir: lh && tick() - lh.t <= 3 ? lh.dir : undefined, power: 0.18, head: lh?.head };
+    const b = spawnCorpse(e, how); if (!b) return;
+    FALLS.set(e.id, b.id);
+    setP(e, "war:hide", true); equip(e, "air");
+  } catch {}
+}
+function finishFall(s) {
+  const id = s.fall; FALLS.delete(id);
+  try { s.c?.remove(); } catch {}
+  const e = world.getEntity(id); if (!e?.isValid) return;
+  try {
+    const p = s.pts.map((q) => q.p), fr = rdFrame(p), hips = vmul(vadd(p[0], p[1]), 0.5);
+    let hx = fr.U.x, hz = fr.U.z; const L = Math.hypot(hx, hz) || 1; hx /= L; hz /= L; if (L < 0.05) { hx = 1; hz = 0; }
+    let at = { x: hips.x - hx * 0.75, y: hips.y - 0.13, z: hips.z - hz * 0.75 };                 // (his feet: the downed pose lies back from them)
+    if (solidAt(e.dimension, { x: at.x, y: at.y + 0.3, z: at.z })) at = { x: hips.x, y: hips.y - 0.13, z: hips.z };
+    e.teleport(at, { rotation: { x: 0, y: (Math.atan2(hx, -hz) * 180) / Math.PI } });
+    if (downed.has(id)) downPos.set(id, { ...at });
+  } catch {}
+  try { setP(e, "war:hide", false); equip(e, weaponItem(e)); } catch {}
+}
 function spawnCorpse(v, how) {
   const dim = v.dimension, l = v.location, now = tick();
   const f = Number(P(v, "war:faction") ?? 0), med = !!P(v, "war:medic"), yaw = (() => { try { return v.getRotation().y; } catch { return 0; } })();
   let sk = 0, cav = false; try { sk = Number(v.getProperty("war:skin") ?? 0); cav = !!v.getProperty("war:cav"); } catch {}   // (the skin he's drawn with: his own, or his faction's)
   if (!sk) sk = Number(gdp(v, "p_war:skin") ?? 0) || factionSkin(f);
   let mo = V3(0, 0, 0); try { const q = v.getVelocity(); mo = V3(Math.max(-0.4, Math.min(0.4, q.x)), 0, Math.max(-0.4, Math.min(0.4, q.z))); } catch {}
-  const mask = gore() ? (how?.mask ?? (how?.limb ? 1 << (how.limb - 1) : 0)) : 0;
+  const mask = gore() && !how?.fall ? (how?.mask ?? (how?.limb ? 1 << (how.limb - 1) : 0)) : 0;
   const make = (at, gibIdx) => {
     const c = dim.spawnEntity("war:corpse", at);
     try { c.setProperty("war:faction", Math.max(0, Math.min(40, f))); c.setProperty("war:skin", Math.max(0, Math.min(64, sk))); c.setProperty("war:medic", med); try { c.setProperty("war:cav", cav); } catch {} try { c.setProperty("war:armor", Math.max(0, ARMOR.indexOf(String(gdp(v, "war:armor") ?? "none")))); } catch {} if (gibIdx) { c.setProperty("war:gib", true); c.setProperty("war:limb", gibIdx); } else c.setProperty("war:limb", mask); c.setRotation({ x: 0, y: 0 }); } catch {}
-    CORPSES.push({ id: c.id, t: now });
+    if (!how?.fall) CORPSES.push({ id: c.id, t: now });
     return c;
   };
   // where his joints are now: standing (or lying, if he was already down), facing where he faced
@@ -1650,7 +1699,8 @@ function spawnCorpse(v, how) {
   });
   const squirt = mask & 1 ? [2, 3] : mask & 2 ? [3] : mask & 4 ? [2] : mask & 8 ? [1] : mask & 16 ? [0] : undefined;
   const body = make(hc, 0);
-  rdStart(body, 0, pts, vel, mask, squirt);
+  const bs = rdStart(body, 0, pts, vel, mask, squirt);
+  if (how?.fall) { bs.fall = v.id; bs.act = true; return body; }   // (v9.14: a wounded man's fall: no gibs, no burst)
   // torn-off pieces: their own physics, thrown harder
   const GIB = { 1: [[2, 3], 4, 1], 2: [[3], 5, 2], 3: [[2], 6, 3], 4: [[1], 7, 4], 5: [[0], 8, 5] };
   for (let k = 1; k <= 5; k++) {
@@ -1667,12 +1717,15 @@ function spawnCorpse(v, how) {
   }
   sprayBlood(dim, chest(v), mask || how?.head || blast ? 1 : 0);
   while (CORPSES.length > 24) { const o = CORPSES.shift(); try { world.getEntity(o.id)?.remove(); } catch {} RD.delete(o.id); }
+  return body;
 }
 world.afterEvents.entityDie.subscribe((ev) => {
   const v = ev.deadEntity;
   try {
     if (v?.typeId !== SOLDIER || held.has(v.id)) return;
     const how = killHow.get(v.id); killHow.delete(v.id); lastHit.delete(v.id);
+    const fb = FALLS.get(v.id);
+    if (fb) { FALLS.delete(v.id); const st = RD.get(fb); if (st) { st.fall = undefined; CORPSES.push({ id: fb, t: tick() }); system.run(() => { try { if (v.isValid) v.remove(); } catch {} }); return; } }
     const h2 = how ?? { dir: undefined, power: 0.12 }; if (downed.has(v.id)) h2.lying = true;   // (killed where he lay: he's already down)
     spawnCorpse(v, h2);
     system.run(() => { try { if (v.isValid) v.remove(); } catch {} });          // (the body takes his place: no death spin)
@@ -1733,8 +1786,8 @@ world.beforeEvents.entityHurt.subscribe((ev) => {
     if (v?.typeId === SOLDIER && !downed.has(v.id)) {
       const cause = String(ev.damageSource.cause ?? "");
       const h = v.getComponent("minecraft:health");
-      const noDown = ["cavalier", "houndmaster"].includes(String(gdp(v, "war:div") ?? ""));   // (v6.9.3: riders and dog handlers just die)
-      if (h && ev.damage >= h.currentValue && cause !== "void" && !dying.has(v.id) && !noDown && !oneShot(v, ev, cause)) {   // (v9.7: some hits kill outright)
+      const noDown = ["houndmaster"].includes(String(gdp(v, "war:div") ?? ""));   // (v6.9.3: dog handlers just die; v9.14: riders go down, thrown from the saddle)
+      if (h && ev.damage >= hpBefore(v, h, ev.damage) && cause !== "void" && !dying.has(v.id) && !noDown && !oneShot(v, ev, cause)) {   // (v9.7: some hits kill outright)
         ev.cancel = true;                                            // falls wounded instead of dying
         let killer; try { killer = ev.damageSource?.damagingEntity; } catch {}
         const bd = hitDir(v, killer);
@@ -2773,6 +2826,48 @@ async function giveOrderInner(player, cfg, given) {
 
 // ================================================================ Unit Wand
 const skinChoices = () => SKINS.map((name, i) => ({ name, slot: i + 1 })).filter((s) => s.name && s.name.trim());
+// v9.14: re-kit a whole group at once: everyone within a radius (one faction, one kind of unit if you like); anything
+// left on "Keep" stays as each man has it
+async function groupEdit(player, e0) {
+  const skins = skinChoices(), mounts = CAV_MOUNTS.filter((m) => cmMountOK(m[0])), wl = WEAPONS.filter((w) => cmWeaponOK(w[0]));
+  const divs = Object.keys(DIV), f0 = e0 ? sd(e0).faction : playerFaction(player) || 1;
+  const f = new ModalFormData().title("Edit everyone nearby")
+    .slider("Within (blocks)", 4, 96, { valueStep: 4, defaultValue: 16 })
+    .dropdown("Faction", ["Any faction", ...factionList()], { defaultValueIndex: f0 })
+    .dropdown("Unit type", ["Every type", ...divs.map((k) => DIV[k].name)], { defaultValueIndex: 0 })
+    .dropdown("Weapon", ["Keep", ...wl.map((w) => w[1])], { defaultValueIndex: 0 })
+    .dropdown("Armor", ["Keep", ...ARMOR_LABEL], { defaultValueIndex: 0 })
+    .dropdown("Skin", ["Keep", "Faction uniform", ...skins.map((k) => k.name)], { defaultValueIndex: 0 })
+    .dropdown("Stance", ["Keep", "Aggressive", "Defensive", "Hold fire"], { defaultValueIndex: 0 })
+    .dropdown("Mount (Cavaliers)", ["Keep", ...mounts.map((m) => m[1])], { defaultValueIndex: 0 });
+  const r = await show(f, player);
+  if (!r || r.canceled || !r.formValues) return;
+  const v = r.formValues.map(Number), fac = v[1], div = v[2] ? divs[v[2] - 1] : undefined;
+  const wpn = v[3] ? wl[v[3] - 1][0] : undefined, arm = v[4] ? ARMOR[v[4] - 1] : undefined, skin = v[5] === 0 ? undefined : v[5] === 1 ? 0 : skins[v[5] - 2].slot;
+  const stance = v[6] ? ["aggressive", "defensive", "holdfire"][v[6] - 1] : undefined, mount = v[7] ? mounts[v[7] - 1][0] : undefined;
+  let n = 0;
+  for (const e of player.dimension.getEntities({ type: SOLDIER, location: player.location, maxDistance: v[0] })) {
+    try {
+      const d = sd(e);
+      if (isDowned(e) || isPow(e) || d.surr || (fac && d.faction !== fac) || (div && d.div !== div)) continue;
+      const okW = wpn && DIV[d.div].weapon && d.div !== "grenadier" && (d.div !== "cavalier" || CAV_WEAPONS.some((w) => w[0] === wpn));
+      const s2 = { ...snapshot(e), func: "__none" };
+      if (okW) { s2.weapon = wpn; s2.ranged = isRangedW(wpn); }
+      if (arm) s2.armor = arm;
+      if (skin !== undefined) s2.skin = skin;
+      const func = d.func, goal = d.goal;
+      if (stance) sdp(e, "war:stance", stance);
+      if (mount && d.div === "cavalier" && mount !== cavMountOf(e)[0]) {
+        const om = world.getEntity(String(gdp(e, "war:mountId") ?? ""));
+        try { om?.getComponent("minecraft:rideable")?.ejectRider(e); if (om?.hasTag("war_cav")) om.remove(); } catch {}
+        mountOf.delete(e.id); sdp(e, "war:mountId", undefined); sdp(e, "war:mountTry", undefined); sdp(e, "war:mount", mount);
+      }
+      if (okW || arm || skin !== undefined) { const ne = setupSoldier(e, s2, player, { heal: false }); giveFunction(ne ?? e, func, player, ANCHORED.includes(func) ? goal || undefined : undefined); }
+      n++;
+    } catch {}
+  }
+  player.onScreenDisplay.setActionBar(`§aChanged ${n} soldier${n === 1 ? "" : "s"}.`);
+}
 async function unitWand(player, e) {
   if (e && (isDowned(e) || isPow(e))) { await captiveMenu(player, e); return; }
   const tpl = getJSON(player, "war:template", undefined);
@@ -2787,6 +2882,7 @@ async function unitWand(player, e) {
     opts.push(["guards", "My guards: orders"]);
   }
   if (tpl) opts.push(["spawn", "Spawn copies"], ["pasteN", "Paste copy onto nearby soldiers"]);
+  opts.push(["groupN", "Edit everyone nearby (weapon, armor, skin, stance, mount)"]);
   opts.push(["dismissN", "§cDismiss a faction nearby"]);
   const af = new ActionFormData().title("Unit Wand")
     .body((e ? e.nameTag + "\n" : "") + (tpl ? `§7Copied: ${factionLabel(tpl.faction)} §7${DIV[tpl.div]?.name}` : "§7Nothing copied."));
@@ -2804,6 +2900,7 @@ async function unitWand(player, e) {
     e.remove(); player.onScreenDisplay.setActionBar("§7Dismissed.");
   }
   else if (pick === "guards") await guardOrders(player, mine ? e : undefined);
+  else if (pick === "groupN") await groupEdit(player, e);
   else if (pick === "spawn") {
     const mr = await show(new ModalFormData().title("Spawn copies").slider("How many", 1, 30, { valueStep: 1, defaultValue: 5 }), player);
     if (!mr || mr.canceled || !mr.formValues) return;
@@ -3600,6 +3697,7 @@ function explode(dim, loc, power, opts) {
   try { noise(dim, loc, opts?.source); } catch {}
 }
 function hurt(ent, amount, src) {
+  preHp(ent);
   try { ent.applyDamage(amount, { cause: "entityExplosion", damagingEntity: src?.isValid ? src : undefined }); }
   catch { try { ent.applyDamage(amount); } catch {} }
 }
@@ -3877,6 +3975,7 @@ function hitscan(e, spec, from, dir, range, weapon) {
     // v9.13: a player is hit like any mob would hit him: his armor counts and the game's short pause between hits holds, so a
     // squad's fire can't empty a full set of netherite in a second. (Soldiers on soldiers stay as they were: armor counts there
     // already, and a man in netherite lasts about three times as long as one in none.)
+    preHp(hit.entity);
     if (hit.entity.typeId === "minecraft:player") { try { hit.entity.applyDamage(dmg, { cause: "entityAttack", damagingEntity: e }); } catch { try { hit.entity.applyDamage(dmg); } catch {} } }
     else try { hit.entity.applyDamage(dmg); } catch {}
   }
@@ -5907,6 +6006,7 @@ function blastDamage(dim, loc, power, src) {
     const dd = dist({ x: o.location.x, y: o.location.y + 0.9, z: o.location.z }, loc);
     const dmg = dd <= core ? power * 5 : Math.round(Math.max(1, power * 3.2 * (1 - (dd - core) / (r - core)) + 1));
     if (dmg <= 0) continue;
+    preHp(o);
     try { o.applyDamage(dmg, { cause: "entityExplosion", damagingEntity: src?.isValid ? src : undefined }); n++; }
     catch { try { o.applyDamage(dmg, { cause: "entityExplosion" }); n++; } catch {} }
   }
@@ -7114,12 +7214,14 @@ function goDown(e, killer) {
   // v6.9.1: he calls for a medic right away (~1.5 s after he drops), not up to 18 s later
   medicCall.set(e.id, now);
   system.runTimeout(() => { try { if (e.isValid && downed.has(e.id) && !medicComing(e.id, tick())) callout(e, "Medic!"); } catch {} }, 30);
+  downFall(e);                                                     // (v9.14: he drops like a body does)
 }
 function medicComing(id, now) {
   for (const [mid, mt] of medicTask) if (mt.target === id && now - (mt.t ?? 0) < 60) { const m = world.getEntity(mid); if (m?.isValid && !downed.has(mid)) return true; }
   return false;
 }
 function revive(e, hpTo = 6) {
+  { const fb = FALLS.get(e.id), st = fb && RD.get(fb); if (st) { finishFall(st); RD.delete(fb); } }
   downed.delete(e.id); downPos.delete(e.id);
   setP(e, "war:down", false);
   sdp(e, "war:downed", undefined);
@@ -7151,6 +7253,7 @@ system.runInterval(() => {
     }
     // pinned where he fell, lying down, at the edge of death: no getting up on his own
     try {
+      if (FALLS.has(id)) throw 0;                                   // (v9.14: his body is still falling)
       const at = downPos.get(id) ?? e.location; if (!downPos.has(id)) downPos.set(id, { ...at });
       if (dist(at, e.location) > 0.6) e.teleport(at);
       e.clearVelocity?.();
@@ -9177,6 +9280,56 @@ system.runInterval(() => {
     } catch {}
   }
 }, 60);
+// v9.14: soldiers take each other prisoner. A man who surrendered is taken by the nearest enemy soldier within 10 blocks
+// (when the fight round him is over) and marched to that side's lines: their nearest war flag, else the captor's own
+// post. The wounded, once the winners hold the ground, are sometimes taken too instead of left to bleed out. A prisoner
+// whose side reaches him with no guard near is freed; one left unguarded for long may slip away.
+function soldierTakes(e, captor) {
+  const cf = Number(P(captor, "war:faction") ?? 0);
+  const fl = nearestFlag(captor.dimension, captor.location, (f) => Number(P(f, "war:faction")) === cf, 200);
+  const home = marker(Number(gdp(captor, "war:home") ?? 0));
+  const at = { ...(fl?.location ?? home?.location ?? captor.location) };
+  if (gdp(e, "war:surr")) { sdp(e, "war:surr", 0); sdp(e, "war:surrIso", undefined); }
+  makePow(e, captor);
+  const pw = pows.get(e.id); pw.mode = "jail"; pw.at = at; pw.cf = cf; pw.t = tick();
+  sdp(e, "war:pow", JSON.stringify(pw));
+  applyRelations(e);
+  callout(captor, "Hands up!", { event: true }); v9stat("taken");
+  note(captor, "took a prisoner"); updateName(e);
+}
+system.runInterval(() => {
+  const now = tick();
+  for (const e of allOf(SOLDIER)) {
+    try {
+      const pw = pows.get(e.id), surr = !pw && gdp(e, "war:surr"), down = !pw && downed.has(e.id) && !FALLS.has(e.id);
+      if (!pw && !surr && !down) continue;
+      const f = Number(P(e, "war:faction") ?? 0), near = nearSnap(e.dimension.id, e.location, 16);
+      if (pw) {
+        const cf = pw.cf ?? (findPlayer(pw.captor) ? playerFaction(findPlayer(pw.captor)) : 0);
+        const guard = near.some((c) => !c.down && c.dd < 12 && (c.type === SOLDIER || c.type === "minecraft:player") && c.f && c.f === cf);
+        const friend = near.find((c) => !c.down && c.dd < 3 && c.type === SOLDIER && c.f === f && c.id !== e.id && !pows.has(c.id));
+        if (friend && !guard) { freePow(e, true); applyRelations(e); giveFunction(e, "hold"); callout(friend.e, "We've got you!", { event: true }); v9stat("freed"); continue; }
+        if (pw.mode === "jail" && !guard && pw.cf) { pw.alone = (pw.alone ?? 0) + 1; if (pw.alone > 30 && Math.random() < 0.05) { freePow(e, true); applyRelations(e); giveFunction(e, "hold"); v9stat("escaped"); } }
+        else pw.alone = 0;
+        continue;
+      }
+      // a captor: the nearest enemy soldier on his feet, with no fight on round here (none of the man's side standing near)
+      const own = near.some((c) => !c.down && c.type !== HOUND && c.id !== e.id && c.f === f && !pows.has(c.id) && !(c.type === SOLDIER && gdp(c.e, "war:surr")));
+      if (own) continue;
+      const cap = near.filter((c) => c.type === SOLDIER && !c.down && c.f && isHostile(c.f, f) && !pows.has(c.id) && !gdp(c.e, "war:surr") && c.dd < (down ? 6 : 10)).sort((a, b) => a.dd - b.dd)[0];
+      if (!cap) continue;
+      if (down) { const k = `${e.id}`; if (PRIZE.has(k)) continue; PRIZE.add(k); if (Math.random() < 0.5) continue; }   // (the wounded: half the time)
+      soldierTakes(e, cap.e);
+    } catch {}
+  }
+  if (PRIZE.size > 500) PRIZE.clear();
+}, 40);
+const PRIZE = new Set();
+world.afterEvents.playerInteractWithEntity.subscribe((ev) => {                     // v9.14: your side's prisoner: you set him free
+  const e = ev.target, p = ev.player;
+  if (e?.typeId !== SOLDIER || !pows.has(e.id) || (ev.beforeItemStack ?? ev.itemStack)?.typeId === "war:unit_wand") return;
+  system.run(() => { try { const pf = playerFaction(p); if (pf && pf === Number(P(e, "war:faction"))) { freePow(e, true); applyRelations(e); giveFunction(e, "follow", p); p.onScreenDisplay.setActionBar("§aFreed. He's with you."); } } catch {} });
+});
 world.afterEvents.playerInteractWithEntity.subscribe((ev) => {
   const e = ev.target, p = ev.player;
   if (e?.typeId !== SOLDIER || !gdp(e, "war:surr") || pows.has(e.id)) return;   // (v9.1: any surrendered man, cut off or at a lost flag)
@@ -9585,7 +9738,7 @@ const crowdT = new Map();
 function unCrowd(e, d, now, anchor, leash) {
   if ((crowdT.get(e.id) ?? 0) > now || isRiding(e) || personal.has(e.id)) return undefined;
   const f = d.faction;
-  const mates = nearbyCombatants(e.dimension.id, e.location, 1.2).filter((o) => o.typeId === SOLDIER && o.id !== e.id && !downed.has(o.id) && Math.abs(o.location.y - e.location.y) < 1 && Number(P(o, "war:faction") ?? 0) === f);
+  const mates = nearbyCombatants(e.dimension.id, e.location, 1.2).filter((o) => o.isValid && o.typeId === SOLDIER && o.id !== e.id && !downed.has(o.id) && Math.abs(o.location.y - e.location.y) < 1 && Number(P(o, "war:faction") ?? 0) === f);
   if (!mates.length || !mates.some((o) => o.id < e.id)) return undefined;
   crowdT.set(e.id, now + 40);
   const t = perc.get(e.id)?.threat;
@@ -10224,7 +10377,7 @@ system.runInterval(() => {
     try {
       const v = world.getEntity(id);
       const stop = () => { crawlTo.delete(id); try { if (v?.isValid) setP(v, "war:crawl", false); } catch {} };
-      if (!v?.isValid || DRAG.has(id) || held.has(id) || pows.has(id) || medicComing(id, now)) { stop(); continue; }
+      if (!v?.isValid || FALLS.has(id) || DRAG.has(id) || held.has(id) || pows.has(id) || medicComing(id, now)) { stop(); continue; }
       n++;
       let c = crawlTo.get(id);
       if (!c || now - c.t > 40 || (!c.to && now - c.t > 20)) {
@@ -10649,7 +10802,9 @@ system.runInterval(() => {
       if (!e?.isValid || !m?.isValid || downed.has(id) || e.getComponent("minecraft:riding")?.entityRidingOn?.id !== M.id) { mountOf.delete(id); continue; }
       const rd = m.getComponent("minecraft:rideable")?.getRiders() ?? [];
       if (rd[0]?.id !== id || VEHICLES.includes(m.typeId)) continue;           // (a passenger: whoever's in front steers; the add-on's vehicles drive themselves)
-      const d = sd(e), want = (d.div === "cavalier" ? cavDest(e, d) : undefined) ?? rideDest(e, d);
+      const d = sd(e), cd = d.div === "cavalier" ? cavDest(e, d) : undefined;
+      let want = cd ?? rideDest(e, d);
+      if (!cd && want && d.div === "cavalier" && rideTo.has(id)) want = cavLine(e, d, want);
       if (want?.strike) cavStrike(e, d, m, want);
       const l = m.location, vel = m.getVelocity();
       let tx = 0, tz = 0;
@@ -10658,6 +10813,8 @@ system.runInterval(() => {
         if (L > want.stop) {
           let sp = mountSpeed(m);
           if (isBoatType(m.typeId)) { let wet = false; try { wet = !!m.dimension.getBlock({ x: l.x, y: l.y - 0.2, z: l.z })?.isLiquid || !!m.dimension.getBlock(l)?.isLiquid; } catch {} if (!wet) sp = 0.04; }
+          sp *= want.pace ?? 1;
+          if (d.div === "cavalier") { const v0 = Math.hypot(vel.x, vel.z); CAV_STUCK.set(id, L > want.stop + 3 && v0 < 0.04 ? (CAV_STUCK.get(id) ?? 0) + 1 : 0); }   // (v9.14: going nowhere)
           if (want.fast) sp *= 1.15; else if (want.slow) sp *= 0.75; else if (gunState.get(id)?.target?.isValid) sp *= 0.5;   // (firing from the saddle: easy; a charge: flat out)
           sp *= Math.min(1, (L - want.stop) / 4 + 0.3);
           tx = (dx / L) * sp; tz = (dz / L) * sp;
@@ -10733,8 +10890,16 @@ function cavTick(e, d, now) {
       mountOf.delete(e.id); sdp(e, "war:mountId", undefined); sdp(e, "war:mountTry", undefined); sdp(e, "war:mount", "minecraft:horse");
     }
     const on = e.getComponent("minecraft:riding")?.entityRidingOn;
-    if (on) { if (!mountOf.has(e.id)) mountOf.set(e.id, { id: on.id, auto: false }); }
+    const T0 = CAV_TGT.get(e.id), tgt = T0 && now - T0.t < 60 ? world.getEntity(T0.id) : undefined;
+    if (on && tgt?.isValid && !VEHICLES.includes(on.typeId) && ((roofOver(tgt) && dist(tgt.location, e.location) < 24) || (CAV_STUCK.get(e.id) ?? 0) > 30)) {   // (v9.14: indoors, or the horse can't get on: on foot)
+      try { on.getComponent("minecraft:rideable")?.ejectRider(e); } catch {}
+      mountOf.delete(e.id); CAV_STUCK.delete(e.id); sdp(e, "war:afoot", now); note(e, "dismounted to go in"); return;
+    }
+    const afoot = gdp(e, "war:afoot");
+    if (!on && afoot !== undefined && (tgt?.isValid || now - Number(afoot) < 200)) { /* (fighting on foot: back in the saddle when it's over) */ }
+    else if (on) { if (afoot !== undefined) sdp(e, "war:afoot", undefined); if (!mountOf.has(e.id)) mountOf.set(e.id, { id: on.id, auto: false }); }
     else if (now - Number(gdp(e, "war:mountTry") ?? -999) > 60) {
+      if (afoot !== undefined) sdp(e, "war:afoot", undefined);
       sdp(e, "war:mountTry", now);
       const mid = gdp(e, "war:mountId"), m = mid ? world.getEntity(String(mid)) : undefined;
       if (m?.isValid && dist(m.location, e.location) < 24) { readyMount(m); try { e.teleport({ x: m.location.x, y: m.location.y + 0.4, z: m.location.z }); } catch {} mountSoldier(e, m, false); }
@@ -10771,6 +10936,33 @@ function cavDest(e, d) {
   CAV_PASS.delete(e.id);
   return { at: tl, stop: 0.3, fast: true, strike: t };
 }
+// v9.14: riders on the same order ride in a line abreast (2.6 blocks apart, nobody crossing), keeping pace with the line
+const CAV_LINE = new Map(), CAV_STUCK = new Map();
+function cavLine(e, d, want) {
+  try {
+    const now = tick(), key = `${d.faction}|${d.squad}|${Math.round(want.at.x / 6)}|${Math.round(want.at.z / 6)}`;
+    let g = CAV_LINE.get(key);
+    if (!g || now - g.t > 20) {
+      const mem = [];
+      for (const id of mountOf.keys()) {
+        const o = world.getEntity(id); if (!o?.isValid) continue;
+        const od = sd(o); if (od.div !== "cavalier" || od.faction !== d.faction || od.squad !== d.squad || CAV_TGT.has(id)) continue;
+        const rt = rideTo.get(id); if (!rt || Math.hypot(rt.x - want.at.x, rt.z - want.at.z) > 8) continue;
+        mem.push(o);
+      }
+      if (mem.length < 2) { CAV_LINE.set(key, { t: now, ids: [] }); return want; }
+      const c = mem.reduce((a, o) => ({ x: a.x + o.location.x / mem.length, z: a.z + o.location.z / mem.length }), { x: 0, z: 0 });
+      const dx = want.at.x - c.x, dz = want.at.z - c.z, L = Math.hypot(dx, dz) || 1, dir = { x: dx / L, z: dz / L }, perp = { x: -dir.z, z: dir.x };
+      const lat = (o) => (o.location.x - c.x) * perp.x + (o.location.z - c.z) * perp.z, alo = (o) => (o.location.x - c.x) * dir.x + (o.location.z - c.z) * dir.z;
+      g = { t: now, ids: mem.sort((a, b) => lat(a) - lat(b)).map((o) => o.id), dir, perp, avg: mem.reduce((a, o) => a + alo(o), 0) / mem.length, c };
+      CAV_LINE.set(key, g); if (CAV_LINE.size > 200) CAV_LINE.clear();
+    }
+    const i = g.ids.indexOf(e.id); if (i < 0 || g.ids.length < 2) return want;
+    const side = (i - (g.ids.length - 1) / 2) * 2.6, ahead = (e.location.x - g.c.x) * g.dir.x + (e.location.z - g.c.z) * g.dir.z - g.avg;
+    return { ...want, at: { x: want.at.x + g.perp.x * side, y: want.at.y, z: want.at.z + g.perp.z * side }, pace: ahead > 1.5 ? 0.6 : ahead < -1.5 ? 1.15 : 1 };
+  } catch { return want; }
+}
+const roofOver = (o) => { for (let k = 2; k <= 5; k++) if (solidAt(o.dimension, { x: o.location.x, y: o.location.y + k, z: o.location.z })) return true; return false; };
 function cavStrike(e, d, m, want) {
   const t = want?.strike; if (!t?.isValid) return;
   const now = tick(); if (now - (CAV_HIT.get(e.id) ?? -99) < 16) return;
@@ -10778,6 +10970,7 @@ function cavStrike(e, d, m, want) {
   CAV_HIT.set(e.id, now);
   let sp = 0; try { const v = m.getVelocity(); sp = Math.hypot(v.x, v.z); } catch {}
   const dmg = (d.weapon === "spear" ? 8 : 6) + Math.round(sp * 12);                            // (the lance hits hardest, and the faster the harder)
+  preHp(t);
   try { t.applyDamage(dmg, { cause: "entityAttack", damagingEntity: e }); } catch {}
   try { t.applyKnockback({ x: (t.location.x - e.location.x) * 0.6, z: (t.location.z - e.location.z) * 0.6 }, 0.25); } catch {}
   const dx = t.location.x - e.location.x, dz = t.location.z - e.location.z, L = Math.hypot(dx, dz) || 1;
