@@ -808,6 +808,43 @@ KS.horseold = async (o, ox, oz) => {
   try { e.remove(); h.remove(); } catch {}
   return r;
 };
+// v9.14: how the game counts "MB of dynamic properties saved": many small writes on soldiers, or few writes on the world
+KS.dpcost = async (o, ox, oz) => {
+  floorAt(ox - 8, oz - 8, ox + 8, oz + 8);
+  const men = [0, 1, 2, 3, 4, 5, 6, 7, 8, 9].map((i) => kitSoldier(1, { x: ox + i - 4.5, y: Y, z: oz + 0.5 }, "rifle", "hold"));
+  await kitWait(20);
+  if (o.mode === "ent") { for (let k = 0; k < 300; k++) { for (const e of men) e.setDynamicProperty("war:dptest", k); await kitWait(1); } }
+  else if (o.mode === "tpmk") { const mk = []; for (let i = 0; i < 40; i++) { const sl = makeWaypoint(ow(), { x: ox + (i % 8) * 3 - 12, y: Y, z: oz + Math.floor(i / 8) * 3 - 6 }, false); const m = marker(sl); if (m) mk.push(m); } for (let k = 0; k < 1300; k++) { for (let j = 0; j < 13; j++) { const m = mk[(k * 13 + j) % mk.length]; try { m.teleport({ x: m.location.x + (Math.random() - 0.5) * 2, y: Y, z: m.location.z + (Math.random() - 0.5) * 2 }); } catch {} } await kitWait(1); } for (const m of mk) try { m.remove(); } catch {} }
+  else if (o.mode === "tags") { for (let k = 0; k < 1300; k++) { for (let j = 0; j < 13; j++) { const e = men[(k * 13 + j) % men.length]; try { if (k % 2) e.removeTag(`war_t${j}`); else e.addTag(`war_t${j}`); } catch {} } await kitWait(1); } }
+  else if (o.mode === "tpsol") { for (let k = 0; k < 1300; k++) { for (let j = 0; j < 6; j++) { const e = men[(k * 6 + j) % men.length]; try { e.teleport({ x: e.location.x + (Math.random() - 0.5) * 0.4, y: e.location.y, z: e.location.z + (Math.random() - 0.5) * 0.4 }); } catch {} } await kitWait(1); } }
+  else if (o.mode === "churn") { const live = []; for (let k = 0; k < 1300; k++) { if (k % 2 === 0) { const sl = makeWaypoint(ow(), { x: ox + (Math.random() - 0.5) * 14, y: Y, z: oz + (Math.random() - 0.5) * 14 }, false); const m = marker(sl); if (m) live.push(m); while (live.length > 40) { try { live.shift().remove(); } catch {} } } await kitWait(1); } for (const m of live) try { m.remove(); } catch {} }
+  else if (o.mode === "world") { const big = "x".repeat(Number(o.kb ?? 30) * 1024); for (let k = 0; k < 100; k++) { world.setDynamicProperty("war:dptest", big + k); await kitWait(10); } world.setDynamicProperty("war:dptest", undefined); }
+  for (const e of men) try { e.remove(); } catch {}
+  return { mode: o.mode };
+};
+// v9.14: 180 soldiers standing about (or marching, no fight): is the "MB saved" from their mere presence and movement?
+KS.dpidle = async (o, ox, oz) => {
+  floorAt(ox - 60, oz - 90, ox + 60, oz + 90);
+  setRelPair(1, 2, "0", false);
+  for (let i = 0; i < 180; i++) kitSoldier(1 + (i % 2), { x: ox + (i % 20) * 2 - 20 + 0.5, y: Y, z: oz - 40 + Math.floor(i / 20) * 4 + 0.5 }, "rifle");
+  await kitWait(20);
+  globalThis.__dpReport?.(); globalThis.__evReport?.(1); const t0 = tick();
+  const wset = world.setDynamicProperty; if (o.nows) world.setDynamicProperty = function (k, v) { if (k === "war:marches2" || k === "war:slotrefs") return; return wset.call(world, k, v); };
+  if (o.march) { await kitOrder(1, { x: ox, y: Y, z: oz + 70 }); await kitOrder(2, { x: ox, y: Y, z: oz - 70 }); }
+  await kitWait(1200);
+  if (o.nows) delete world.setDynamicProperty;
+  const wk = [...DPSTAT].filter(([k]) => k.startsWith("W/")).map(([k, r]) => `${k}:${r.n}x/${(r.b / 1024).toFixed(0)}KB`);
+  return { wk, n: kitSoldiers().length, dp: globalThis.__dpReport?.(), ev: globalThis.__evReport?.(tick() - t0), wps: allOf(WAYPOINT).length };
+};
+// v9.14: 180 men moved every tick: does "MB saved" scale with how much data each one carries?
+KS.dpmove = async (o, ox, oz) => {
+  floorAt(ox - 60, oz - 90, ox + 60, oz + 90);
+  const men = []; for (let i = 0; i < 180; i++) men.push(kitSoldier(1, { x: ox + (i % 20) * 2 - 20 + 0.5, y: Y, z: oz - 40 + Math.floor(i / 20) * 4 + 0.5 }, "rifle", "hold"));
+  await kitWait(20);
+  if (o.strip) for (const e of men) { try { for (const k of e.getDynamicPropertyIds()) e.setDynamicProperty(k, undefined); } catch {} }
+  for (let k = 0; k < 1300; k++) { for (const e of men) { try { e.teleport({ x: e.location.x + (k % 2 ? 0.3 : -0.3), y: e.location.y, z: e.location.z }); } catch {} } await kitWait(1); }
+  return { n: men.length, bytes: men[0].getDynamicPropertyTotalByteCount() };
+};
 // v9.7: a downed man in plain view of the enemy (who hold their fire) next to a wall: does he crawl behind it?
 KS.crawl = async (o, ox, oz) => {
   floorAt(ox - 20, oz - 20, ox + 30, oz + 20);
@@ -949,9 +986,12 @@ KS.big = async (o, ox, oz) => {
   await kitWait(20);
   await kitOrder(1, { x: ox, y: Y, z: oz + 60 }); await kitOrder(2, { x: ox, y: Y, z: oz - 60 });
   globalThis.__dpReport?.(); globalThis.__evReport?.(1); globalThis.__rdTot = 0; globalThis.__scTot = 0; globalThis.__scN = 0; const t0 = tick(), r0 = Date.now(); let slow = 0, last = Date.now(), worst = 0;
-  await kitLoop(Number(o.ticks ?? 600), () => { const now = Date.now(), dt = now - last; last = now; worst = Math.max(worst, dt); if (dt > 600) slow++; return false; });
+  let mid;
+  await kitLoop(Number(o.ticks ?? 600), () => { const now = Date.now(), dt = now - last; last = now; worst = Math.max(worst, dt); if (dt > 600) slow++;
+    if (!mid && tick() - t0 > 400) { const sz = allOf(SOLDIER).map((e) => { try { return e.getDynamicPropertyTotalByteCount(); } catch { return 0; } }).sort((a, b) => b - a); const keys = {}; const big = allOf(SOLDIER)[0]; try { for (const k of big.getDynamicPropertyIds()) { const v = big.getDynamicProperty(k); keys[k] = typeof v === "string" ? v.length : 8; } } catch {} mid = { n: sz.length, avg: Math.round(sz.reduce((a, b) => a + b, 0) / Math.max(1, sz.length)), max: sz[0], world: world.getDynamicPropertyTotalByteCount(), wps: allOf(WAYPOINT).length, keys: Object.entries(keys).sort((a, b) => b[1] - a[1]).slice(0, 12) }; }
+    return false; });
   const sec = (Date.now() - r0) / 1000, ticks = tick() - t0;
-  return { bodyMsPerTick: +((globalThis.__rdTot + globalThis.__scTot) / Math.max(1, tick() - t0)).toFixed(2), corpses: globalThis.__scN, corpseMsEach: +(globalThis.__scTot / Math.max(1, globalThis.__scN)).toFixed(1), ev: globalThis.__evReport?.(tick() - t0), dp: globalThis.__dpReport?.(), n: N, ticks, realSec: +sec.toFixed(1), tps: +(ticks / sec).toFixed(1), worstGapMs: worst, left1: kitSoldiers(1).filter((e) => !isDown(e)).length, left2: kitSoldiers(2).filter((e) => !isDown(e)).length, ...kitShotStats(t0) };
+  return { mid, bodyMsPerTick: +((globalThis.__rdTot + globalThis.__scTot) / Math.max(1, tick() - t0)).toFixed(2), corpses: globalThis.__scN, corpseMsEach: +(globalThis.__scTot / Math.max(1, globalThis.__scN)).toFixed(1), ev: globalThis.__evReport?.(tick() - t0), dp: globalThis.__dpReport?.(), n: N, ticks, realSec: +sec.toFixed(1), tps: +(ticks / sec).toFixed(1), worstGapMs: worst, left1: kitSoldiers(1).filter((e) => !isDown(e)).length, left2: kitSoldiers(2).filter((e) => !isDown(e)).length, ...kitShotStats(t0) };
 };
 function kitShotStats(t0) {
   const a = KSHOTS.filter((x) => x.t >= t0);
@@ -976,7 +1016,7 @@ system.afterEvents.scriptEventReceive.subscribe((ev) => {
     try {
       for (const e of [...allOf(SOLDIER), ...allOf(WAYPOINT), ...allOf(HOUND)]) { try { e.remove(); } catch {} }   // (leftovers of an interrupted run)
       kcmd("tickingarea remove_all"); kcmd("time set noon"); kcmd("gamerule dodaylightcycle false"); await kitWait(40);
-       const r = name === "castle" ? [ox - 60, oz - 20, ox + 100, oz + 150] : name === "probe" || name === "rayprobe" ? [ox - 20, oz - 20, ox + 20, oz + 20] : name === "trip" && o.mode === "flat" ? [ox - 60, oz - 330, ox + 60, oz + 20] : name === "big" || name === "load" ? [ox - 60, oz - 90, ox + 60, oz + 90] : [ox - 30, oz - 180, ox + 80, oz + 50];
+       const r = name === "castle" ? [ox - 60, oz - 20, ox + 100, oz + 150] : name === "probe" || name === "rayprobe" ? [ox - 20, oz - 20, ox + 20, oz + 20] : name === "trip" && o.mode === "flat" ? [ox - 60, oz - 330, ox + 60, oz + 20] : name === "big" || name === "load" || name === "dpidle" || name === "dpmove" ? [ox - 60, oz - 90, ox + 60, oz + 90] : [ox - 30, oz - 180, ox + 80, oz + 50];
       // (a ticking area keeps the land loaded and its mobs moving with no player near; at most ~100 chunks each)
       const w = r[2] - r[0], h = r[3] - r[1];
       const parts = Math.max(1, Math.ceil((Math.ceil(w / 16) + 1) * (Math.ceil(h / 16) + 1) / 90));

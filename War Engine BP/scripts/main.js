@@ -222,11 +222,11 @@ const DPC = new Map(); // entity id ("@world" for the world) -> Map(key -> value
 const dpMap = (h) => { const id = h === world ? "@world" : h.id; let m = DPC.get(id); if (!m) { m = new Map(); DPC.set(id, m); } return m; };
 // v5.6: bookkeeping that only matters while the world runs (stuck checks, pace rolls, heal timers) never touches the
 // game's storage at all
-const TRANSIENT = new Set(["war:st", "p_war:firing", "p_war:aiming", "p_war:pose", "war:lp", "war:lpt", "war:pace", "war:pacet", "war:selfheal", "war:stuck", "war:calm", "war:readout", "war:healt", "war:covert"]);
+const TRANSIENT = new Set(["war:born", "war:st", "p_war:firing", "p_war:aiming", "p_war:pose", "war:lp", "war:lpt", "war:pace", "war:pacet", "war:selfheal", "war:stuck", "war:calm", "war:readout", "war:healt", "war:covert"]);
 // (only records whose being up to 30 s old after a reload is harmless: the waypoint he was walking to, the march he was
 //  catching up, his own markers, who hit him last. His orders, being down, falling back and his entity properties are
 //  written at once: an old copy of those would bring back a state he'd left.)
-const LAZY = new Set(["war:goal", "war:catchup", "war:hurt", "war:mymk", "war:fmk"]);
+const LAZY = new Set(["war:goal", "war:catchup", "war:hurt", "war:mymk", "war:fmk", "war:ordergoal", "war:retreatUntil"]);   // (v9.15: + the parked order goal and retreat timer: rewritten hundreds of times a minute on a march)
 const lazyKey = (k) => LAZY.has(k);
 function gdp(h, k) {
   const m = dpMap(h);
