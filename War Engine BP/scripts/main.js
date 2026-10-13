@@ -1592,7 +1592,7 @@ function rdRender(s, final) {
   const c = s.c; if (!c?.isValid) return;
   const p = s.pts.map((q) => q.p);
   const at = s.gib ? vmul(vadd(p[0], p[1]), 0.5) : vmul(vadd(p[0], p[1]), 0.5);
-  try { c.teleport(at, { rotation: { x: 0, y: 0 } }); } catch {}
+  if (final || !s.at || Math.abs(at.x - s.at.x) + Math.abs(at.y - s.at.y) + Math.abs(at.z - s.at.z) > 0.015) { try { c.teleport(at, { rotation: { x: 0, y: 0 } }); s.at = at; } catch {} }   // (not moved: nothing to send)
   const ang = rdAngles(s), keys = s.gib ? ["war:ga", "war:gb"] : RD_BODY_PROPS;
   ang.forEach((v, i) => { const val = Math.round(v * 10) / 10; if (final || s.sent[i] === undefined || Math.abs(val - s.sent[i]) >= 1.5) { try { c.setProperty(keys[i], Math.max(-180, Math.min(180, val))); s.sent[i] = val; } catch {} } });
   if (s.squirt && s.t < 50 && s.t % 4 === 0 && gore()) {                                            // (a stump keeps pumping for a while)
@@ -1636,7 +1636,7 @@ system.runInterval(() => {
       if (s.t % 10 === 0) { const h0 = s.pts[0].p; s.near = [...RD.values()].filter((o) => o !== s && !o.gib && o.dim.id === s.dim.id && Math.abs(o.pts[0].p.x - h0.x) < 2.5 && Math.abs(o.pts[0].p.z - h0.z) < 2.5 && Math.abs(o.pts[0].p.y - h0.y) < 2.5); }
       let done = rdStep(s);
       if (s.fall && s.t >= 70) done = true;
-      if (done || s.t % 3 === 0 || s.t < 3) rdRender(s, done);                                 // (the client smooths in between)
+      if (done || s.t < 10 || s.t % 3 === 0) rdRender(s, done);                                // (v9.17: every tick while he drops, so the fall isn't choppy; then every 3rd)
       if (done && s.fall) { finishFall(s); RD.delete(id); continue; }
       if (done) { s.act = false; if (!s.gib && !s.pooled && !s.fall && gore()) { s.pooled = true; const p0 = s.pts[0].p, p1 = s.pts[1].p, p2 = s.pts[2].p; try { s.dim.spawnParticle("war:bpool", { x: (p0.x + p1.x + p2.x) / 3, y: Math.min(p0.y, p1.y) - 0.1, z: (p0.z + p1.z + p2.z) / 3 }); } catch {} } }
     } catch (err) { RD.delete(id); oops("ragdoll", err); }
@@ -4695,6 +4695,10 @@ system.runInterval(() => {
 function turnTo(e, at, maxStep = 18) {
   try {
     const want = (Math.atan2(-(at.x - e.location.x), at.z - e.location.z) * 180) / Math.PI;
+    // v9.17: in the saddle he sits square to his mount (the game turns a horse to face wherever its rider faces: a man
+    // aiming off to the side swung his horse sideways). He shoots from the saddle at anything up to ~100° off his line.
+    const MO = mountOf.get(e.id), hd = MO ? MOUNT_HEAD.get(MO.id) : undefined;
+    if (hd !== undefined) { const off = Math.abs(((want - hd + 540) % 360) - 180); return Math.max(0, off - 100); }
     const now = tick(), m = rotMemo.get(e.id);
     const cur = m && m.t === now ? m.y : e.getRotation().y;            // (one read per tick at most)
     const off = Math.abs(((want - cur + 540) % 360) - 180);
@@ -10747,6 +10751,8 @@ function mountSpeed(m) {
   return Math.max(0.15, Math.min(0.36, v));
 }
 const mountOf = new Map();   // soldier id -> { id (mount), auto (got on because his leader did) }
+const MOUNT_HEAD = new Map(); // mount id -> the heading the script is steering it on (v9.17)
+system.runInterval(() => { for (const id of [...MOUNT_HEAD.keys()]) if (!world.getEntity(id)) MOUNT_HEAD.delete(id); }, 1200);
 const rideTo = new Map();    // soldier id -> where his last order sends him (riding: straight there)
 function mountReady(m) {
   try {
@@ -10837,9 +10843,17 @@ system.runInterval(() => {
           if (d.div === "cavalier") { const v0 = Math.hypot(vel.x, vel.z); CAV_STUCK.set(id, L > want.stop + 3 && v0 < 0.04 ? (CAV_STUCK.get(id) ?? 0) + 1 : 0); }   // (v9.14: going nowhere)
           if (want.fast) sp *= 1.15; else if (want.slow) sp *= 0.75; else if (gunState.get(id)?.target?.isValid) sp *= 0.5;   // (firing from the saddle: easy; a charge: flat out)
           if (!want.route) sp *= Math.min(1, (L - want.stop) / 4 + 0.3);                              // (on a route: full pace from point to point)
-          tx = (dx / L) * sp; tz = (dz / L) * sp;
-          const yaw = (Math.atan2(-dx, dz) * 180) / Math.PI;
-          try { m.setRotation({ x: 0, y: turnToward(m.getRotation().y, yaw, 12) }); } catch {}
+          // v9.17: a mount goes where its head points. It turns toward the way it wants to go at an animal's pace
+          // (tighter when slow, slower in a sharp turn) and is carried only along its own heading, never sideways
+          const wantYaw = (Math.atan2(-dx, dz) * 180) / Math.PI;
+          const cur = MOUNT_HEAD.get(m.id) ?? m.getRotation().y;
+          const off = Math.abs(((wantYaw - cur + 540) % 360) - 180);
+          const hd = turnToward(cur, wantYaw, Math.hypot(vel.x, vel.z) < 0.12 ? 20 : 13);
+          MOUNT_HEAD.set(m.id, hd);
+          sp *= off > 100 ? 0.3 : off > 50 ? 0.6 : 1;
+          const hr = hd * Math.PI / 180;
+          tx = -Math.sin(hr) * sp; tz = Math.cos(hr) * sp;
+          try { m.setRotation({ x: 0, y: hd }); if (Math.abs(((e.getRotation().y - hd + 540) % 360) - 180) > 1) e.setRotation({ x: 0, y: hd }); } catch {}
           // a one-block step ahead: jump it (horses and the like)
           if (!isBoatType(m.typeId) && solidAt(m.dimension, { x: l.x, y: l.y - 0.2, z: l.z })) {
             const ahead = { x: l.x + (dx / L) * 1.2, y: l.y + 0.5, z: l.z + (dz / L) * 1.2 };
@@ -10848,6 +10862,7 @@ system.runInterval(() => {
         }
       }
       m.applyImpulse({ x: (tx - vel.x) * 0.8, y: 0, z: (tz - vel.z) * 0.8 });
+      if (!tx && !tz) { const h0 = MOUNT_HEAD.get(m.id); if (h0 !== undefined) try { m.setRotation({ x: 0, y: h0 }); } catch {} }   // (stopping: it stays facing the way it came, not the rider's aim)
     } catch { mountOf.delete(id); }
   }
 }, 2);
@@ -11313,8 +11328,11 @@ function shieldBlock(v, ev) {
   const raised = !!P(v, "war:block");
   const melee = cause === "entityAttack";
   let r = 0;
-  if (raised) r = bullet ? 0.8 : 1;
-  else if (Math.random() < (melee ? 0.4 : 0.25)) r = bullet ? 0.6 : 1;
+  // (v9.17: a bullet goes through a shield: raised, it takes only the edge off a round, lowered nothing at all. At 80%
+  //  a swordsman under fire took three times the rounds a rifleman did)
+  if (bullet) r = raised ? 0.2 : 0;
+  else if (raised) r = 1;
+  else if (Math.random() < (melee ? 0.4 : 0.25)) r = 1;
   if (r > 0) {
     SHIELD_HIT.set(v.id, tick());
     system.run(() => { try { v.dimension.playSound("item.shield.block", v.location, { volume: 1 }); } catch {} });

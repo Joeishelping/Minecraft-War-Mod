@@ -1,5 +1,26 @@
 # War Engine changelog
 
+## v9.17 (Guns that work, mounts that face forward, smoother bodies)
+
+- **Bullets work again against swordsmen.** Since v9.15 a raised shield stopped 80% of a round, and swordsmen raise
+  it whenever they're under fire, so they took about 3× the rounds anyone else did (9 hits to drop instead of 3).
+  - A wooden shield doesn't stop a rifle bullet: raised, it now only takes the edge off a round (20%); lowered,
+    nothing.
+  - Against blades, arrows and crossbow bolts it still blocks as before.
+  - Now an unarmoured swordsman drops in 3-4 hits, the same as everyone else.
+- **Mounts face where they're going.**
+  - The game turns a ridden horse to face wherever its rider faces, so a cavalryman aiming off to the side swung
+    his horse sideways every other tick. The script also slid mounts toward their target instead of steering.
+  - Now every mount (horse, donkey, camel, any saddled animal) turns at an animal's pace and is only ever moved
+    along its own heading, slowing down in sharp turns.
+  - The rider sits square in the saddle and fires at anything up to ~100° off his line.
+  - Measured: horses were more than 30° off their direction of travel 41% of the time when moving; now 0%
+    (0.7° average).
+- **Bodies fall smoothly.** The physics already dropped a man in 2-5 ticks, but his pose only reached your screen
+  every 3rd tick, so the fall looked jerky. While he goes down it's now sent every tick; positions aren't re-sent
+  when the body hasn't moved, so it costs no more.
+- A rider killed in the saddle is thrown off at once and lies where he fell (no bouncing on the horse).
+
 ## v9.16 (Moving like people)
 
 Measured on a real server, before and after:

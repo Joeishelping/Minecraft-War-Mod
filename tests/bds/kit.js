@@ -623,7 +623,7 @@ KS.armorpre = async (o, ox, oz) => {
 KS.ttk = async (o, ox, oz) => {
   floorAt(ox - 20, oz - 20, ox + 20, oz + 20);
   const tier = o.tier ?? "netherite";
-  const t = kitSoldier(1, { x: ox + 0.5, y: Y, z: oz + 0.5 }, "rifle", "hold"); sdp(t, "war:armor", tier); equipArmor(t, tier); sdp(t, "war:stance", "holdfire");
+  const t = kitSoldier(1, { x: ox + 0.5, y: Y, z: oz + 0.5 }, o.w ?? "rifle", "hold"); sdp(t, "war:armor", tier); equipArmor(t, tier); sdp(t, "war:stance", "holdfire");
   const guns = ["rifle", "rifle", "smg", "smg", "mg", "semi"].map((w, i) => kitSoldier(2, { x: ox - 7.5 + i * 3, y: Y, z: oz + 16.5 }, w, "hold"));
   const t0 = tick(); let hits = 0;
   const sub = world.afterEvents.entityHurt.subscribe((ev) => { if (ev.hurtEntity?.id === t.id) hits++; });
@@ -1381,4 +1381,128 @@ KS.marchpitch = async (o, ox, oz) => {
   let n = 0, sum = 0, mx = 0, steep = 0;
   for (let k = 0; k < 400; k++) { await kitWait(1); for (const e of men) { if (!e.isValid) continue; const x = Math.abs(e.getRotation().x); n++; sum += x; mx = Math.max(mx, x); if (x > 20) steep++; } }
   return { pitchAvg: +(sum / n).toFixed(1), pitchMax: Math.round(mx), steepPct: +(100 * steep / n).toFixed(1), moved: men.map((e) => Math.round(oz + 20.5 - e.location.z)) };
+};
+// v9.17: mounts face where they go; a rider killed in the saddle falls cleanly
+KS.cavface = async (o, ox, oz) => {
+  floorAt(ox - 40, oz - 40, ox + 40, oz + 40);
+  for (const t of ["minecraft:horse", "minecraft:camel", "minecraft:donkey"]) for (const m of ow().getEntities({ type: t, location: { x: ox, y: Y, z: oz }, maxDistance: 80 })) { try { m.remove(); } catch {} }
+  setRelPair(1, 2, "1", true);
+  const riders = [["rifle", "minecraft:horse"], ["sword", "minecraft:horse"], ["smg", "minecraft:camel"], ["spear", "minecraft:donkey"]].map(([w, m], i) => kitCav(1, { x: ox - 25.5, y: Y, z: oz - 6 + i * 4 + 0.5 }, w, m));
+  const foes = [0, 1, 2].map((i) => kitSoldier(2, { x: ox + 15.5, y: Y, z: oz - 4 + i * 4 + 0.5 }, "rifle", "hold"));
+  for (const e of [...riders, ...foes]) try { e.addEffect("resistance", 3000, { amplifier: 255, showParticles: false }); } catch {}
+  await kitWait(60);
+  let n = 0, side = 0, sum = 0, hops = 0, ticks = 0; const per = {};
+  const lastVy = new Map();
+  for (let k = 0; k < 300; k++) {
+    await kitWait(1);
+    for (const e of riders) {
+      const m = e.isValid ? e.getComponent("minecraft:riding")?.entityRidingOn : undefined; if (!m) continue;
+      const v = m.getVelocity(), sp = Math.hypot(v.x, v.z); ticks++;
+      if (v.y > 0.25 && (lastVy.get(m.id) ?? 0) <= 0.25) hops++; lastVy.set(m.id, v.y);
+      if (sp < 0.1) continue;
+      const yaw = m.getRotation().y * Math.PI / 180, fx = -Math.sin(yaw), fz = Math.cos(yaw);
+      const ang = Math.acos(Math.max(-1, Math.min(1, (fx * v.x + fz * v.z) / sp))) * 180 / Math.PI;
+      n++; sum += ang; if (ang > 30) side++;
+      const t = m.typeId.split(":")[1]; per[t] = per[t] ?? { n: 0, side: 0 }; per[t].n++; if (ang > 30) per[t].side++;
+    }
+  }
+  const res = { movingSamples: n, avgAngle: +(sum / Math.max(1, n)).toFixed(1), sidewaysPct: +(100 * side / Math.max(1, n)).toFixed(1), hopsPerMin: +(hops / Math.max(1, ticks) * 1200).toFixed(1), per };
+  // kill one rider at a gallop: trace his body
+  const r = riders.find((e) => e.isValid && e.getComponent("minecraft:riding")?.entityRidingOn);
+  if (r) {
+    const m = r.getComponent("minecraft:riding").entityRidingOn, mv = m.getVelocity();
+    const before = new Set(ow().getEntities({ type: "war:corpse" }).map((c) => c.id));
+    r.removeEffect("resistance"); killHow.set(r.id, { limb: 0, dir: { x: 1, y: 0, z: 0 }, power: 0.3 }); killReal(r);
+    await kitWait(3);
+    const c = ow().getEntities({ type: "war:corpse" }).find((q) => !before.has(q.id));
+    const tr = []; let ups = 0, py;
+    for (let k = 0; k < 50 && c?.isValid; k++) { const y = c.location.y; if (py !== undefined && y > py + 0.04) ups++; py = y; if (k % 3 === 0) tr.push((y - Y).toFixed(2)); await kitWait(1); }
+    res.riderDeath = { horseSpeed: +Math.hypot(mv.x, mv.z).toFixed(2), corpse: !!c, bounces: ups, hipY: tr.join(" ") };
+  }
+  return res;
+};
+KS.horsetrace = async (o, ox, oz) => {
+  floorAt(ox - 40, oz - 40, ox + 40, oz + 40);
+  for (const m of ow().getEntities({ type: "minecraft:horse", location: { x: ox, y: Y, z: oz }, maxDistance: 80 })) { try { m.remove(); } catch {} }
+  setRelPair(1, 2, "1", true);
+  const r = kitCav(1, { x: ox - 25.5, y: Y, z: oz + 0.5 }, o.w ?? "rifle", "minecraft:horse");
+  const foes = [0, 1].map((i) => kitSoldier(2, { x: ox + 15.5, y: Y, z: oz - 2 + i * 4 + 0.5 }, "rifle", "hold"));
+  for (const e of [r, ...foes]) try { e.addEffect("resistance", 3000, { amplifier: 255, showParticles: false }); } catch {}
+  await kitWait(60);
+  const tr = [];
+  for (let k = 0; k < 80; k++) {
+    await kitWait(1);
+    const m = r.getComponent("minecraft:riding")?.entityRidingOn; if (!m) { tr.push("off"); continue; }
+    const v = m.getVelocity(), sp = Math.hypot(v.x, v.z), vy = sp > 0.03 ? Math.round(Math.atan2(-v.x, v.z) * 180 / Math.PI) : "-";
+    tr.push(`h${Math.round(m.getRotation().y)}/s${Math.round(MOUNT_HEAD.get(m.id) ?? 999)}/r${Math.round(r.getRotation().y)}/v${vy}`);
+  }
+  return { tr: tr.join(" ") };
+};
+KS.falltime = async (o, ox, oz) => {
+  floorAt(ox - 20, oz - 20, ox + 20, oz + 20);
+  for (const c of ow().getEntities({ type: "war:corpse" })) { try { c.remove(); } catch {} }
+  const cases = [["noDir", undefined], ["weak", { dir: { x: 1, y: 0, z: 0 }, power: 0.12 }], ["rifle", { dir: { x: 0, y: 0, z: 1 }, power: 0.3 }], ["head", { dir: { x: -1, y: 0, z: 0 }, power: 0.25, head: true }]];
+  const out = {};
+  for (const [tag, how] of cases) {
+    const e = kitSoldier(1, { x: ox + 0.5, y: Y, z: oz + 0.5 }, "rifle", "hold");
+    await kitWait(20);
+    if (how) killHow.set(e.id, { limb: 0, ...how });
+    const before = new Set(ow().getEntities({ type: "war:corpse" }).map((c) => c.id));
+    killReal(e);
+    let c, t = 0, headDown, hipDown;
+    for (; t < 80; t++) {
+      await kitWait(1);
+      c = c ?? ow().getEntities({ type: "war:corpse" }).find((q) => !before.has(q.id) && !q.getProperty("war:gib"));
+      const s = c ? RD.get(c.id) : undefined; if (!s) continue;
+      const hip = (s.pts[0].p.y + s.pts[1].p.y) / 2 - Y, head = s.pts[4].p.y - Y;
+      if (hipDown === undefined && hip < 0.45) hipDown = t;
+      if (headDown === undefined && head < 0.6) headDown = t;
+      if (hipDown !== undefined && headDown !== undefined) break;
+    }
+    out[tag] = { hipDownTick: hipDown, headDownTick: headDown };
+    for (const q of ow().getEntities({ type: "war:corpse" })) try { q.remove(); } catch {}
+    RD.clear(); await kitWait(5);
+  }
+  return out;
+};
+KS.ridedown = async (o, ox, oz) => {
+  floorAt(ox - 30, oz - 30, ox + 30, oz + 30);
+  for (const m of ow().getEntities({ type: "minecraft:horse", location: { x: ox, y: Y, z: oz }, maxDistance: 80 })) { try { m.remove(); } catch {} }
+  setRelPair(1, 2, "1", true);
+  const r = kitCav(1, { x: ox - 15.5, y: Y, z: oz + 0.5 }, "rifle", "minecraft:horse");
+  const foe = kitSoldier(2, { x: ox + 15.5, y: Y, z: oz + 0.5 }, "rifle", "hold"); foe.addEffect("resistance", 3000, { amplifier: 255, showParticles: false });
+  await kitWait(80);
+  const h = r.getComponent("minecraft:riding")?.entityRidingOn;
+  const hp = r.getComponent("minecraft:health"); hp.setCurrentValue(2);
+  r.applyDamage(6);                                              // (goes down wounded, thrown from the saddle)
+  const tr = []; let jumps = 0, last;
+  for (let k = 0; k < 160; k++) {
+    await kitWait(1);
+    if (!r.isValid) { tr.push("x"); break; }
+    const l = r.location, hide = r.getProperty("war:hide");
+    if (last && !hide && Math.hypot(l.x - last.x, l.z - last.z, l.y - last.y) > 0.25) jumps++;
+    if (!hide) last = { ...l };
+    if (k < 40) tr.push(`${k}:hp${r.getComponent("minecraft:health")?.currentValue}/${r.getComponent("minecraft:riding") ? "R" : "-"}/${dying.has(r.id) ? "D" : ""}${downed.has(r.id) ? "W" : ""}`);
+    else if (k % 8 === 0) tr.push(`${hide ? "H" : ""}${(l.x - ox).toFixed(1)},${(l.y - Y).toFixed(1)}${h?.isValid ? "|h" + dist(h.location, l).toFixed(1) : ""}`);
+  }
+  return { downed: downed.has(r.id), jumpsWhileLying: jumps, tr: tr.join(" ") };
+};
+KS.ridekill = async (o, ox, oz) => {
+  floorAt(ox - 30, oz - 30, ox + 30, oz + 30);
+  for (const m of ow().getEntities({ type: "minecraft:horse", location: { x: ox, y: Y, z: oz }, maxDistance: 80 })) { try { m.remove(); } catch {} }
+  for (const c of ow().getEntities({ type: "war:corpse" })) { try { c.remove(); } catch {} }
+  setRelPair(1, 2, "1", true);
+  const r = kitCav(1, { x: ox - 15.5, y: Y, z: oz + 0.5 }, "rifle", "minecraft:horse");
+  const foe = kitSoldier(2, { x: ox + 15.5, y: Y, z: oz + 0.5 }, "rifle", "hold"); foe.addEffect("resistance", 3000, { amplifier: 255, showParticles: false });
+  await kitWait(80);
+  const tr = [];
+  if (o.mode === "down") { r.getComponent("minecraft:health").setCurrentValue(3); preHp(r); r.applyDamage(5); }
+  else if (o.mode === "one") { r.getComponent("minecraft:health").setCurrentValue(2); await kitWait(15); killHow.set(r.id, { limb: 0, dir: { x: 1, y: 0, z: 0 }, power: 0.3 }); const keep = Math.random; Math.random = () => 0.0; preHp(r); r.applyDamage(30); Math.random = keep; }
+  else { preHp(r); r.applyDamage(60); }
+  for (let k = 0; k < 40; k++) {
+    await kitWait(1);
+    const c = ow().getEntities({ type: "war:corpse" }).length;
+    tr.push(`${k}:${r.isValid ? "v" : "-"}${r.isValid && r.getComponent("minecraft:riding") ? "R" : ""}${r.isValid && downed.has(r.id) ? "W" : ""}${r.isValid && r.getProperty("war:hide") ? "H" : ""}c${c}`);
+  }
+  return { tr: tr.join(" ") };
 };
