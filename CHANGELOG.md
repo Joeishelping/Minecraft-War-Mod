@@ -1,5 +1,32 @@
 # War Engine changelog
 
+## v9.13 (Cavalry on real mounts, cavalry guns, armor from the egg, armor that counts against bullets)
+
+- **Cavalry ride real mounts.** A Cavalier is now an ordinary soldier on a real, tamed, saddled mount instead of a
+  horse-and-rider model.
+  - New **Mount** option on the Cavalier egg and in the Unit Wand. Vanilla: horse (default), donkey, mule, camel,
+    skeleton horse, zombie horse, pig, strider. World Animals (if installed): African and Asian elephant, mammoth,
+    rhinoceros, giraffe, ostrich, lion, white lion, tiger, white tiger, leopard, snow leopard, panther, cougar.
+    Without World Animals, those picks give a horse.
+  - **Weapons that make sense from the saddle:** sabre, lance, carbine rifle, semi-auto, SMG, shotgun, pistol,
+    crossbow. MG and sniper are left out.
+  - **Tactics:** gunmen keep 10 to 20 blocks off their target and circle it, shooting from the saddle. Sabres and
+    lances charge, strike as they pass (the lance hardest, and harder at speed), ride on, and wheel round for
+    another pass.
+  - A rider whose mount is killed fights on foot, and takes any free saddled mount nearby. When a rider dies, his
+    mount stays. Cavaliers from older worlds are switched over by themselves: the old horse body goes and they're
+    given a real horse.
+  - Tested on a real server: horse, camel, pig and lion riders all mounted (tamed, saddled), charged or kept their
+    distance as they should, and beat 6 men on foot.
+- **Armor from the egg.** Every spawn egg has an Armor option (none, leather, iron, netherite), so the Unit Wand
+  isn't needed for it.
+- **Armor counts against bullets for players.** Rounds that hit a player now hit like any mob's attack: his armor
+  counts and the game's short pause between hits holds. A squad's fire used to land every round in the same
+  instant, so full netherite melted in about a second. Measured: netherite cuts a round to about a quarter.
+  Soldiers in armor were already protected (a man in netherite lasts about three times as long as one in none, 10
+  to 11 seconds under a 6-gun squad's fire), so that's unchanged. The Realism menu's damage slider still scales it
+  all.
+
 ## v9.12 (Ragdolls with knees and elbows, bodies keep their skin)
 
 - **Bodies keep the skin the man wore.** A soldier in his faction's skin stores no skin of his own (it's worked out

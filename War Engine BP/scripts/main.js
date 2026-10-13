@@ -2443,13 +2443,14 @@ async function eggUse(player, div) {
     .dropdown("Function", funcs.map((x) => x[1]), { defaultValueIndex: Math.min(def.func, funcs.length - 1) })
     .dropdown(div === "grenadier" ? "Kit" : "Weapon", DIV[div].weapon ? wl : div === "grenadier" ? DEMO.map((k) => k[1]) : ["None (heals)"], { defaultValueIndex: DIV[div].weapon ? wIdx : div === "grenadier" ? Math.max(0, DEMO.findIndex((k) => k[0] === def.weapon)) : 0 })
     .slider("How many (a coalition: in total, mixed)", 1, 30, { valueStep: 1, defaultValue: def.count })
-    .slider("Patrol / sentry radius", 4, 150, { valueStep: 2, defaultValue: def.radius });
+    .slider("Patrol / sentry radius", 4, 150, { valueStep: 2, defaultValue: def.radius })
+    .dropdown("Armor", ARMOR_LABEL, { defaultValueIndex: Math.max(0, ARMOR.indexOf(def.armor ?? "none")) });   // (v9.13: armor straight from the egg)
   if (div === "cavalier") f.dropdown("Mount", CAV_MOUNTS.map((m) => m[1]), { defaultValueIndex: Math.max(0, CAV_MOUNTS.findIndex((m) => m[0] === def.mount)) });
   const r = await show(f, player);
   if (!r || r.canceled || !r.formValues) return;
   const v = r.formValues;
   const pick = Number(v[0]), coal = pick >= NF ? coals[pick - NF] : undefined;
-  const cfg = { faction: coal ? (def.faction || 1) : pick + 1, coal: coal ? pick - NF : undefined, squad: Number(v[1]), func: Number(v[2]), weapon: DIV[div].weapon ? WL[Number(v[3])][0] : div === "grenadier" ? DEMO[Number(v[3])][0] : "sword", count: Number(v[4]), radius: Number(v[5]), mount: div === "cavalier" ? CAV_MOUNTS[Number(v[6])]?.[0] : undefined };
+  const cfg = { faction: coal ? (def.faction || 1) : pick + 1, coal: coal ? pick - NF : undefined, squad: Number(v[1]), func: Number(v[2]), weapon: DIV[div].weapon ? WL[Number(v[3])][0] : div === "grenadier" ? DEMO[Number(v[3])][0] : "sword", count: Number(v[4]), radius: Number(v[5]), armor: ARMOR[Number(v[6])] ?? "none", mount: div === "cavalier" ? CAV_MOUNTS[Number(v[7])]?.[0] : undefined };
   setJSON(player, key, cfg);
   if (coal) {
     const mem = coal.members.slice(0, Math.max(1, cfg.count));         // (fewer men than factions: the first few get one each)
@@ -2457,13 +2458,13 @@ async function eggUse(player, div) {
     let total = 0;
     const counts = mem.map((fac, k) => {
       const pts = all.pts.filter((_, i) => i % mem.length === k);       // every Nth place in the ranks: mixed, not in blocks
-      const n = pts.length ? spawnArmy(player, { faction: fac, squad: cfg.squad, weapon: cfg.weapon, ranged: isRangedW(cfg.weapon), div, radius: cfg.radius, func: funcs[cfg.func][0], mount: cfg.mount }, pts.length, 0, { base: all.base, pts }) : 0;
+      const n = pts.length ? spawnArmy(player, { faction: fac, squad: cfg.squad, weapon: cfg.weapon, ranged: isRangedW(cfg.weapon), div, radius: cfg.radius, func: funcs[cfg.func][0], mount: cfg.mount, armor: cfg.armor }, pts.length, 0, { base: all.base, pts }) : 0;
       total += n; return n;
     });
     player.onScreenDisplay.setActionBar(`§aSpawned ${total} ${DIV[div].name}s for §l${coal.name}§r§a, mixed: ${mem.map((m, k) => `${counts[k]} ${factionLabel(m)}`).join("§a, ")}`);
     return;
   }
-  const n = spawnArmy(player, { faction: cfg.faction, squad: cfg.squad, weapon: cfg.weapon, ranged: isRangedW(cfg.weapon), div, radius: cfg.radius, func: funcs[cfg.func][0], mount: cfg.mount }, cfg.count);
+  const n = spawnArmy(player, { faction: cfg.faction, squad: cfg.squad, weapon: cfg.weapon, ranged: isRangedW(cfg.weapon), div, radius: cfg.radius, func: funcs[cfg.func][0], mount: cfg.mount, armor: cfg.armor }, cfg.count);
   player.onScreenDisplay.setActionBar(`§aSpawned ${n} ${factionLabel(cfg.faction)} §a${DIV[div].name}${n > 1 ? "s" : ""} §7(${funcs[cfg.func][1]}${cfg.squad ? ", " + squadName(cfg.faction, cfg.squad) : ""})`);
 }
 
@@ -3797,7 +3798,11 @@ function hitscan(e, spec, from, dir, range, weapon) {
   if (hit) {
     const dmg = HIT_DMG[weapon] ?? 5;
     try { const he = hit.entity; if (he.typeId === SOLDIER) lastHit.set(he.id, { t: tick(), head: from.y + u.y * hit.distance - he.location.y > 1.42, weapon, dd: hit.distance, dir: u }); } catch {}   // (v9.7: where it hit him)
-    try { hit.entity.applyDamage(dmg, { cause: "projectile", damagingEntity: e }); } catch { try { hit.entity.applyDamage(dmg); } catch {} }
+    // v9.13: a player is hit like any mob would hit him: his armor counts and the game's short pause between hits holds, so a
+    // squad's fire can't empty a full set of netherite in a second. (Soldiers on soldiers stay as they were: armor counts there
+    // already, and a man in netherite lasts about three times as long as one in none.)
+    if (hit.entity.typeId === "minecraft:player") { try { hit.entity.applyDamage(dmg, { cause: "entityAttack", damagingEntity: e }); } catch { try { hit.entity.applyDamage(dmg); } catch {} } }
+    else try { hit.entity.applyDamage(dmg); } catch {}
   }
   try {                                                                  // the tracer (every ~3 blocks) and where it ended
     const k0 = 2 + Math.random() * 2;
@@ -10610,7 +10615,7 @@ const CAV_MOUNTS = [
   ["minecraft:strider", "Strider (lava)", "spawn_adult", ["minecraft:on_saddled"]],
   ...[["african_elephant", "African elephant"], ["asian_elephant", "Asian elephant"], ["mammoth", "Mammoth"], ["rhinoceros", "Rhinoceros"], ["giraffe", "Giraffe"], ["ostrich", "Ostrich"],
     ["lion", "Lion"], ["white_lion", "White lion"], ["tiger", "Tiger"], ["white_tiger", "White tiger"], ["leopard", "Leopard"], ["snow_leopard", "Snow leopard"], ["panther", "Panther"], ["cougar", "Cougar"]]
-    .map(([k, n]) => [`worldanimals:${k}`, `${n} (World Animals)`, undefined, ["minecraft:on_tame", "minecraft:on_saddle"]]),
+    .map(([k, n]) => [`worldanimals:${k}`, `${n} (World Animals)`, undefined, ["minecraft:on_tame", "minecraft:on_saddle", "minecraft:on_chest"]]),
 ];
 const CAV_WEAPONS = [["sword", "Sabre"], ["spear", "Lance"], ["rifle", "Carbine rifle"], ["semi", "Semi-auto"], ["smg", "SMG"], ["shotgun", "Shotgun"], ["pistol", "Pistol"], ["crossbow", "Crossbow"]];
 const cavMountOf = (e) => CAV_MOUNTS.find((m) => m[0] === String(gdp(e, "war:mount") ?? "")) ?? CAV_MOUNTS[0];

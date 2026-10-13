@@ -585,6 +585,74 @@ KS.cavalry = async (o, ox, oz) => {
   const foesLeft = foes.filter((f) => f.isValid && !isDown(f)).length;
   return { mounted, oldCavBodyGone: !cavBody, closestToFoes: minD, ridersMoved: riders.map((e, i) => e.isValid ? Math.round(Math.abs(e.location.x - startX[i])) : "dead"), foesLeftOf6: foesLeft, after: st(), mounts: ow().getEntities({ tags: ["war_cav"], location: { x: ox, y: Y, z: oz }, maxDistance: 80 }).length };
 };
+// v9.13: how much a round takes off men in no armor / iron / netherite (and a zombie in netherite, for comparison)
+KS.armordmg = async (o, ox, oz) => {
+  floorAt(ox - 8, oz - 8, ox + 8, oz + 8);
+  const tiers = ["none", "leather", "iron", "netherite"];
+  const men = tiers.map((t, i) => { const e = kitSoldier(1, { x: ox - 6 + i * 4 + 0.5, y: Y, z: oz + 0.5 }, "rifle", "hold"); sdp(e, "war:armor", t); equipArmor(e, t); return e; });
+  const shooter = kitSoldier(2, { x: ox + 0.5, y: Y, z: oz + 6.5 }, "rifle", "hold");
+  await kitWait(20);
+  const out = {};
+  for (const cause of ["none", "entityAttack", "projectile-no-entity"]) {
+    out[cause] = {};
+    for (const [i, e] of men.entries()) {
+      const h = e.getComponent("minecraft:health"); h.setCurrentValue(h.effectiveMax); const before = h.currentValue;
+      await kitWait(12);
+      try { if (cause === "none") e.applyDamage(7); else if (cause === "entityAttack") e.applyDamage(7, { cause: "entityAttack", damagingEntity: shooter }); else e.applyDamage(7, { cause: "projectile" }); } catch (err) { out[cause].err = String(err).slice(0, 80); }
+      await kitWait(2);
+      out[cause][tiers[i]] = Math.round((before - h.currentValue) * 10) / 10;
+    }
+  }
+  for (const e of [...men, shooter]) try { e.remove(); } catch {}
+  return out;
+};
+// v9.13: does the game hand us the damage before armor, or after? (a netherite man on 5 HP takes a 7)
+KS.armorpre = async (o, ox, oz) => {
+  floorAt(ox - 8, oz - 8, ox + 8, oz + 8);
+  const tiers = ["none", "netherite"], seen = {};
+  const men = tiers.map((t, i) => { const e = kitSoldier(1, { x: ox - 3 + i * 6 + 0.5, y: Y, z: oz + 0.5 }, "rifle", "hold"); sdp(e, "war:armor", t); equipArmor(e, t); return e; });
+  const sub = world.beforeEvents.entityHurt.subscribe((ev) => { try { const i = men.findIndex((m) => m.id === ev.hurtEntity.id); if (i >= 0) seen[tiers[i]] = ev.damage; } catch {} });
+  await kitWait(20);
+  const out = {};
+  for (const [i, e] of men.entries()) { const h = e.getComponent("minecraft:health"); h.setCurrentValue(5); e.applyDamage(7); await kitWait(3); out[tiers[i]] = { eventSaw: seen[tiers[i]], hpAfter: e.isValid ? Math.round(h.currentValue * 10) / 10 : "dead", downed: downed.has(e.id) }; }
+  world.beforeEvents.entityHurt.unsubscribe(sub);
+  for (const e of men) try { e.remove(); } catch {}
+  return out;
+};
+// v9.13: time to drop a man (no armor / iron / netherite) under a 6-gun squad's fire at 16 blocks
+KS.ttk = async (o, ox, oz) => {
+  floorAt(ox - 20, oz - 20, ox + 20, oz + 20);
+  const tier = o.tier ?? "netherite";
+  const t = kitSoldier(1, { x: ox + 0.5, y: Y, z: oz + 0.5 }, "rifle", "hold"); sdp(t, "war:armor", tier); equipArmor(t, tier); sdp(t, "war:stance", "holdfire");
+  const guns = ["rifle", "rifle", "smg", "smg", "mg", "semi"].map((w, i) => kitSoldier(2, { x: ox - 7.5 + i * 3, y: Y, z: oz + 16.5 }, w, "hold"));
+  const t0 = tick(); let hits = 0;
+  const sub = world.afterEvents.entityHurt.subscribe((ev) => { if (ev.hurtEntity?.id === t.id) hits++; });
+  let k = 0; while (k < 600 && t.isValid && !isDown(t)) { await kitWait(5); k += 5; }
+  world.afterEvents.entityHurt.unsubscribe(sub);
+  const r = { tier, secondsToDrop: k >= 600 ? ">30" : Math.round((tick() - t0) / 2) / 10, hits };
+  for (const e of [t, ...guns]) try { e.remove(); } catch {}
+  return r;
+};
+// v9.13: "entityAttack" from a shooter: armor applies? and two rounds in the same tick?
+KS.atkdmg = async (o, ox, oz) => {
+  floorAt(ox - 8, oz - 8, ox + 8, oz + 8);
+  const tiers = ["none", "netherite"];
+  const men = tiers.map((t, i) => { const e = kitSoldier(1, { x: ox - 3 + i * 6 + 0.5, y: Y, z: oz + 0.5 }, "rifle", "hold"); sdp(e, "war:armor", t); equipArmor(e, t); return e; });
+  const sh = kitSoldier(1, { x: ox + 0.5, y: Y, z: oz + 5.5 }, "rifle", "hold");
+  await kitWait(20);
+  const out = {};
+  for (const [i, e] of men.entries()) {
+    const h = e.getComponent("minecraft:health"); h.setCurrentValue(16);
+    let err; try { e.applyDamage(4, { cause: "entityAttack", damagingEntity: sh }); } catch (x) { err = String(x).slice(0, 60); }
+    await kitWait(1); const one = 16 - h.currentValue;
+    try { e.applyDamage(4, { cause: "entityAttack", damagingEntity: sh }); e.applyDamage(4, { cause: "entityAttack", damagingEntity: sh }); } catch {}
+    await kitWait(1); const two = 16 - one - h.currentValue;
+    await kitWait(12); const b3 = h.currentValue; try { e.applyDamage(4, { cause: "entityAttack", damagingEntity: sh }); } catch {} await kitWait(1);
+    out[tiers[i]] = { first: Math.round(one * 10) / 10, nextTwoSameTick: Math.round(two * 10) / 10, after12ticks: Math.round((b3 - h.currentValue) * 10) / 10, err };
+  }
+  for (const e of [...men, sh]) try { e.remove(); } catch {}
+  return out;
+};
 // v9.7: a downed man in plain view of the enemy (who hold their fire) next to a wall: does he crawl behind it?
 KS.crawl = async (o, ox, oz) => {
   floorAt(ox - 20, oz - 20, ox + 30, oz + 20);
