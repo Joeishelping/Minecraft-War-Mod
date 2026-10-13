@@ -1,5 +1,20 @@
 # War Engine changelog
 
+## v9.15.1 (A real protective detail)
+
+- **Guards stay on you.** Before, an escort walked like any follower: the game's own walking stops about 3 blocks
+  short and only re-aims every second or so, so they trailed behind in a loose bunch. Now each guard has an exact slot
+  in a tight diamond (point man ~2 blocks ahead, flanks ~1.7 to each side, one behind), and a driver keeps him on it
+  every tick at your pace, a touch faster to close up.
+  - The diamond turns with the way you're walking, not where you look, so glancing around doesn't send them circling.
+  - It leads slightly where you're heading, steps up and down blocks with you, never cuts through you or walks off a
+    drop, and draws in tighter indoors.
+  - Standing still, each guard faces outward, watching his sector.
+  - Tested walking, sprinting and turning: every guard within ~0.5 blocks of his slot (0.7 sprinting), the farthest
+    3.6 blocks from you (the point man); a 90° turn re-forms in ~2 s.
+  - Threats: the nearest guard steps in 1.3 blocks from you on the threat's side, the rest form an arc and fire; hit,
+    they close to ~1.2 blocks.
+
 ## v9.15 (Shields, bodyguards, officers, night battles, looks after itself)
 
 - **Shields.** Swordsmen, spearmen and crossbowmen now carry a shield in the off hand (Settings: "Shields for

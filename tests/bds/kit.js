@@ -1172,3 +1172,34 @@ KS.flares = async (o, ox, oz) => {
   kcmd("time set noon");
   return { night: NIGHT, flaresSeen: flares, peakLights, lightsLeft: left, stillTracked: FLARE_LIGHTS.size, perm: lightPerm()?.type?.id };
 };
+// v9.15.1: the detail keeps up: the principal walks, turns and sprints; how far is each guard from his spot / from him?
+KS.guardwalk = async (o, ox, oz) => {
+  floorAt(ox - 40, oz - 40, ox + 40, oz + 40);
+  const pr = ow().spawnEntity("minecraft:armor_stand", { x: ox - 20.5, y: Y, z: oz - 20.5 });
+  globalThis.__fakeLeader = (id) => (id === pr.id ? pr : undefined);
+  const n = o.n ?? 4;
+  const gs = [...Array(n).keys()].map((i) => {
+    const e = ow().spawnEntity(SOLDIER, { x: ox - 22.5 + i, y: Y, z: oz - 23.5 }, { spawnEvent: "war:init" });
+    const ne = setupSoldier(e, { faction: 1, squad: 3, weapon: i % 2 ? "sword" : "smg", ranged: i % 2 === 0, div: "guard", radius: 8, func: "__none", owner: pr.id }, KIT_PLAYER) ?? e;
+    const x = ne?.isValid ? ne : e; sdp(x, "war:func", "escort"); sdp(x, "war:leader", pr.id); sdDrop(x); return x;
+  });
+  await kitWait(100);
+  const rows = [];
+  const sample = (tag) => {
+    const D = DETAIL.get(pr.id);
+    const ds = gs.map((e) => Math.hypot(e.location.x - pr.location.x, e.location.z - pr.location.z));
+    const off = D ? gs.map((e) => { const sp = detailSpot(e, sd(e), pr, D, tick()); return sp && !sp.engage ? Math.hypot(sp.x - e.location.x, sp.z - e.location.z) : -1; }) : [];
+    rows.push(`${tag}:max${Math.max(...ds).toFixed(1)}/off${off.length ? Math.max(...off).toFixed(1) : "?"}`);
+    return { maxD: Math.max(...ds), maxOff: Math.max(...off) };
+  };
+  const stats = { still: sample("still") };
+  const legs = [[0.2, 0, 120, "walk"], [0, 0.28, 100, "sprint"], [-0.2, 0.0, 80, "back"]];
+  for (const [vx, vz, T, tag] of legs) {
+    let worstD = 0, worstOff = 0;
+    for (let k = 0; k < T; k++) { const l = pr.location; pr.teleport({ x: l.x + vx, y: Y, z: l.z + vz }); await kitWait(1); if (k % 10 === 9) { const s = sample(tag); if (k > 30) { worstD = Math.max(worstD, s.maxD); worstOff = Math.max(worstOff, s.maxOff); } } }
+    stats[tag] = { worstD: +worstD.toFixed(1), worstOff: +worstOff.toFixed(1) };
+  }
+  await kitWait(60); stats.stopped = sample("stop");
+  globalThis.__fakeLeader = undefined; try { pr.remove(); } catch {}
+  return { stats, rows: rows.join(" ") };
+};

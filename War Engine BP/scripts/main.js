@@ -11421,7 +11421,8 @@ world.afterEvents.entityHurt.subscribe((ev) => {
 function detailOf(p, now) {
   let D = DETAIL.get(p.id);
   if (D && now - D.t < 10) return D;
-  D = { ...(D ?? {}), t: now };
+  if (!D) D = {};
+  D.t = now;
   const ids = [];
   for (const o of p.dimension.getEntities({ type: SOLDIER, location: p.location, maxDistance: 40 })) { try { const d = sd(o); if (d.div === "guard" && d.func === "escort" && d.leader === p.id && !downed.has(o.id)) ids.push(o.id); } catch {} }
   D.ids = ids.sort();
@@ -11449,50 +11450,104 @@ function detailOf(p, now) {
   return D;
 }
 system.runInterval(() => { const now = tick(); for (const [k, D] of [...DETAIL]) if (now - D.t > 600) DETAIL.delete(k); for (const [k, h] of [...OWNER_HURT]) if (now - h.t > 600) OWNER_HURT.delete(k); for (const [k, t] of [...GUARD_ON]) if (now - t > 600) GUARD_ON.delete(k); }, 200);
+// where each man of the detail belongs right now (shared by his decisions and by the driver that keeps him there)
+function detailSpot(e, d, p, D, now) {
+  const idx = Math.max(0, D.ids.indexOf(e.id)), n = Math.max(1, D.ids.length);
+  const melee = shieldMelee(d) && !GUNS.includes(d.weapon);
+  const v = D.vel ?? { x: 0, z: 0 };
+  const pl = { x: p.location.x + v.x * 5, y: p.location.y, z: p.location.z + v.z * 5 };   // (a step ahead of where you're going)
+  let x, z, t = "t_off", what;
+  const th = D.threat?.isValid ? D.threat : undefined;
+  if (th) {
+    const tx = th.location.x - pl.x, tz = th.location.z - pl.z, L = Math.hypot(tx, tz) || 1, ux = tx / L, uz = tz / L;
+    if (melee && (L < 7 || dist(th.location, e.location) < 3) && e.id !== D.shieldId) return { engage: th };   // (close: put him down)
+    if (e.id === D.shieldId) { x = pl.x + ux * 1.3; z = pl.z + uz * 1.3; what = "shielding you"; }
+    else {
+      const k = D.ids.filter((id) => id !== D.shieldId).indexOf(e.id), m = Math.max(1, n - 1);
+      const ang = m === 1 ? 0.9 : -1.3 + (2.6 * k) / (m - 1), ca = Math.cos(ang), sa = Math.sin(ang);
+      x = pl.x + (ux * ca - uz * sa) * 2.0; z = pl.z + (ux * sa + uz * ca) * 2.0; what = "covering you";
+    }
+    t = melee ? "t_off" : "t_mid";
+  } else if (now - (OWNER_HURT.get(p.id)?.t ?? -9999) < 120) {
+    const a = (idx / n) * Math.PI * 2; x = pl.x + Math.cos(a) * 1.2; z = pl.z + Math.sin(a) * 1.2; what = "covering you"; t = melee ? "t_off" : "t_mid";
+  } else {
+    // a tight diamond (more men: a ring) turned to the way you're heading; indoors it draws in, the point man ahead
+    const hx = D.head?.x ?? 0, hz = D.head?.z ?? 1, rx = -hz, rz = hx;
+    const S = D.inside ? 0.6 : 1;
+    const SLOTS = [[2.2, 0], [-1.9, 0], [0, 1.7], [0, -1.7], [1.6, 1.6], [1.6, -1.6], [-1.6, 1.6], [-1.6, -1.6]];
+    const [a, b] = SLOTS[idx % SLOTS.length], ring = 1 + Math.floor(idx / SLOTS.length) * 0.6;
+    x = pl.x + (hx * a + rx * b) * S * ring; z = pl.z + (hz * a + rz * b) * S * ring;
+    what = idx === 0 ? "on point" : "on the detail";
+  }
+  const w = walkableNear(e.dimension, x, z, pl.y);
+  if (!w || Math.abs(w.y - pl.y) > 2.5) return undefined;                                  // (no footing there: plain following)
+  return { x, y: w.y, z, t, what };
+}
 WarAPI.registerBehavior({
   name: "bodyguard", when: "first", priority: 100,
   decide(e, d, now) {
     if (d.div !== "guard" || d.func !== "escort" || !d.leader) return undefined;
     const p = findPlayer(d.leader);
-    if (!p || p.dimension.id !== e.dimension.id || isRiding(p) || dist(p.location, e.location) > 24) return undefined;
-    const D = detailOf(p, now), idx = Math.max(0, D.ids.indexOf(e.id)), n = Math.max(1, D.ids.length);
-    const pl = p.location, melee = shieldMelee(d) && !GUNS.includes(d.weapon);
-    const inside = isIndoors(p);
-    let spot, t = "t_off", what;
-    const th = D.threat?.isValid ? D.threat : undefined;
-    if (th) {
-      const tx = th.location.x - pl.x, tz = th.location.z - pl.z, L = Math.hypot(tx, tz) || 1, ux = tx / L, uz = tz / L;
-      if (melee && (L < 7 || dist(th.location, e.location) < 3) && e.id !== D.shieldId) { GUARD_ON.set(e.id, -999); return { g: "g_wp", slot: myMarker(e, th.location, "war:mymk", 0.8), t: "t_short", urgent: true, note: "taking down the threat" }; }   // (close: put him down)
-      if (e.id === D.shieldId) { spot = { x: pl.x + ux * 1.4, z: pl.z + uz * 1.4 }; what = "shielding you"; }
-      else {
-        const k = D.ids.filter((id) => id !== D.shieldId).indexOf(e.id), m = Math.max(1, n - 1);
-        const ang = m === 1 ? 0.9 : -1.2 + (2.4 * k) / (m - 1), ca = Math.cos(ang), sa = Math.sin(ang);
-        const r = 2.4, dx = ux * ca - uz * sa, dz = ux * sa + uz * ca;
-        spot = { x: pl.x + dx * r, z: pl.z + dz * r }; what = "covering you";
-      }
-      t = melee ? "t_off" : "t_mid";
-    } else if (now - (OWNER_HURT.get(p.id)?.t ?? -9999) < 120) {
-      const a = (idx / n) * Math.PI * 2; spot = { x: pl.x + Math.cos(a) * 1.3, z: pl.z + Math.sin(a) * 1.3 }; what = "covering you"; t = melee ? "t_off" : "t_mid";
-    } else {
-      // the diamond (more men: a ring), turned to where you look; indoors it draws in, the point man still a step ahead
-      const yaw = p.getRotation().y * Math.PI / 180, fx = -Math.sin(yaw), fz = Math.cos(yaw), rx = -fz, rz = fx;
-      const S = inside ? 0.65 : 1;
-      const SLOTS = [[3.2, 0], [-2.6, 0], [0, 2.6], [0, -2.6], [2.4, 2.4], [2.4, -2.4], [-2.2, 2.2], [-2.2, -2.2]];
-      const [a, b] = SLOTS[idx % SLOTS.length], ring = 1 + Math.floor(idx / SLOTS.length) * 0.5;
-      spot = { x: pl.x + (fx * a + rx * b) * S * ring, z: pl.z + (fz * a + rz * b) * S * ring };
-      what = idx === 0 ? "on point" : "on the detail";
-    }
-    const w = walkableNear(e.dimension, spot.x, spot.z, pl.y);
-    if (!w || Math.abs(w.y - pl.y) > 2.5) return undefined;                                // (no footing there: plain following)
-    const gap = Math.hypot(w.x - e.location.x, w.z - e.location.z);
+    if (!p || p.dimension.id !== e.dimension.id || isRiding(p) || dist(p.location, e.location) > 40) return undefined;
+    const D = detailOf(p, now), sp = detailSpot(e, d, p, D, now);
+    if (!sp) return undefined;
+    if (sp.engage) { GUARD_ON.set(e.id, -999); return { g: "g_wp", slot: myMarker(e, sp.engage.location, "war:mymk", 0.8), t: "t_short", urgent: true, note: "taking down the threat" }; }
     GUARD_ON.set(e.id, now);
-    if (gap < 0.7) return { g: "g_none", t, urgent: false, note: what };
-    if (gap < 3.2) push(e, { x: (w.x - e.location.x) * 0.2, y: 0.02, z: (w.z - e.location.z) * 0.2 }, 3);   // (the last steps: walking stops short of a marker)
-    const slot = myMarker(e, { x: w.x, y: w.y, z: w.z }, "war:mymk", 0.8);
-    return slot !== undefined ? { g: "g_wp", slot, t, urgent: true, note: what } : undefined;
+    const gap = Math.hypot(sp.x - e.location.x, sp.z - e.location.z);
+    if (gap < 8 && Math.abs(sp.y - e.location.y) < 1.6) return { g: "g_none", t: sp.t, urgent: false, note: sp.what };   // (close: the detail driver holds him on his spot)
+    const slot = myMarker(e, { x: sp.x, y: sp.y, z: sp.z }, "war:mymk", 0.8);               // (far or another level: he walks there)
+    return slot !== undefined ? { g: "g_wp", slot, t: sp.t, urgent: true, note: sp.what } : undefined;
   },
 });
-
+// v9.15.1: the detail driver. Every tick each man near his spot is carried onto it at your pace (a little faster, to
+// close up), so the formation moves with you instead of trailing three blocks behind like plain following. He steps
+// up a block or down one like the route glider, never into a wall, over a drop, or through you; standing, he faces out.
+system.runInterval(() => {
+  const now = tick();
+  for (const [pid, D] of DETAIL) {
+    const p = findPlayer(pid);
+    if (!p?.isValid || now - D.t > 200) continue;
+    try {
+      detailOf(p, now);                                                                    // (kept fresh here: the men think only now and then)
+      if (!D.ids?.length) continue;
+      // your heading and pace (from how you move, not where you look: the detail doesn't swing round when you glance)
+      const pl = p.location, last = D.lastPos;
+      D.lastPos = { x: pl.x, y: pl.y, z: pl.z };
+      if (last) {
+        const vx = pl.x - last.x, vz = pl.z - last.z, sp = Math.hypot(vx, vz);
+        D.vel = { x: (D.vel?.x ?? 0) * 0.6 + vx * 0.4, z: (D.vel?.z ?? 0) * 0.6 + vz * 0.4 };
+        if (sp > 0.06 && sp < 2) { const hx = (D.head?.x ?? 0) * 0.8 + (vx / sp) * 0.2, hz = (D.head?.z ?? 1) * 0.8 + (vz / sp) * 0.2, L = Math.hypot(hx, hz) || 1; D.head = { x: hx / L, z: hz / L }; }
+      }
+      if (!D.head) { const yaw = p.getRotation().y * Math.PI / 180; D.head = { x: -Math.sin(yaw), z: Math.cos(yaw) }; }
+      if (now % 20 === 0) D.inside = isIndoors(p);
+      const pace = Math.hypot(D.vel?.x ?? 0, D.vel?.z ?? 0);
+      const maxStep = Math.min(0.42, Math.max(0.2, pace * 1.35));
+      for (const id of D.ids) {
+        const e = world.getEntity(id);
+        if (!e?.isValid || downed.has(id) || isRiding(e) || climbing.has(id) || gliders.has(id) || staggered(id) || e.dimension.id !== p.dimension.id) continue;
+        if (now - (GUARD_ON.get(id) ?? -999) > 80) continue;                              // (not on the detail right now: fighting, or far)
+        const d = sd(e), sp = detailSpot(e, d, p, D, now);
+        if (!sp || sp.engage) continue;
+        const l = e.location, dx = sp.x - l.x, dz = sp.z - l.z, L = Math.hypot(dx, dz);
+        if (L > 8 || Math.abs(sp.y - l.y) > 1.6) continue;                                 // (his walking gets him there)
+        const th = D.threat?.isValid ? D.threat.location : undefined;
+        const faceOut = th ? { x: th.x, y: th.y + 1.5, z: th.z } : { x: l.x + (l.x - pl.x), y: l.y + 1.5, z: l.z + (l.z - pl.z) };
+        if (L < 0.12) { if (pace < 0.05 && now % 10 === 0) try { e.teleport(l, { facingLocation: faceOut }); } catch {} continue; }
+        const stp = Math.min(L, maxStep), nx = l.x + (dx / L) * stp, nz = l.z + (dz / L) * stp;
+        if (Math.hypot(nx - pl.x, nz - pl.z) < 0.75 && Math.hypot(l.x - pl.x, l.z - pl.z) >= 0.75) continue;   // (never through you)
+        let ny;
+        for (const yy of [l.y, Math.floor(l.y + 0.01) + 1, Math.floor(l.y + 0.01) + 0.5, l.y - 0.5, Math.floor(l.y + 0.01) - 1]) {
+          if (yy > l.y + 1.1) continue;
+          if (glideFree(e.dimension, nx, yy, nz) && floorUnder(e.dimension, nx, yy, nz)) { ny = yy; break; }
+        }
+        if (ny === undefined) continue;                                                     // (a wall or a drop: his walking finds the way)
+        if (dangerNear(e.dimension, { x: nx, y: ny, z: nz })) continue;
+        const moving = pace > 0.05 || L > 0.6;
+        e.teleport({ x: nx, y: ny, z: nz }, { facingLocation: moving && !th ? { x: nx + dx, y: ny + 1.5, z: nz + dz } : faceOut });
+      }
+    } catch {}
+  }
+}, 1);
 // ================================================================ v9.15: officers wear an insignia
 // The man running each squad (its sergeant: the one who takes command) shows gold shoulder boards and a badge.
 system.runInterval(() => {
