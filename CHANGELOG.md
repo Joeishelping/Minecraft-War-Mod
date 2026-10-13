@@ -1,5 +1,30 @@
 # War Engine changelog
 
+## v9.16 (Moving like people)
+
+Measured on a real server, before and after:
+
+- **No more staring at the sky or the ground.**
+  - Standing soldiers kept tipping their heads 40-70° down about once a second. The game's own walking kept re-aiming
+    at the marker at their feet, and the gun pack's arm animations follow the head, so guns pointed at the ground or
+    the sky and bodies leaned. A soldier at his post now simply stands.
+  - The game's random "look around" (which also looked straight up) is gone.
+  - Every scripted move (route walking, the guard detail) turns the body only, never tipping the head.
+  - A safety check levels any head still tilted with nobody to aim at.
+  - Result: head tilt idle, in a firefight and on a guard detail went from up to 90° to 0.
+- **No more second-guessing in a fight.** Gunners re-picked their target from scratch every look, so every gun swung
+  between enemies about twice a second.
+  - Now a man sticks with the enemy he's on.
+  - He changes target when that man drops or disappears, when someone gets right on top of him, or when he's shot at
+    from elsewhere.
+  - Target changes went from ~25 per 15 s to 0-1.
+- **A human idle look.** Soldiers with nothing to do now and then glance along their sector at a human pace and look
+  back, and a player who walks up close gets a look.
+- **Turning at a human pace** everywhere a script turns a man (routes, the guard detail), instead of snapping.
+- **Shield wall holds its ground.** The line is set off the squad's hold position, not the men's own positions. Before,
+  every step up to the line moved the line forward until the wall walked into the enemy.
+- Performance: the 90 v 90 test stays within its budget (474-488 game calls a tick).
+
 ## v9.15.1 (A real protective detail)
 
 - **Guards stay on you.** Before, an escort walked like any follower: the game's own walking stops about 3 blocks

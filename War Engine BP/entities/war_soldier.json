@@ -18160,14 +18160,6 @@
       "minecraft:behavior.open_door": {
         "priority": 5,
         "close_door_after": true
-      },
-      "minecraft:behavior.look_at_player": {
-        "priority": 8,
-        "look_distance": 8,
-        "probability": 0.02
-      },
-      "minecraft:behavior.random_look_around": {
-        "priority": 9
       }
     },
     "events": {

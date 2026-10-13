@@ -948,6 +948,14 @@ function think(e) {
     // (v9.2: by what makes sense: see chooseArm. The sword only when the gun is the wrong tool at that range)
     if (GUNS.includes(d.weapon) && (!calm || ARM.has(e.id))) { if (chooseArm(e, d, now, calm) === "blade") { want.w = "w_melee"; want.t = "t_short"; want.r = "r_on"; } }
   }
+  // v9.16: at his post he simply stands. Left "following" his marker from a step away, the game's walking kept re-aiming
+  // his head down at it (a nod every second, gun pointing at the ground) and shuffling him round it
+  if (!retreat && (want.g === "g_wp" || want.g === "g_post") && !riding) {
+    try {
+      const an = ["hold", "post", "sentry", "stand"].includes(d.func) ? marker(Number(gdp(e, "war:goal") ?? 0)) : undefined;
+      if (an && !perc.get(e.id)?.threat?.isValid && flat(an.location, e.location) < (want.g === "g_post" ? 1.8 : 3.0) && Math.abs(an.location.y - e.location.y) < 1.5) want.g = "g_none";
+    } catch {}
+  }
   for (const f of WarAPI.hooks.think) { try { f(e, d, want, now); } catch {} }   // extensions may adjust the decision
   // v6.2: standing on a bridge / ledge / wall-top edge and not being carried along a route: Minecraft's own walking is
   // never in charge there (it cuts corners off the side). He stands; the route driver carries him when he moves.
@@ -4524,6 +4532,11 @@ function threatScore(e, d, o, dd, now) {
     } catch {}
   }
   if (dd < 4) s += 60;                                           // something right on top of him overrides focus fire
+  // v9.16: he sticks with the man he's on. Re-picking from scratch every look swung every gun between enemies about
+  // twice a second (the fire-spreading and squad-target bonuses chasing each other); now he changes only for something
+  // clearly more urgent, and hardly at all in his first 4 s on a man
+  const ps = perc.get(e.id);
+  if (ps?.threat?.id === o.id) { s += 65; if (now - (ps.threatT ?? -999) < 80) s += 60; }
   return s;
 }
 function perceive(e, now) {
@@ -4682,12 +4695,25 @@ system.runInterval(() => {
 function turnTo(e, at, maxStep = 18) {
   try {
     const want = (Math.atan2(-(at.x - e.location.x), at.z - e.location.z) * 180) / Math.PI;
-    const cur = e.getRotation().y;
-    e.setRotation({ x: 0, y: turnToward(cur, want, maxStep) });
-    return Math.abs(((want - cur + 540) % 360) - 180);
+    const now = tick(), m = rotMemo.get(e.id);
+    const cur = m && m.t === now ? m.y : e.getRotation().y;            // (one read per tick at most)
+    const off = Math.abs(((want - cur + 540) % 360) - 180);
+    if (off > 0.5) { const y = turnToward(cur, want, maxStep); e.setRotation({ x: 0, y }); rotMemo.set(e.id, { t: now, y }); }   // (already facing him: nothing to send)
+    else rotMemo.set(e.id, { t: now, y: cur });
+    return off;
   } catch { return 0; }
 }
 
+// v9.16: where a carried man faces: a heading turned at a human pace, the head level (a mild tilt only toward a man
+// he's aiming at). A facing point a fraction of a block away tipped him to look straight up or down.
+function faceRot(e, from, at, maxStep = 22, pitchTo, cur0) {
+  const cur = cur0 ?? e.getRotation().y;
+  const dx = at.x - from.x, dz = at.z - from.z;
+  const want = Math.hypot(dx, dz) < 0.05 ? cur : (Math.atan2(-dx, dz) * 180) / Math.PI;
+  let x = 0;
+  if (pitchTo) { const hd = Math.hypot(pitchTo.x - from.x, pitchTo.z - from.z); if (hd > 2) x = Math.max(-25, Math.min(25, (-Math.atan2(pitchTo.y - (from.y + 1.5), hd) * 180) / Math.PI)); }
+  return { x, y: turnToward(cur, want, maxStep) };
+}
 // ---- threat slots: a hunted enemy carries a waypoint tag so pursuers path straight to him
 const threatSlot = new Map(); // entity id -> slot
 function slotForThreat(t) {
@@ -9108,14 +9134,14 @@ system.runInterval(() => {
         const g = gliders.get(e.id);
         const atDoor = !remote && stackAtDoor(e, { pts }, i, now);       // (v9.0: they're in there: stack at the door, frag in, all go)
         if (atDoor || (!remote && stackAtStairs(e, { pts }, i, now))) {   // (v6.9.2: the enemy's up there: gather at the foot, then all go)
-          gliders.set(e.id, { pts, k: g && g.pts === pts ? g.k : glideStart(pts, i, e.location), t: now, paused: true, wait: 0, blocked: 0 });
+          gliders.set(e.id, { yaw: g?.yaw, pts, k: g && g.pts === pts ? g.k : glideStart(pts, i, e.location), t: now, paused: true, wait: 0, blocked: 0 });
           myMarker(e, e.location); note(e, atDoor ? "stacking up at the door" : "stacking up at the stairs");
           continue;
         }
         const queued = queuedBehind(e, pts, i);
         const wait = queued ? (g?.wait ?? 0) + 4 : 0;
         const k = g && g.pts === pts ? g.k : glideStart(pts, i, e.location);
-        gliders.set(e.id, { pts, k, t: now, paused: queued && wait < 50 && floorUnder(e.dimension, e.location.x, e.location.y, e.location.z), wait, blocked: g && g.pts === pts ? g.blocked : 0 });   // (v6.2: blocked kept: it was reset every refresh, so a man below his route was never let go)   // (never paused over a gap)   // never waits more than 2.5 s for anyone (no deadlocks)
+        gliders.set(e.id, { yaw: g?.yaw, pts, k, t: now, paused: queued && wait < 50 && floorUnder(e.dimension, e.location.x, e.location.y, e.location.z), wait, blocked: g && g.pts === pts ? g.blocked : 0 });   // (v6.2: blocked kept: it was reset every refresh, so a man below his route was never let go)   // (never paused over a gap)   // never waits more than 2.5 s for anyone (no deadlocks)
         myMarker(e, e.location);
         note(e, queued && wait < 50 ? "waiting his turn" : remote ? "marching (out of range)" : "on the way through");
         continue;
@@ -9875,7 +9901,7 @@ system.runInterval(() => {
         if (ok(nx, p.z)) tz = p.z;
         else if (ok(p.x, nz)) tx = p.x;
         else if (L <= 1.6 && b.y <= p.y + 1.1 && glideFree(e.dimension, b.x, b.y, b.z) && floorUnder(e.dimension, b.x, b.y, b.z)) {   // right by the point: one step onto it
-          e.teleport({ x: b.x, y: b.y, z: b.z }, { facingLocation: { x: nb.x, y: b.y + 1.5, z: nb.z } });
+          { const r = faceRot(e, b, nb, 22, undefined, g.yaw); g.yaw = r.y; e.teleport({ x: b.x, y: b.y, z: b.z }, { rotation: r }); }
           g.k++; g.blocked = 0; continue;
         } else {
           g.blocked = (g.blocked ?? 0) + 1;
@@ -9889,8 +9915,11 @@ system.runInterval(() => {
       }
       g.blocked = 0;
       const gt = gunState.get(id)?.target;                          // (v7.0: a target in sight: he faces him as he goes, and can fire)
-      const look = gt?.isValid && dist(gt.location, e.location) < 40 ? { x: gt.location.x, y: gt.location.y + 1.4, z: gt.location.z } : { x: nb.x, y: y + 1.5, z: nb.z };
-      e.teleport({ x: tx, y, z: tz }, { facingLocation: look });
+      const aimT = gt?.isValid && dist(gt.location, e.location) < 40;
+      const look = aimT ? gt.location : (Math.hypot(nb.x - tx, nb.z - tz) > 0.3 ? nb : { x: tx + (tx - p.x) * 10, z: tz + (tz - p.z) * 10 });
+      const rot = faceRot(e, { x: tx, y, z: tz }, look, 22, aimT ? { x: gt.location.x, y: gt.location.y + 1.4, z: gt.location.z } : undefined, g.yaw);
+      g.yaw = rot.y;                                                  // (his heading remembered: no asking the game every step)
+      e.teleport({ x: tx, y, z: tz }, { rotation: rot });
       if (Math.hypot(b.x - tx, b.z - tz) < 0.05) g.k++;
     } catch (err) { gliders.delete(id); oops("glider", err); }
   }
@@ -11359,13 +11388,16 @@ system.runInterval(() => {
       const anch = (o) => ["hold", "post", "stand", "sentry"].includes(sd(o).func);
       const shields = ours.filter((o) => SHIELD_ON.get(o.id) && shieldMelee(sd(o)) && anch(o));
       if (shields.length < 3) continue;
+      // the line hangs off where the squad was told to hold (their own markers), not off where the men happen to stand:
+      // measured from the men, every step up to the line moved the line forward and the wall walked into the enemy
       let oc = S.ourC;
+      { let n = 0, x = 0, y = 0, z = 0; for (const o of shields) { const m = marker(Number(gdp(o, "war:home") ?? gdp(o, "war:goal") ?? 0)); if (m) { x += m.location.x; y += m.location.y; z += m.location.z; n++; } } if (n) oc = { x: x / n, y: y / n, z: z / n }; }
       let q, qd = 1e9; for (const kk of S.known.values()) { const dd = Math.hypot(kk.x - oc.x, kk.z - oc.z); if (dd < qd) { qd = dd; q = kk; } }
       if (!q || qd < 8 || qd > 48) continue;                                          // (too close: a melee, not a wall)
       let ux = (q.x - oc.x) / qd, uz = (q.z - oc.z) / qd;
       const A = S.wallAt;                                                             // (the line stays put while the picture holds: no shuffling)
-      if (A && now - A.t < 60 && Math.hypot(A.x - oc.x, A.z - oc.z) < 3 && A.ux * ux + A.uz * uz > 0.9) { oc = A; ux = A.ux; uz = A.uz; }
-      S.wallAt = { x: oc.x, y: oc.y, z: oc.z, ux, uz, t: now };
+      if (A && now - A.t < 60 && Math.hypot(A.x - oc.x, A.z - oc.z) < 4 && A.ux * ux + A.uz * uz > 0.85) { oc = A; ux = A.ux; uz = A.uz; }
+      S.wallAt = { x: oc.x, y: oc.y, z: oc.z, ux, uz, t: now };   // (kept: its position only changes when the hold point or the enemy's side does)
       const px = -uz, pz = ux;
       const dim = shields[0].dimension, spots = new Map();
       const line = (list, ahead, gap) => {
@@ -11531,8 +11563,10 @@ system.runInterval(() => {
         const l = e.location, dx = sp.x - l.x, dz = sp.z - l.z, L = Math.hypot(dx, dz);
         if (L > 8 || Math.abs(sp.y - l.y) > 1.6) continue;                                 // (his walking gets him there)
         const th = D.threat?.isValid ? D.threat.location : undefined;
-        const faceOut = th ? { x: th.x, y: th.y + 1.5, z: th.z } : { x: l.x + (l.x - pl.x), y: l.y + 1.5, z: l.z + (l.z - pl.z) };
-        if (L < 0.12) { if (pace < 0.05 && now % 10 === 0) try { e.teleport(l, { facingLocation: faceOut }); } catch {} continue; }
+        // standing: facing out from you (his sector) or at the threat; walking: the way you're all going
+        const faceOut = th ?? { x: l.x + (l.x - pl.x) * 4, z: l.z + (l.z - pl.z) * 4 };
+        const faceGo = { x: l.x + (D.head?.x ?? 0) * 6, z: l.z + (D.head?.z ?? 1) * 6 };
+        if (L < 0.12) { if (now % 2 === 0) { const r = faceRot(e, l, pace < 0.05 ? faceOut : faceGo, 9); if (Math.abs(((r.y - e.getRotation().y + 540) % 360) - 180) > 1) try { e.setRotation(r); } catch {} } continue; }
         const stp = Math.min(L, maxStep), nx = l.x + (dx / L) * stp, nz = l.z + (dz / L) * stp;
         if (Math.hypot(nx - pl.x, nz - pl.z) < 0.75 && Math.hypot(l.x - pl.x, l.z - pl.z) >= 0.75) continue;   // (never through you)
         let ny;
@@ -11543,7 +11577,7 @@ system.runInterval(() => {
         if (ny === undefined) continue;                                                     // (a wall or a drop: his walking finds the way)
         if (dangerNear(e.dimension, { x: nx, y: ny, z: nz })) continue;
         const moving = pace > 0.05 || L > 0.6;
-        e.teleport({ x: nx, y: ny, z: nz }, { facingLocation: moving && !th ? { x: nx + dx, y: ny + 1.5, z: nz + dz } : faceOut });
+        e.teleport({ x: nx, y: ny, z: nz }, { rotation: faceRot(e, { x: nx, y: ny, z: nz }, th ? faceOut : moving ? (L > 1.2 ? { x: nx + dx * 4, z: nz + dz * 4 } : faceGo) : faceOut, 14) });
       }
     } catch {}
   }
@@ -11631,3 +11665,66 @@ system.runInterval(() => {
   }
   if (changed) saveFlareLights();
 }, 2);
+
+// ================================================================ v9.16: a human look
+// (the game's own "look around" tipped heads straight up and down and spun them at random: gone) A man standing with
+// nothing to deal with now and then glances along his sector, the head level, at a human pace, and comes back to where
+// he was facing; a player walking up close gets a look.
+const REST_YAW = new Map();      // id -> the way he settled facing
+const GLANCE = new Map();        // id -> { yaw, until, back }
+system.runInterval(() => {
+  const now = tick();
+  for (const e of allOf(SOLDIER)) {
+    try {
+      const id = e.id;
+      if (GLANCE.has(id) || downed.has(id) || pows.has(id) || isRiding(e) || gliders.has(id) || climbing.has(id) || personal.has(id) || now - (GUARD_ON.get(id) ?? -999) < 20 || perc.get(id)?.threat || P(e, "war:sit")) { if (!GLANCE.has(id)) REST_YAW.delete(id); continue; }
+      const l0 = e.location;
+      if (!PLAYER_POS.some((p) => p.d === e.dimension.id && Math.abs(p.x - l0.x) < 32 && Math.abs(p.z - l0.z) < 32)) continue;   // (nobody near to see him)
+      const v = e.getVelocity(); if (Math.hypot(v.x, v.z) > 0.03) { REST_YAW.delete(id); continue; }
+      if (!REST_YAW.has(id) && Math.random() > 0.3) continue;
+      const cur = e.getRotation().y;
+      if (!REST_YAW.has(id)) { REST_YAW.set(id, cur); continue; }
+      if (Math.random() > 0.12) continue;                                                // (every few seconds, not in step)
+      const rest = REST_YAW.get(id);
+      let yaw = rest + (Math.random() * 2 - 1) * 65;
+      const pl = PLAYERS_LIST.find((p) => { try { return p.dimension.id === e.dimension.id && dist(p.location, e.location) < 5; } catch { return false; } });
+      if (pl && Math.random() < 0.5) yaw = (Math.atan2(-(pl.location.x - e.location.x), pl.location.z - e.location.z) * 180) / Math.PI;
+      GLANCE.set(id, { yaw, until: now + 30 + Math.floor(Math.random() * 40), back: rest });
+    } catch {}
+  }
+  for (const id of [...REST_YAW.keys()]) if (!world.getEntity(id)) REST_YAW.delete(id);
+}, 20);
+system.runInterval(() => {
+  const now = tick();
+  for (const [id, g] of [...GLANCE]) {
+    const e = world.getEntity(id);
+    if (!e?.isValid || downed.has(id) || perc.get(id)?.threat || gliders.has(id) || personal.has(id)) { GLANCE.delete(id); continue; }
+    try {
+      const v = e.getVelocity(); if (Math.hypot(v.x, v.z) > 0.03) { GLANCE.delete(id); continue; }
+      const want = now < g.until ? g.yaw : g.back, cur = e.getRotation().y;
+      const diff = Math.abs(((want - cur + 540) % 360) - 180);
+      if (diff > 1) e.setRotation({ x: 0, y: turnToward(cur, want, 7) });
+      else if (now >= g.until) GLANCE.delete(id);
+    } catch { GLANCE.delete(id); }
+  }
+}, 2);
+
+// heads level: nobody to aim at, a head tipped far up or down (the game's walking glancing at a marker at his feet) is
+// brought level at once. Only men a player could be watching.
+system.runInterval(() => {
+  if (!PLAYER_POS.length) return;
+  for (const e of allOf(SOLDIER)) {
+    try {
+      const g = getJSON(e, "war:st", {}).g;
+      if ((g !== "g_wp" && g !== "g_post" && g !== "g_owner") || gliders.has(e.id)) continue;   // (only the game's own walking-to tips heads; the glider sets his level every step)
+      const l = e.location;
+      if (!PLAYER_POS.some((p) => p.d === e.dimension.id && Math.abs(p.x - l.x) < 32 && Math.abs(p.z - l.z) < 32)) continue;   // (close enough to see a head)
+      if (downed.has(e.id) || climbing.has(e.id)) continue;
+      const r = e.getRotation();
+      if (Math.abs(r.x) <= 20) continue;
+      const th = perc.get(e.id)?.threat ?? gunState.get(e.id)?.target;
+      if (th?.isValid && Math.abs(th.location.y - l.y) > 2) continue;                    // (aiming up or down at a real man: fine)
+      e.setRotation({ x: 0, y: r.y });
+    } catch {}
+  }
+}, 4);

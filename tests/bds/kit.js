@@ -1091,9 +1091,9 @@ KS.horseback = async (o, ox, oz) => {
 // shield wall against shooters; the squad's sergeant wears the officer insignia
 KS.shields = async (o, ox, oz) => {
   floorAt(ox - 30, oz - 30, ox + 30, oz + 30);
+  setRelPair(1, 2, "0", false);
   const a = kitSoldier(1, { x: ox + 0.5, y: Y, z: oz + 0.5 }, "sword", "hold"), g = kitSoldier(1, { x: ox + 3.5, y: Y, z: oz + 0.5 }, "rifle", "hold");
   const b = kitSoldier(2, { x: ox + 0.5, y: Y, z: oz + 3.5 }, "sword", "hold");
-  setRelPair(1, 2, "0", false);
   await kitWait(80);
   const offhand = (e) => { try { return e.runCommand("testfor @s[hasitem={item=shield,location=slot.weapon.offhand}]").successCount > 0; } catch { return "err"; } };
   const has = { sword: offhand(a), rifle: offhand(g) };
@@ -1202,4 +1202,183 @@ KS.guardwalk = async (o, ox, oz) => {
   await kitWait(60); stats.stopped = sample("stop");
   globalThis.__fakeLeader = undefined; try { pr.remove(); } catch {}
   return { stats, rows: rows.join(" ") };
+};
+// v9.16: how human do they look? head pitch (|x|: tilted up/down), yaw flicking (turn direction reversing tick to tick),
+// and stop-go (velocity reversing), idle, in a skirmish, and on a guard detail
+KS.jitter = async (o, ox, oz) => {
+  floorAt(ox - 40, oz - 40, ox + 40, oz + 40);
+  const meas = async (list, T) => {
+    const last = new Map(); let n = 0, pitchSum = 0, pitchMax = 0, steep = 0, flick = 0, turns = 0, rev = 0, moves = 0;
+    for (let k = 0; k < T; k++) {
+      await kitWait(1);
+      for (const e of list) {
+        if (!e.isValid) continue;
+        const r = e.getRotation(), v = e.getVelocity(), L = last.get(e.id);
+        const px = Math.abs(r.x); n++; pitchSum += px; pitchMax = Math.max(pitchMax, px); if (px > 25) steep++;
+        if (L) {
+          const dy = ((r.y - L.y + 540) % 360) - 180;
+          if (Math.abs(dy) > 2) { turns++; if (L.dy && Math.sign(dy) !== Math.sign(L.dy) && Math.abs(L.dy) > 2) flick++; }
+          const sp = Math.hypot(v.x, v.z), lsp = Math.hypot(L.v.x, L.v.z);
+          if (sp > 0.03 && lsp > 0.03) { moves++; if ((v.x * L.v.x + v.z * L.v.z) / (sp * lsp) < -0.3) rev++; }
+          last.set(e.id, { y: r.y, dy: Math.abs(dy) > 2 ? dy : L.dy, v });
+        } else last.set(e.id, { y: r.y, dy: 0, v });
+      }
+    }
+    return { pitchAvg: +(pitchSum / Math.max(1, n)).toFixed(1), pitchMax: Math.round(pitchMax), steepPct: +(100 * steep / Math.max(1, n)).toFixed(1), flicksPerTurn: +(flick / Math.max(1, turns)).toFixed(2), turnPct: +(100 * turns / Math.max(1, n)).toFixed(1), reversePct: +(100 * rev / Math.max(1, moves)).toFixed(1) };
+  };
+  const res = {};
+  // idle
+  const idle = [...Array(8).keys()].map((i) => kitSoldier(1, { x: ox - 8 + i * 2 + 0.5, y: Y, z: oz - 30.5 }, i % 2 ? "rifle" : "sword", "hold"));
+  await kitWait(60); res.idle = await meas(idle, 200);
+  for (const e of idle) try { e.remove(); } catch {}
+  // skirmish
+  setRelPair(1, 2, "1", true);
+  const a = [...Array(5).keys()].map((i) => kitSoldier(1, { x: ox - 6 + i * 3 + 0.5, y: Y, z: oz - 14.5 }, i % 2 ? "rifle" : "smg", "hold"));
+  const b = [...Array(5).keys()].map((i) => kitSoldier(2, { x: ox - 6 + i * 3 + 0.5, y: Y, z: oz + 14.5 }, i % 2 ? "rifle" : "smg", "hold"));
+  for (const e of [...a, ...b]) try { e.addEffect("resistance", 2000, { amplifier: 255, showParticles: false }); } catch {}
+  await kitWait(40); res.fight = await meas([...a, ...b], 300);
+  for (const e of [...a, ...b]) try { e.remove(); } catch {}
+  // guard detail around a walking principal
+  const pr = ow().spawnEntity("minecraft:armor_stand", { x: ox + 20.5, y: Y, z: oz - 20.5 });
+  globalThis.__fakeLeader = (id) => (id === pr.id ? pr : undefined);
+  const gs = [0, 1, 2, 3].map((i) => { const e = ow().spawnEntity(SOLDIER, { x: ox + 18.5 + i, y: Y, z: oz - 23.5 }, { spawnEvent: "war:init" }); const ne = setupSoldier(e, { faction: 1, squad: 3, weapon: i % 2 ? "sword" : "smg", ranged: i % 2 === 0, div: "guard", radius: 8, func: "__none", owner: pr.id }, KIT_PLAYER) ?? e; const x = ne?.isValid ? ne : e; sdp(x, "war:func", "escort"); sdp(x, "war:leader", pr.id); sdDrop(x); return x; });
+  await kitWait(80);
+  const walker = (async () => { for (let k = 0; k < 200; k++) { const l = pr.location; pr.teleport({ x: l.x + (k < 100 ? 0 : -0.2), y: Y, z: l.z + (k < 100 ? 0.2 : 0) }); await kitWait(1); } })();
+  res.detail = await meas(gs, 200); await walker;
+  globalThis.__fakeLeader = undefined; try { pr.remove(); } catch {}
+  return res;
+};
+KS.yawtrace = async (o, ox, oz) => {
+  floorAt(ox - 40, oz - 40, ox + 40, oz + 40);
+  const idle = [kitSoldier(1, { x: ox + 0.5, y: Y, z: oz - 30.5 }, "sword", "hold"), kitSoldier(1, { x: ox + 3.5, y: Y, z: oz - 30.5 }, "rifle", "hold")];
+  setRelPair(1, 2, "1", true);
+  const a = kitSoldier(1, { x: ox + 0.5, y: Y, z: oz - 14.5 }, "rifle", "hold"), b = kitSoldier(2, { x: ox + 0.5, y: Y, z: oz + 14.5 }, "rifle", "hold");
+  for (const e of [a, b]) try { e.addEffect("resistance", 2000, { amplifier: 255, showParticles: false }); } catch {}
+  await kitWait(60);
+  const tr = { idleS: [], idleR: [], fight: [] };
+  for (let k = 0; k < 120; k++) {
+    await kitWait(1);
+    const f = (e) => { const r = e.getRotation(); return `${Math.round(r.y)}/${Math.round(r.x)}`; };
+    tr.idleS.push(f(idle[0])); tr.idleR.push(f(idle[1])); tr.fight.push(f(a) + (notes.get(a.id)?.text ?? "").slice(0, 6));
+  }
+  const pitchy = []; for (const e of idle) pitchy.push(`${sd(e).weapon}:${notes.get(e.id)?.text}`);
+  return { idleS: tr.idleS.join(" "), idleR: tr.idleR.join(" "), fight: tr.fight.slice(0, 80).join(" "), pitchy };
+};
+KS.nod = async (o, ox, oz) => {
+  floorAt(ox - 40, oz - 40, ox + 40, oz + 40);
+  const res = {};
+  for (const [tag, war, w] of [["swordPeace", false, "sword"], ["swordWar", true, "sword"], ["crossWar", true, "crossbow"], ["swordWarNoMk", true, "sword"]]) {
+    setRelPair(1, 2, war ? "1" : "0", war);
+    const e = kitSoldier(1, { x: ox + 0.5, y: Y, z: oz - 30.5 }, w, "hold");
+    const f = kitSoldier(2, { x: ox + 0.5, y: Y, z: oz + 14.5 }, "rifle", "post");
+    try { f.addEffect("resistance", 2000, { amplifier: 255, showParticles: false }); f.addEffect("slowness", 2000, { amplifier: 255, showParticles: false }); } catch {}
+    await kitWait(40);
+    let spikes = 0; const at = [];
+    for (let k = 0; k < 160; k++) {
+      if (tag === "swordWarNoMk") { sdp(e, "war:goal", 0); }
+      await kitWait(1);
+      const x = e.getRotation().x;
+      if (Math.abs(x) > 25) { spikes++; if (at.length < 4) at.push(`${Math.round(x)}:${getJSON(e, "war:st", {}).g}/${getJSON(e, "war:st", {}).t}/${getJSON(e, "war:st", {}).w}:${notes.get(e.id)?.text}`); }
+    }
+    res[tag] = { spikes, at };
+    for (const x of [e, f]) try { x.remove(); } catch {}
+    await kitWait(5);
+  }
+  return res;
+};
+KS.nod2 = async (o, ox, oz) => {
+  floorAt(ox - 40, oz - 40, ox + 40, oz + 40);
+  setRelPair(1, 2, "0", false);
+  const e = kitSoldier(1, { x: ox + 0.5, y: Y, z: oz - 30.5 }, "sword", "hold");
+  await kitWait(40);
+  const proto = Object.getPrototypeOf(e), calls = [];
+  const wrap = (name) => { const orig = proto[name]; proto[name] = function (...a) { if (this.id === e.id) calls.push({ t: tick(), name, arg: JSON.stringify(a).slice(0, 80), st: String(new Error().stack).split("\n").slice(2, 4).map((s) => s.trim().slice(0, 60)).join(" < ") }); return orig.apply(this, a); }; return () => { proto[name] = orig; }; };
+  const un = ["setRotation", "teleport", "applyImpulse", "triggerEvent", "clearVelocity", "applyKnockback"].map(wrap);
+  const spikes = [];
+  let prev = 0;
+  for (let k = 0; k < 160; k++) { await kitWait(1); const x = e.getRotation().x; if (Math.abs(x) > 25 && Math.abs(prev) <= 25) spikes.push(tick()); prev = x; }
+  un.forEach((f) => f());
+  const near = spikes.slice(0, 3).map((t) => ({ t, calls: calls.filter((c) => c.t >= t - 3 && c.t <= t).map((c) => `${c.t - t}:${c.name}${c.arg}@${c.st}`) }));
+  const kinds = {}; for (const c of calls) kinds[c.name] = (kinds[c.name] ?? 0) + 1;
+  return { spikes: spikes.length, kinds, near };
+};
+KS.nod3 = async (o, ox, oz) => {
+  floorAt(ox - 40, oz - 40, ox + 40, oz + 40);
+  setRelPair(1, 2, "0", false);
+  const res = {};
+  const variants = [["base", {}], ["w_none", { w: "w_none" }], ["w_ranged", { w: "w_ranged" }], ["t_mid", { t: "t_mid" }], ["g_none", { g: "g_none" }], ["g_post", { g: "g_post" }], ["noShield", {}]];
+  for (const [tag, gr] of variants) {
+    const e = kitSoldier(1, { x: ox + 0.5, y: Y, z: oz - 30.5 }, "sword", "hold");
+    await kitWait(30);
+    if (tag === "noShield") { SHIELD_ON.set(e.id, false); e.runCommand("replaceitem entity @s slot.weapon.offhand 0 air"); }
+    let spikes = 0, prev = 0;
+    for (let k = 0; k < 160; k++) { if (Object.keys(gr).length) { const st = getJSON(e, "war:st", {}); for (const [kk, v] of Object.entries(gr)) if (st[kk] !== v) setGroups(e, { [kk]: v }); } await kitWait(1); const x = e.getRotation().x; if (Math.abs(x) > 25 && Math.abs(prev) <= 25) spikes++; prev = x; }
+    res[tag] = spikes; try { e.remove(); } catch {} await kitWait(3);
+  }
+  return res;
+};
+KS.flick = async (o, ox, oz) => {
+  floorAt(ox - 40, oz - 40, ox + 40, oz + 40);
+  setRelPair(1, 2, "1", true);
+  const a = [...Array(5).keys()].map((i) => kitSoldier(1, { x: ox - 6 + i * 3 + 0.5, y: Y, z: oz - 14.5 }, ["rifle", "smg", "sword", "crossbow", "rifle"][i], "hold"));
+  const b = [...Array(5).keys()].map((i) => kitSoldier(2, { x: ox - 6 + i * 3 + 0.5, y: Y, z: oz + 14.5 }, ["rifle", "smg", "sword", "crossbow", "rifle"][i], "hold"));
+  const all = [...a, ...b];
+  for (const e of all) try { e.addEffect("resistance", 2000, { amplifier: 255, showParticles: false }); } catch {}
+  await kitWait(40);
+  const st = new Map(all.map((e) => [e.id, { last: e.getRotation().y, ldy: 0, fl: 0, tr: [], notes: new Set(), pitch: 0 }]));
+  for (let k = 0; k < 200; k++) {
+    await kitWait(1);
+    for (const e of all) {
+      if (!e.isValid) continue;
+      const s = st.get(e.id), r = e.getRotation(), dy = ((r.y - s.last + 540) % 360) - 180;
+      if (Math.abs(dy) > 2) { if (s.ldy && Math.sign(dy) !== Math.sign(s.ldy)) s.fl++; s.ldy = dy; }
+      s.last = r.y; s.pitch = Math.max(s.pitch, Math.abs(r.x));
+      if (k < 60) s.tr.push(Math.round(r.y)); s.notes.add(notes.get(e.id)?.text ?? "-");
+    }
+  }
+  return { rows: all.map((e) => { const s = st.get(e.id); return `${sd(e).faction}${sd(e).weapon}: flicks ${s.fl} pitchMax ${Math.round(s.pitch)} | ${[...s.notes].slice(0, 4).join(",")} | ${s.tr.join(" ")}`; }) };
+};
+KS.flick2 = async (o, ox, oz) => {
+  floorAt(ox - 40, oz - 40, ox + 40, oz + 40);
+  setRelPair(1, 2, "1", true);
+  const a = [...Array(3).keys()].map((i) => kitSoldier(1, { x: ox - 3 + i * 3 + 0.5, y: Y, z: oz - 14.5 }, o.w ?? "smg", "hold"));
+  const b = [...Array(3).keys()].map((i) => kitSoldier(2, { x: ox - 3 + i * 3 + 0.5, y: Y, z: oz + 14.5 }, "rifle", "hold"));
+  for (const e of [...a, ...b]) try { e.addEffect("resistance", 2000, { amplifier: 255, showParticles: false }); } catch {}
+  await kitWait(40);
+  const e = a[1], proto = Object.getPrototypeOf(e), calls = [];
+  const wrap = (name) => { const orig = proto[name]; proto[name] = function (...x) { if (this.id === e.id) calls.push(`${tick()}:${name}${JSON.stringify(x[name === "teleport" ? 1 : 0] ?? {}).slice(0, 40)}@${String(new Error().stack).split("\n").slice(2, 3).map((s) => s.trim().replace(/.*main\.js:/, "L").slice(0, 20)).join("")}`); return orig.apply(this, x); }; return () => { proto[name] = orig; }; };
+  const un = ["setRotation", "teleport"].map(wrap);
+  const tr = [];
+  for (let k = 0; k < 80; k++) { await kitWait(1); tr.push(`${tick()}:${Math.round(e.getRotation().y)}`); }
+  un.forEach((f) => f());
+  return { tr: tr.join(" "), calls: calls.slice(0, 60) };
+};
+KS.tswitch = async (o, ox, oz) => {
+  floorAt(ox - 40, oz - 40, ox + 40, oz + 40);
+  setRelPair(1, 2, "1", true);
+  const a = [...Array(5).keys()].map((i) => kitSoldier(1, { x: ox - 6 + i * 3 + 0.5, y: Y, z: oz - 14.5 }, i % 2 ? "smg" : "rifle", "hold"));
+  const b = [...Array(5).keys()].map((i) => kitSoldier(2, { x: ox - 6 + i * 3 + 0.5, y: Y, z: oz + 14.5 }, i % 2 ? "smg" : "rifle", "hold"));
+  const all = [...a, ...b];
+  for (const e of all) try { e.addEffect("resistance", 2000, { amplifier: 255, showParticles: false }); } catch {}
+  await kitWait(40);
+  const last = new Map(), sw = new Map(), pth = new Map(), psw = new Map(), seq = new Map();
+  for (let k = 0; k < 300; k++) {
+    await kitWait(1);
+    for (const e of all) {
+      const g = gunState.get(e.id)?.target?.id, p = perc.get(e.id)?.threat?.id;
+      if (last.has(e.id) && last.get(e.id) !== g) { sw.set(e.id, (sw.get(e.id) ?? 0) + 1); const s = seq.get(e.id) ?? []; s.push(`${k}:${g ? g.slice(-3) : "-"}`); seq.set(e.id, s); }
+      if (pth.has(e.id) && pth.get(e.id) !== p) psw.set(e.id, (psw.get(e.id) ?? 0) + 1);
+      last.set(e.id, g); pth.set(e.id, p);
+    }
+  }
+  return { gunSwitchesPer15s: all.map((e) => sw.get(e.id) ?? 0), threatSwitches: all.map((e) => psw.get(e.id) ?? 0), seq: all.slice(0, 3).map((e) => (seq.get(e.id) ?? []).join(" ")) };
+};
+KS.marchpitch = async (o, ox, oz) => {
+  floorAt(ox - 30, oz - 80, ox + 30, oz + 30);
+  const men = [...Array(8).keys()].map((i) => kitSoldier(1, { x: ox - 4 + i + 0.5, y: Y, z: oz + 20.5 }, i % 2 ? "sword" : "rifle", "hold"));
+  await kitWait(20);
+  await kitOrder(1, { x: ox + 0.5, y: Y, z: oz - 60.5 }, "hold");
+  let n = 0, sum = 0, mx = 0, steep = 0;
+  for (let k = 0; k < 400; k++) { await kitWait(1); for (const e of men) { if (!e.isValid) continue; const x = Math.abs(e.getRotation().x); n++; sum += x; mx = Math.max(mx, x); if (x > 20) steep++; } }
+  return { pitchAvg: +(sum / n).toFixed(1), pitchMax: Math.round(mx), steepPct: +(100 * steep / n).toFixed(1), moved: men.map((e) => Math.round(oz + 20.5 - e.location.z)) };
 };
