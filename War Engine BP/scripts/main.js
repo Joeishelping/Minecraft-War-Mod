@@ -718,7 +718,9 @@ function cmWeapon(w) {
   return w === "molotov" ? "sword" : "crossbow";
 }
 const CM_LIGHT_MOUNTS = ["minecraft:horse", "minecraft:donkey", "minecraft:mule", "minecraft:camel", "worldanimals:african_elephant", "worldanimals:asian_elephant"];
-const cmMountOK = (t) => { const m = contentMode(); return m === "full" || (m === "vanilla" ? t.startsWith("minecraft:") : CM_LIGHT_MOUNTS.includes(t)); };
+// (v9.14: a Cavalier's own mount, from the egg or the wand, is one of the sensible ones at every level (vanilla ones only at
+//  Vanilla); anything else saddleable can still be ridden the manual way: saddle it and give "Mount up")
+const cmMountOK = (t) => CM_LIGHT_MOUNTS.includes(t) && (contentMode() !== "vanilla" || t.startsWith("minecraft:"));
 // the loadout he actually carries under the current level (his chosen one is kept, for when it's allowed again)
 function cmFix(e, div, w) {
   const m = contentMode();
@@ -10898,8 +10900,13 @@ const CAV_PASS = new Map();   // rider id -> { at, until } where he rides on to 
 const CAV_HIT = new Map();    // rider id -> tick of his last strike
 // v9.14: tamed and saddled the way every game version takes (the spawn events differ between versions: a wild horse
 // throws its rider off): the taming component, and a saddle in its own saddle slot
-function readyMount(m) {
-  try { const tm = m.getComponent("minecraft:tamemount"); if (tm && !m.hasComponent("minecraft:is_tamed")) tm.tame(false); } catch {}
+function readyMount(m, saddleEvents) {
+  // (tamed FIRST: on a wild horse that's already saddled the taming no longer takes, and a wild horse throws its rider)
+  if (!m.hasComponent("minecraft:is_tamed")) {
+    try { const tm = m.getComponent("minecraft:tamemount"); if (tm) tm.tame(false); } catch {}
+    if (!m.hasComponent("minecraft:is_tamed")) try { m.triggerEvent("minecraft:on_tame"); } catch {}
+  }
+  for (const s2 of saddleEvents ?? []) { try { m.triggerEvent(s2); } catch {} }
   try { if (!m.hasComponent("minecraft:is_saddled")) { const inv = m.getComponent("minecraft:inventory")?.container; if (inv && inv.size >= 1 && !inv.getItem(0)) inv.setItem(0, new ItemStack("minecraft:saddle", 1)); } } catch {}
 }
 function spawnCavMount(e) {
@@ -10914,8 +10921,8 @@ function spawnCavMount(e) {
     try { if (m?.hasComponent("minecraft:is_baby")) { m.remove(); m = undefined; } } catch {}            // (a grown one, not a foal)
   }
   if (!m) return undefined;
-  for (const s2 of saddle) { try { m.triggerEvent(s2); } catch {} }
-  readyMount(m);
+  try { if (!m.hasComponent("minecraft:rideable")) m.triggerEvent("minecraft:spawn_adult"); } catch {}   // (spawned through an event this game version lacks: no make-up at all)
+  readyMount(m, saddle);
   try { m.addTag("war_cav"); m.setDynamicProperty("war:cavf", Number(sd(e).faction ?? 0)); } catch {}
   return m;
 }

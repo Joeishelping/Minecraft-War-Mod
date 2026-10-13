@@ -1,5 +1,17 @@
 # War Engine changelog
 
+## v9.14.1 (Horses, for real this time)
+
+- **Cavaliers ride their horses.** Reproduced the failure exactly. In game versions without the "spawn tamed adult"
+  event, the horse came out with none of its usual make-up (not grown, no seat, not tameable), got saddled, and stayed
+  wild, so every rider was thrown or never got on. Now a mount spawned that way is given its grown-up make-up, tamed
+  FIRST (with the game's own "on tame" event if the taming call can't), and only then saddled. Horses already stuck
+  wild and saddled in your world are put right the next time their rider tries them. Tested on a real server in that
+  exact situation: 3 of 3 riders up and staying up.
+- **Mount list.** A Cavalier's own mount (egg, Unit Wand, group edit) is one of horse, donkey, mule, camel, African or
+  Asian elephant, at every content level (Vanilla: the vanilla ones). Anything else saddleable can still be ridden the
+  manual way, as before: saddle it and give "Mount up".
+
 ## v9.14 (Horses that work, content levels, better ragdolls, prisoners, cavalry that find their way)
 
 - **Riders get on their horses.** In some game versions the "spawn tamed" event is missing, so the horse came out

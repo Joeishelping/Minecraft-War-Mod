@@ -778,6 +778,36 @@ KS.wpcount = async (o, ox, oz) => {
   makeWaypoint = orig;
   return { trace, madeBy: counts, waypointsNow: allOf(WAYPOINT).length - n0, mounted: riders.map((e) => !!e.getComponent("minecraft:riding")?.entityRidingOn), progressX: riders.map((e, i) => Math.round(e.location.x - startX[i])), reached: riders.filter((e) => e.location.x > ox + 14).length };
 };
+// v9.14: a game version without "spawn_tame_adult": does a cavalier still end up riding his horse?
+KS.horsenoevt = async (o, ox, oz) => {
+  floorAt(ox - 10, oz - 10, ox + 10, oz + 10);
+  for (const m of ow().getEntities({ type: "minecraft:horse", location: { x: ox, y: Y, z: oz }, maxDistance: 40 })) { try { m.remove(); } catch {} }
+  const keep = CAV_MOUNTS[0][2]; CAV_MOUNTS[0][2] = o.ev ?? "minecraft:no_such_event";
+  const rs = [0, 1, 2].map((i) => kitCav(1, { x: ox + i * 4 + 0.5, y: Y, z: oz + 0.5 }, "rifle", "minecraft:horse"));
+  const trace = [];
+  for (let k = 0; k < 8; k++) { await kitWait(40); trace.push(rs.map((e) => { const m = world.getEntity(String(gdp(e, "war:mountId") ?? "")); return `${e.getComponent("minecraft:riding")?.entityRidingOn ? "ON" : "off"}${m ? (m.hasComponent("minecraft:is_tamed") ? "/tame" : "/wild") + (m.hasComponent("minecraft:is_saddled") ? "+sad" : "") : "/nohorse"}`; }).join(" ")); }
+  CAV_MOUNTS[0][2] = keep;
+  for (const e of rs) try { e.remove(); } catch {}
+  return { trace };
+};
+// v9.14: a horse left wild-but-saddled by the old code: is it put right, and ridden?
+KS.horseold = async (o, ox, oz) => {
+  floorAt(ox - 10, oz - 10, ox + 10, oz + 10);
+  let h; try { h = ow().spawnEntity("minecraft:horse", { x: ox + 0.5, y: Y, z: oz + 2.5 }, { spawnEvent: "minecraft:no_such_event", initialPersistence: true }); } catch (x) { return { spawnThrew: String(x).slice(0, 80) }; }
+  await kitWait(3); try { h.triggerEvent("minecraft:horse_saddled"); } catch {} try { h.getComponent("minecraft:tamemount")?.tame(false); } catch {}
+  const comps = ["minecraft:tamemount", "minecraft:rideable", "minecraft:is_baby", "minecraft:inventory"].filter((c) => h.hasComponent(c));
+  await kitWait(5);
+  const before = (h.hasComponent("minecraft:is_tamed") ? "tame" : "wild") + (h.hasComponent("minecraft:is_saddled") ? "+sad" : "");
+  const e = kitCav(1, { x: ox + 0.5, y: Y, z: oz + 0.5 }, "rifle", "minecraft:horse");
+  await kitWait(5);
+  { const own = world.getEntity(String(gdp(e, "war:mountId") ?? "")); try { own?.getComponent("minecraft:rideable")?.ejectRider(e); own?.remove(); } catch {} }
+  sdp(e, "war:mountId", h.id); sdp(e, "war:mountTry", undefined); mountOf.delete(e.id);
+  await kitWait(120);
+  const after = (h.hasComponent("minecraft:is_tamed") ? "tame" : "wild") + (h.hasComponent("minecraft:is_saddled") ? "+sad" : "");
+  const r = { comps, before, after, riding: e.getComponent("minecraft:riding")?.entityRidingOn?.id === h.id };
+  try { e.remove(); h.remove(); } catch {}
+  return r;
+};
 // v9.7: a downed man in plain view of the enemy (who hold their fire) next to a wall: does he crawl behind it?
 KS.crawl = async (o, ox, oz) => {
   floorAt(ox - 20, oz - 20, ox + 30, oz + 20);
