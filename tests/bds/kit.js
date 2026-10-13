@@ -562,6 +562,29 @@ KS.corpseskin = async (o, ox, oz) => {
   setJSON(world, "war:fskins", keep);
   return { soldiersDrawn: drawn, bodies: [near(ox + 0.5), near(ox + 4.5)] };
 };
+// v9.13: cavalry on real mounts: each rider gets his own tamed, saddled mount, rides it, and fights from it
+function kitCav(f, at, weapon, mount) {
+  const e = ow().spawnEntity(SOLDIER, at, { spawnEvent: "war:init" });
+  const ne = setupSoldier(e, { faction: f, squad: 2, weapon, ranged: isRangedW(weapon), div: "cavalier", radius: 8, func: "__none", mount }, KIT_PLAYER) ?? e;
+  const x = ne?.isValid ? ne : e; giveFunction(x, "hold", KIT_PLAYER); return x;
+}
+KS.cavalry = async (o, ox, oz) => {
+  floorAt(ox - 30, oz - 30, ox + 30, oz + 30);
+  for (const t of ["minecraft:horse", "minecraft:camel", "minecraft:pig", "worldanimals:lion"]) for (const m of ow().getEntities({ type: t, location: { x: ox, y: Y, z: oz }, maxDistance: 60 })) { try { m.remove(); } catch {} }
+  setRelPair(1, 2, "1", true);
+  const riders = [kitCav(1, { x: ox - 20.5, y: Y, z: oz - 4.5 }, "sword", "minecraft:horse"), kitCav(1, { x: ox - 20.5, y: Y, z: oz + 0.5 }, "smg", "minecraft:horse"),
+    kitCav(1, { x: ox - 20.5, y: Y, z: oz + 4.5 }, "spear", "minecraft:camel"), kitCav(1, { x: ox - 22.5, y: Y, z: oz + 8.5 }, "rifle", o.wa ? "worldanimals:lion" : "minecraft:pig")];
+  const old = kitSoldier(1, { x: ox - 24.5, y: Y, z: oz - 8.5 }, "sword", "hold"); sdp(old, "war:div", "cavalier"); setP(old, "war:cav", true);   // (an old-style cavalier)
+  await kitWait(60);
+  const st = () => [...riders, old].map((e) => { if (!e.isValid) return "dead"; const m = e.getComponent("minecraft:riding")?.entityRidingOn; return m ? `${m.typeId.split(":")[1]}${m.hasComponent("minecraft:is_saddled") ? "+saddle" : ""}${m.hasComponent("minecraft:is_tamed") ? "+tame" : ""}` : "on foot"; });
+  const mounted = st(), cavBody = P(old, "war:cav");
+  const foes = [0, 1, 2, 3, 4, 5].map((i) => kitSoldier(2, { x: ox + 12.5, y: Y, z: oz - 6.5 + i * 2.5 }, i % 2 ? "rifle" : "sword", "hold"));
+  const startX = riders.map((e) => e.location.x);
+  let minD = riders.map(() => 99);
+  for (let k = 0; k < 40; k++) { await kitWait(10); riders.forEach((r, i) => { if (!r.isValid) return; for (const f of foes) if (f.isValid && !isDown(f)) minD[i] = Math.min(minD[i], Math.round(dist(r.location, f.location) * 10) / 10); }); }
+  const foesLeft = foes.filter((f) => f.isValid && !isDown(f)).length;
+  return { mounted, oldCavBodyGone: !cavBody, closestToFoes: minD, ridersMoved: riders.map((e, i) => e.isValid ? Math.round(Math.abs(e.location.x - startX[i])) : "dead"), foesLeftOf6: foesLeft, after: st(), mounts: ow().getEntities({ tags: ["war_cav"], location: { x: ox, y: Y, z: oz }, maxDistance: 80 }).length };
+};
 // v9.7: a downed man in plain view of the enemy (who hold their fire) next to a wall: does he crawl behind it?
 KS.crawl = async (o, ox, oz) => {
   floorAt(ox - 20, oz - 20, ox + 30, oz + 20);

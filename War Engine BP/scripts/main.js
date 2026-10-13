@@ -471,7 +471,7 @@ function weaponItem(e) {
   if (GUNS.includes(d.weapon)) return `ww:${gunModel(d.faction, d.weapon)}`;
   if (d.weapon === "spear") return "iron_spear";                  // (no spear in this game version: a trident)
   if (d.ranged) return "crossbow";
-  return d.div === "cavalier" ? "air" : "iron_sword"; // the cavalier's lance is part of its model
+  return "iron_sword";
 }
 
 // ================================================================ waypoints & flags
@@ -594,7 +594,8 @@ function setupSoldier(e, s, player, { heal = true } = {}) {
   sdp(e, "war:weapon", weapon);
   setP(e, "war:ranged", isRangedW(weapon));
   setP(e, "war:skin", s.skin ?? 0);
-  setP(e, "war:cav", div === "cavalier");
+  setP(e, "war:cav", false);                                       // (v9.13: cavalry ride real mounts)
+  if (div === "cavalier" && s.mount) sdp(e, "war:mount", s.mount);
   setP(e, "war:medic", div === "medic");
   setP(e, "war:role", setting("bands", true) ? ROLE_OF[div] ?? 0 : 0);
   sdp(e, "war:div", div);
@@ -604,7 +605,7 @@ function setupSoldier(e, s, player, { heal = true } = {}) {
   sdp(e, "war:armor", s.armor ?? "none");
   if (div === "guard") sdp(e, "war:owner", s.owner ?? player?.id);
   if (div === "houndmaster") e.addTag("war_hm"); else e.removeTag("war_hm");
-  e.triggerEvent(div === "cavalier" ? "war:body_cav" : "war:body_foot");
+  e.triggerEvent("war:body_foot");
   if (heal) e.triggerEvent(`war:${DIV[div].hp}`);
   equip(e, weaponItem(e));
   equipArmor(e, s.armor ?? "none");
@@ -807,7 +808,8 @@ function think(e) {
   }
 
   // ---- weapon
-  let weapon = GUNS.includes(d.weapon) ? `w_${d.weapon}` : d.weapon === "spear" && d.div !== "cavalier" ? "w_spear" : d.ranged ? "w_ranged" : d.div === "cavalier" ? "w_lance" : "w_melee";
+  let weapon = GUNS.includes(d.weapon) ? `w_${d.weapon}` : d.weapon === "spear" ? "w_spear" : d.ranged ? "w_ranged" : "w_melee";
+  if (d.div === "cavalier") cavTick(e, d, now);
   // v6.7: Demolition (and any older molotov soldier): throws now and then, fights with his pistol / sword between throws
   if (d.div === "grenadier" && !gdp(e, "war:kit")) { setupSoldier(e, { ...snapshot(e), weapon: "grenade", func: "__none" }, undefined, { heal: false }); return; }   // an old snowball grenadier: re-kitted once
   const thr = gdp(e, "war:throw") ?? (d.weapon === "molotov" ? "molotov" : undefined);
@@ -2427,8 +2429,8 @@ async function eggUse(player, div) {
   if (!DIV[div]) return;
   const key = `war:egg_${div}`;
   const def = getJSON(player, key, { faction: playerFaction(player) || 1, squad: 0, func: 0, weapon: "sword", count: 1, radius: 8 });
-  const WL = div === "cavalier" ? WEAPONS.slice(0, 2) : [...WEAPONS, ["mixguns", "Mixed guns (rifle / SMG / semi-auto / MG)"], ["mixmelee", "Mixed melee (swords + crossbows)"]];
-  const wl = WL.map((w) => (w[0] === "sword" && div === "cavalier" ? "Spear" : w[1]));
+  const WL = div === "cavalier" ? CAV_WEAPONS : [...WEAPONS, ["mixguns", "Mixed guns (rifle / SMG / semi-auto / MG)"], ["mixmelee", "Mixed melee (swords + crossbows)"]];
+  const wl = WL.map((w) => w[1]);
   const wIdx = Math.max(0, WL.findIndex((w) => w[0] === (def.weapon ?? (def.ranged ? "crossbow" : "sword"))));
   const funcs = FUNCS[div];
   // v6.6: a whole coalition at once (2+ member factions). v6.9.2: "How many" is the TOTAL, shared out between the member
@@ -2442,11 +2444,12 @@ async function eggUse(player, div) {
     .dropdown(div === "grenadier" ? "Kit" : "Weapon", DIV[div].weapon ? wl : div === "grenadier" ? DEMO.map((k) => k[1]) : ["None (heals)"], { defaultValueIndex: DIV[div].weapon ? wIdx : div === "grenadier" ? Math.max(0, DEMO.findIndex((k) => k[0] === def.weapon)) : 0 })
     .slider("How many (a coalition: in total, mixed)", 1, 30, { valueStep: 1, defaultValue: def.count })
     .slider("Patrol / sentry radius", 4, 150, { valueStep: 2, defaultValue: def.radius });
+  if (div === "cavalier") f.dropdown("Mount", CAV_MOUNTS.map((m) => m[1]), { defaultValueIndex: Math.max(0, CAV_MOUNTS.findIndex((m) => m[0] === def.mount)) });
   const r = await show(f, player);
   if (!r || r.canceled || !r.formValues) return;
   const v = r.formValues;
   const pick = Number(v[0]), coal = pick >= NF ? coals[pick - NF] : undefined;
-  const cfg = { faction: coal ? (def.faction || 1) : pick + 1, coal: coal ? pick - NF : undefined, squad: Number(v[1]), func: Number(v[2]), weapon: DIV[div].weapon ? WL[Number(v[3])][0] : div === "grenadier" ? DEMO[Number(v[3])][0] : "sword", count: Number(v[4]), radius: Number(v[5]) };
+  const cfg = { faction: coal ? (def.faction || 1) : pick + 1, coal: coal ? pick - NF : undefined, squad: Number(v[1]), func: Number(v[2]), weapon: DIV[div].weapon ? WL[Number(v[3])][0] : div === "grenadier" ? DEMO[Number(v[3])][0] : "sword", count: Number(v[4]), radius: Number(v[5]), mount: div === "cavalier" ? CAV_MOUNTS[Number(v[6])]?.[0] : undefined };
   setJSON(player, key, cfg);
   if (coal) {
     const mem = coal.members.slice(0, Math.max(1, cfg.count));         // (fewer men than factions: the first few get one each)
@@ -2454,13 +2457,13 @@ async function eggUse(player, div) {
     let total = 0;
     const counts = mem.map((fac, k) => {
       const pts = all.pts.filter((_, i) => i % mem.length === k);       // every Nth place in the ranks: mixed, not in blocks
-      const n = pts.length ? spawnArmy(player, { faction: fac, squad: cfg.squad, weapon: cfg.weapon, ranged: isRangedW(cfg.weapon), div, radius: cfg.radius, func: funcs[cfg.func][0] }, pts.length, 0, { base: all.base, pts }) : 0;
+      const n = pts.length ? spawnArmy(player, { faction: fac, squad: cfg.squad, weapon: cfg.weapon, ranged: isRangedW(cfg.weapon), div, radius: cfg.radius, func: funcs[cfg.func][0], mount: cfg.mount }, pts.length, 0, { base: all.base, pts }) : 0;
       total += n; return n;
     });
     player.onScreenDisplay.setActionBar(`§aSpawned ${total} ${DIV[div].name}s for §l${coal.name}§r§a, mixed: ${mem.map((m, k) => `${counts[k]} ${factionLabel(m)}`).join("§a, ")}`);
     return;
   }
-  const n = spawnArmy(player, { faction: cfg.faction, squad: cfg.squad, weapon: cfg.weapon, ranged: isRangedW(cfg.weapon), div, radius: cfg.radius, func: funcs[cfg.func][0] }, cfg.count);
+  const n = spawnArmy(player, { faction: cfg.faction, squad: cfg.squad, weapon: cfg.weapon, ranged: isRangedW(cfg.weapon), div, radius: cfg.radius, func: funcs[cfg.func][0], mount: cfg.mount }, cfg.count);
   player.onScreenDisplay.setActionBar(`§aSpawned ${n} ${factionLabel(cfg.faction)} §a${DIV[div].name}${n > 1 ? "s" : ""} §7(${funcs[cfg.func][1]}${cfg.squad ? ", " + squadName(cfg.faction, cfg.squad) : ""})`);
 }
 
@@ -2780,22 +2783,28 @@ async function editSoldier(player, e) {
     .dropdown("Faction", ["None", ...factionList()], { defaultValueIndex: d.faction })
     .dropdown("Squad", squadList(d.faction, "No squad"), { defaultValueIndex: d.squad })
     .dropdown("Function", funcs.map((x) => x[1]), { defaultValueIndex: Math.max(0, funcs.findIndex((x) => x[0] === d.func)) })
-    .dropdown(d.div === "grenadier" ? "Kit" : "Weapon", d.div === "grenadier" ? DEMO.map((k) => k[1]) : DIV[d.div].weapon ? (d.div === "cavalier" ? WEAPONS.slice(0, 2) : WEAPONS).map((w) => (w[0] === "sword" && d.div === "cavalier" ? "Spear" : w[1])) : ["(fixed for this unit)"], { defaultValueIndex: d.div === "grenadier" ? Math.max(0, DEMO.findIndex((k) => k[0] === String(gdp(e, "war:kit") ?? "grenade"))) : DIV[d.div].weapon ? Math.max(0, (d.div === "cavalier" ? WEAPONS.slice(0, 2) : WEAPONS).findIndex((w) => w[0] === d.weapon)) : 0 })
+    .dropdown(d.div === "grenadier" ? "Kit" : "Weapon", d.div === "grenadier" ? DEMO.map((k) => k[1]) : DIV[d.div].weapon ? (d.div === "cavalier" ? CAV_WEAPONS : WEAPONS).map((w) => w[1]) : ["(fixed for this unit)"], { defaultValueIndex: d.div === "grenadier" ? Math.max(0, DEMO.findIndex((k) => k[0] === String(gdp(e, "war:kit") ?? "grenade"))) : DIV[d.div].weapon ? Math.max(0, (d.div === "cavalier" ? CAV_WEAPONS : WEAPONS).findIndex((w) => w[0] === d.weapon)) : 0 })
     .dropdown("Armor", ARMOR_LABEL, { defaultValueIndex: Math.max(0, ARMOR.indexOf(d.armor)) })
     .dropdown("Skin", ["Faction uniform", ...skins.map((s) => s.name)], { defaultValueIndex: Math.max(0, skins.findIndex((s) => s.slot === d.skin) + 1) })
     .slider("Patrol / sentry radius", 4, 150, { valueStep: 2, defaultValue: Math.min(150, Math.max(4, d.radius)) })
     .textField("Name (blank = automatic)", "e.g. Sgt. Rossi", { defaultValue: d.custom })
     .dropdown("Stance", ["Aggressive", "Defensive", "Hold fire"], { defaultValueIndex: Math.max(0, ["aggressive", "defensive", "holdfire"].indexOf(String(gdp(e, "war:stance") ?? "aggressive"))) });
+  if (d.div === "cavalier") f.dropdown("Mount", CAV_MOUNTS.map((m) => m[1]), { defaultValueIndex: Math.max(0, CAV_MOUNTS.indexOf(cavMountOf(e))) });
   const r = await show(f, player);
   if (!r || r.canceled || !r.formValues || !e.isValid) return;
   const v = r.formValues;
   const skinIdx = Number(v[5]);
-  const wpn = d.div === "grenadier" ? DEMO[Number(v[3])][0] : DIV[d.div].weapon ? (d.div === "cavalier" ? WEAPONS.slice(0, 2) : WEAPONS)[Number(v[3])][0] : d.weapon;
+  const wpn = d.div === "grenadier" ? DEMO[Number(v[3])][0] : DIV[d.div].weapon ? (d.div === "cavalier" ? CAV_WEAPONS : WEAPONS)[Number(v[3])][0] : d.weapon;
   const s = { ...snapshot(e), faction: Number(v[0]), squad: Number(v[1]), weapon: wpn, ranged: isRangedW(wpn),
     armor: ARMOR[Number(v[4])] ?? "none",
     skin: skinIdx ? skins[skinIdx - 1].slot : 0, radius: Number(v[6]), custom: String(v[7]).trim(), owner: d.owner, func: "__none" };
   const func = funcs[Number(v[2])][0];
   sdp(e, "war:stance", ["aggressive", "defensive", "holdfire"][Number(v[8])] ?? "aggressive");
+  if (d.div === "cavalier" && v[9] !== undefined && CAV_MOUNTS[Number(v[9])] && CAV_MOUNTS[Number(v[9])][0] !== cavMountOf(e)[0]) {   // (a new mount: the old one goes, a fresh one comes)
+    const old = gdp(e, "war:mountId"), om = old ? world.getEntity(String(old)) : undefined;
+    try { om?.getComponent("minecraft:rideable")?.ejectRider(e); if (om?.hasTag("war_cav")) om.remove(); } catch {}
+    mountOf.delete(e.id); sdp(e, "war:mountId", undefined); sdp(e, "war:mountTry", undefined); sdp(e, "war:mount", CAV_MOUNTS[Number(v[9])][0]);
+  }
   const ne = setupSoldier(e, s, player, { heal: false });
   giveFunction(ne, func, player, ANCHORED.includes(func) && func === d.func ? d.goal || undefined : undefined);
   player.onScreenDisplay.setActionBar("§aSoldier updated.");
@@ -9338,7 +9347,7 @@ function dropCell(p, placed, now) {
 }
 function letGo(e, now) {
   held.delete(e.id); allOfCache.delete(SOLDIER);
-  try { e.triggerEvent("war:held_off"); e.triggerEvent(P(e, "war:cav") ? "war:body_cav" : "war:body_foot"); } catch {}
+  try { e.triggerEvent("war:held_off"); e.triggerEvent("war:body_foot"); } catch {}
   try { setP(e, "war:held", false); } catch {}
   sdp(e, "war:held", undefined);
   rescueMark.delete(e.id); pressing.delete(e.id); remoteMemo.delete(e.id); remoteSettled.delete(e.id); rTrack.delete(e.id);
@@ -10514,7 +10523,7 @@ function mountUp(list, auto) {
   const playerAt = (m) => walkers.some((p) => p.dimension.id === m.dimension.id && dist(p.location, m.location) < 2.5);   // (v9.2: a mount a player is stepping up to is his)
   let n = 0;
   for (const e of list) {
-    if (mountOf.has(e.id) || isRiding(e) || downed.has(e.id) || sd(e).surr || sd(e).div === "cavalier") continue;
+    if (mountOf.has(e.id) || isRiding(e) || downed.has(e.id) || sd(e).surr) continue;
     let best, bd = 1e9;
     const near = [];
     for (const t of [...Object.keys(MOUNT_SPEED), ...(auto ? [] : VEHICLES)]) near.push(...e.dimension.getEntities({ type: t, location: e.location, maxDistance: 16 }));
@@ -10559,7 +10568,8 @@ system.runInterval(() => {
       if (!e?.isValid || !m?.isValid || downed.has(id) || e.getComponent("minecraft:riding")?.entityRidingOn?.id !== M.id) { mountOf.delete(id); continue; }
       const rd = m.getComponent("minecraft:rideable")?.getRiders() ?? [];
       if (rd[0]?.id !== id || VEHICLES.includes(m.typeId)) continue;           // (a passenger: whoever's in front steers; the add-on's vehicles drive themselves)
-      const d = sd(e), want = rideDest(e, d);
+      const d = sd(e), want = (d.div === "cavalier" ? cavDest(e, d) : undefined) ?? rideDest(e, d);
+      if (want?.strike) cavStrike(e, d, m, want);
       const l = m.location, vel = m.getVelocity();
       let tx = 0, tz = 0;
       if (want) {
@@ -10567,7 +10577,7 @@ system.runInterval(() => {
         if (L > want.stop) {
           let sp = mountSpeed(m);
           if (isBoatType(m.typeId)) { let wet = false; try { wet = !!m.dimension.getBlock({ x: l.x, y: l.y - 0.2, z: l.z })?.isLiquid || !!m.dimension.getBlock(l)?.isLiquid; } catch {} if (!wet) sp = 0.04; }
-          if (gunState.get(id)?.target?.isValid) sp *= 0.5;                   // (firing from the saddle: easy)
+          if (want.fast) sp *= 1.15; else if (want.slow) sp *= 0.75; else if (gunState.get(id)?.target?.isValid) sp *= 0.5;   // (firing from the saddle: easy; a charge: flat out)
           sp *= Math.min(1, (L - want.stop) / 4 + 0.3);
           tx = (dx / L) * sp; tz = (dz / L) * sp;
           const yaw = (Math.atan2(-dx, dz) * 180) / Math.PI;
@@ -10583,6 +10593,100 @@ system.runInterval(() => {
     } catch { mountOf.delete(id); }
   }
 }, 2);
+// ================================================================ v9.13: cavalry on real mounts
+// A Cavalier is an ordinary soldier on a real, tamed, saddled mount: a horse by default, or whatever saddleable mob was
+// picked (vanilla, or World Animals if it's installed). Gunmen (carbine, semi-auto, SMG, shotgun, pistol, crossbow)
+// keep 10 to 20 blocks off their target and circle it, shooting from the saddle; sabres and lances charge, strike as
+// they pass, ride on and wheel round for another pass. A rider whose mount is killed fights on foot, and gets on any
+// free saddled mount nearby. When he dies the mount stays (riderless).
+const CAV_MOUNTS = [
+  ["minecraft:horse", "Horse", "minecraft:spawn_tame_adult", ["minecraft:horse_saddled"]],
+  ["minecraft:donkey", "Donkey", "minecraft:spawn_tame_adult", ["minecraft:donkey_saddled"]],
+  ["minecraft:mule", "Mule", "minecraft:spawn_tame_adult", ["minecraft:mule_saddled"]],
+  ["minecraft:camel", "Camel", "minecraft:spawn_adult", ["minecraft:camel_saddled"]],
+  ["minecraft:skeleton_horse", "Skeleton horse", undefined, []],
+  ["minecraft:zombie_horse", "Zombie horse", "minecraft:spawn_tame_adult", ["minecraft:horse_saddled"]],
+  ["minecraft:pig", "Pig", "minecraft:spawn_adult", ["minecraft:on_saddled"]],
+  ["minecraft:strider", "Strider (lava)", "spawn_adult", ["minecraft:on_saddled"]],
+  ...[["african_elephant", "African elephant"], ["asian_elephant", "Asian elephant"], ["mammoth", "Mammoth"], ["rhinoceros", "Rhinoceros"], ["giraffe", "Giraffe"], ["ostrich", "Ostrich"],
+    ["lion", "Lion"], ["white_lion", "White lion"], ["tiger", "Tiger"], ["white_tiger", "White tiger"], ["leopard", "Leopard"], ["snow_leopard", "Snow leopard"], ["panther", "Panther"], ["cougar", "Cougar"]]
+    .map(([k, n]) => [`worldanimals:${k}`, `${n} (World Animals)`, undefined, ["minecraft:on_tame", "minecraft:on_saddle"]]),
+];
+const CAV_WEAPONS = [["sword", "Sabre"], ["spear", "Lance"], ["rifle", "Carbine rifle"], ["semi", "Semi-auto"], ["smg", "SMG"], ["shotgun", "Shotgun"], ["pistol", "Pistol"], ["crossbow", "Crossbow"]];
+const cavMountOf = (e) => CAV_MOUNTS.find((m) => m[0] === String(gdp(e, "war:mount") ?? "")) ?? CAV_MOUNTS[0];
+const CAV_TGT = new Map();    // rider id -> { id, t } the man he's riding at
+const CAV_PASS = new Map();   // rider id -> { at, until } where he rides on to after a strike
+const CAV_HIT = new Map();    // rider id -> tick of his last strike
+function spawnCavMount(e) {
+  const [type, , ev, saddle] = cavMountOf(e), l = e.location, dim = e.dimension;
+  let m;
+  for (let k = 0; k < 3 && !m; k++) {
+    try { m = dim.spawnEntity(type, l, ev ? { spawnEvent: ev, initialPersistence: true } : { initialPersistence: true }); } catch { try { m = dim.spawnEntity(type, l); } catch {} }
+    if (!m && type !== "minecraft:horse") { sdp(e, "war:mount", "minecraft:horse"); return spawnCavMount(e); }   // (World Animals not installed: a horse)
+    try { if (m?.hasComponent("minecraft:is_baby")) { m.remove(); m = undefined; } } catch {}            // (a grown one, not a foal)
+  }
+  if (!m) return undefined;
+  for (const s2 of saddle) { try { m.triggerEvent(s2); } catch {} }
+  try { m.addTag("war_cav"); m.setDynamicProperty("war:cavf", Number(sd(e).faction ?? 0)); } catch {}
+  return m;
+}
+function cavTick(e, d, now) {
+  try {
+    if (P(e, "war:cav")) {                                                                    // (a cavalier from before: his old horse body goes)
+      setP(e, "war:cav", false); e.triggerEvent("war:body_foot"); equip(e, weaponItem(e));
+    }
+    if (downed.has(e.id) || d.surr || pows.has(e.id)) return;
+    const on = e.getComponent("minecraft:riding")?.entityRidingOn;
+    if (on) { if (!mountOf.has(e.id)) mountOf.set(e.id, { id: on.id, auto: false }); }
+    else if (now - Number(gdp(e, "war:mountTry") ?? -999) > 60) {
+      sdp(e, "war:mountTry", now);
+      const mid = gdp(e, "war:mountId"), m = mid ? world.getEntity(String(mid)) : undefined;
+      if (m?.isValid && dist(m.location, e.location) < 24) { try { e.teleport({ x: m.location.x, y: m.location.y + 0.4, z: m.location.z }); } catch {} mountSoldier(e, m, false); }
+      else if (!mid) { const nm = spawnCavMount(e); if (nm) { sdp(e, "war:mountId", nm.id); mountSoldier(e, nm, false); } }
+      else if (mountUp([e], false)) note(e, "took a free mount");                             // (his own was killed: any free saddled one near)
+    }
+    // whom he rides at: the man his gun has, else the nearest enemy he can see within 32
+    const g = gunState.get(e.id)?.target;
+    if (g?.isValid) { CAV_TGT.set(e.id, { id: g.id, t: now }); return; }
+    let best, bd = 32;
+    for (const c of nearSnap(e.dimension.id, e.location, 32)) {
+      if (c.id === e.id || c.down || (c.type !== SOLDIER && c.type !== "minecraft:player")) continue;
+      if (!isHostile(d.faction, c.f)) continue;
+      const o = world.getEntity(c.id); if (!o?.isValid || !isTargetFor(e, d, o)) continue;
+      const dd = dist(o.location, e.location); if (dd < bd && clearShot(e.dimension, e.getHeadLocation(), chest(o))) { bd = dd; best = o; }
+    }
+    if (best) CAV_TGT.set(e.id, { id: best.id, t: now }); else CAV_TGT.delete(e.id);
+  } catch {}
+}
+// where a rider goes in a fight (undefined: no fight, follow his orders)
+function cavDest(e, d) {
+  const T = CAV_TGT.get(e.id), now = tick();
+  if (!T || now - T.t > 60) return undefined;
+  const t = world.getEntity(T.id); if (!t?.isValid) { CAV_TGT.delete(e.id); return undefined; }
+  const l = e.location, tl = t.location, dx = l.x - tl.x, dz = l.z - tl.z, L = Math.hypot(dx, dz) || 1;
+  if (isRangedW(d.weapon)) {                                                                     // (keep off, circle, shoot)
+    if (L < 9) return { at: { x: tl.x + (dx / L) * 15, y: l.y, z: tl.z + (dz / L) * 15 }, stop: 1, fast: true };
+    if (L > 22) return { at: tl, stop: 16 };
+    const side = e.id.charCodeAt(e.id.length - 1) % 2 ? 1 : -1, px = (-dz / L) * side, pz = (dx / L) * side;
+    return { at: { x: tl.x + (dx / L) * 14 + px * 8, y: l.y, z: tl.z + (dz / L) * 14 + pz * 8 }, stop: 1.5, slow: true };
+  }
+  const P2 = CAV_PASS.get(e.id);                                                                 // (charge, strike, ride through, wheel round)
+  if (P2 && now < P2.until && Math.hypot(l.x - P2.at.x, l.z - P2.at.z) > 2) return { at: P2.at, stop: 1.5, fast: true };
+  CAV_PASS.delete(e.id);
+  return { at: tl, stop: 0.3, fast: true, strike: t };
+}
+function cavStrike(e, d, m, want) {
+  const t = want?.strike; if (!t?.isValid) return;
+  const now = tick(); if (now - (CAV_HIT.get(e.id) ?? -99) < 16) return;
+  if (dist(chest(t), { x: e.location.x, y: e.location.y + 0.6, z: e.location.z }) > 3.2) return;
+  CAV_HIT.set(e.id, now);
+  let sp = 0; try { const v = m.getVelocity(); sp = Math.hypot(v.x, v.z); } catch {}
+  const dmg = (d.weapon === "spear" ? 8 : 6) + Math.round(sp * 12);                            // (the lance hits hardest, and the faster the harder)
+  try { t.applyDamage(dmg, { cause: "entityAttack", damagingEntity: e }); } catch {}
+  try { t.applyKnockback({ x: (t.location.x - e.location.x) * 0.6, z: (t.location.z - e.location.z) * 0.6 }, 0.25); } catch {}
+  const dx = t.location.x - e.location.x, dz = t.location.z - e.location.z, L = Math.hypot(dx, dz) || 1;
+  CAV_PASS.set(e.id, { at: { x: t.location.x + (dx / L) * 10, y: t.location.y, z: t.location.z + (dz / L) * 10 }, until: now + 80 });
+}
 // your followers ride when you do, and get off when you do
 const leaderRode = new Map(); // player id -> was riding (non-add-on mount) last check
 system.runInterval(() => {
