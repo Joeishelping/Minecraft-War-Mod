@@ -370,7 +370,7 @@ KS.animals = async (o, ox, oz) => {
   // two idle men standing on the same spot (a hold): one steps aside
   const a = kitSoldier(2, { x: ox + 20.5, y: Y, z: oz + 20.5 }, "rifle", "hold"), b = kitSoldier(2, { x: ox + 20.6, y: Y, z: oz + 20.6 }, "rifle", "hold");
   await kitWait(300);
-  r.stackGap = Math.round(Math.hypot(a.location.x - b.location.x, a.location.z - b.location.z) * 10) / 10;
+  r.stackGap = a.isValid && b.isValid ? Math.round(Math.hypot(a.location.x - b.location.x, a.location.z - b.location.z) * 10) / 10 : "one died";
   return r;
 };
 // v9.4: idle men on a hold spawned on top of each other: does one of each pair step aside (and nobody else move)?
