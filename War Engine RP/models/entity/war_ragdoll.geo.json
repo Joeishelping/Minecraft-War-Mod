@@ -1248,6 +1248,801 @@
      ]
     }
    ]
+  },
+  {
+   "description": {
+    "identifier": "geometry.war_ragdoll_armor1",
+    "texture_width": 64,
+    "texture_height": 32,
+    "visible_bounds_width": 5,
+    "visible_bounds_height": 4,
+    "visible_bounds_offset": [
+     0,
+     0,
+     0
+    ]
+   },
+   "bones": [
+    {
+     "name": "root",
+     "pivot": [
+      0,
+      0,
+      0
+     ]
+    },
+    {
+     "name": "t_a",
+     "parent": "root",
+     "pivot": [
+      0,
+      0,
+      0
+     ]
+    },
+    {
+     "name": "t_b",
+     "parent": "t_a",
+     "pivot": [
+      0,
+      0,
+      0
+     ]
+    },
+    {
+     "name": "t_g",
+     "parent": "t_b",
+     "pivot": [
+      0,
+      0,
+      0
+     ]
+    },
+    {
+     "name": "h_a",
+     "parent": "t_g",
+     "pivot": [
+      0,
+      12,
+      0
+     ]
+    },
+    {
+     "name": "h_b",
+     "parent": "h_a",
+     "pivot": [
+      0,
+      12,
+      0
+     ]
+    },
+    {
+     "name": "ra_a",
+     "parent": "t_g",
+     "pivot": [
+      -5,
+      10,
+      0
+     ]
+    },
+    {
+     "name": "ra_b",
+     "parent": "ra_a",
+     "pivot": [
+      -5,
+      10,
+      0
+     ]
+    },
+    {
+     "name": "ra_c",
+     "parent": "ra_b",
+     "pivot": [
+      -5,
+      6.0,
+      0
+     ]
+    },
+    {
+     "name": "ra_d",
+     "parent": "ra_c",
+     "pivot": [
+      -5,
+      6.0,
+      0
+     ]
+    },
+    {
+     "name": "la_a",
+     "parent": "t_g",
+     "pivot": [
+      5,
+      10,
+      0
+     ]
+    },
+    {
+     "name": "la_b",
+     "parent": "la_a",
+     "pivot": [
+      5,
+      10,
+      0
+     ]
+    },
+    {
+     "name": "la_c",
+     "parent": "la_b",
+     "pivot": [
+      5,
+      6.0,
+      0
+     ]
+    },
+    {
+     "name": "la_d",
+     "parent": "la_c",
+     "pivot": [
+      5,
+      6.0,
+      0
+     ]
+    },
+    {
+     "name": "rl_a",
+     "parent": "t_g",
+     "pivot": [
+      -1.9,
+      0,
+      0
+     ]
+    },
+    {
+     "name": "rl_b",
+     "parent": "rl_a",
+     "pivot": [
+      -1.9,
+      0,
+      0
+     ]
+    },
+    {
+     "name": "rl_c",
+     "parent": "rl_b",
+     "pivot": [
+      -1.9,
+      -6.0,
+      0
+     ]
+    },
+    {
+     "name": "rl_d",
+     "parent": "rl_c",
+     "pivot": [
+      -1.9,
+      -6.0,
+      0
+     ]
+    },
+    {
+     "name": "ll_a",
+     "parent": "t_g",
+     "pivot": [
+      1.9,
+      0,
+      0
+     ]
+    },
+    {
+     "name": "ll_b",
+     "parent": "ll_a",
+     "pivot": [
+      1.9,
+      0,
+      0
+     ]
+    },
+    {
+     "name": "ll_c",
+     "parent": "ll_b",
+     "pivot": [
+      1.9,
+      -6.0,
+      0
+     ]
+    },
+    {
+     "name": "ll_d",
+     "parent": "ll_c",
+     "pivot": [
+      1.9,
+      -6.0,
+      0
+     ]
+    },
+    {
+     "name": "ar_head",
+     "parent": "h_b",
+     "pivot": [
+      0,
+      12,
+      0
+     ],
+     "cubes": [
+      {
+       "origin": [
+        -4,
+        12,
+        -4
+       ],
+       "size": [
+        8,
+        8,
+        8
+       ],
+       "uv": [
+        0,
+        0
+       ],
+       "inflate": 1
+      }
+     ]
+    },
+    {
+     "name": "ar_body",
+     "parent": "t_g",
+     "pivot": [
+      0,
+      12,
+      0
+     ],
+     "cubes": [
+      {
+       "origin": [
+        -4,
+        0,
+        -2
+       ],
+       "size": [
+        8,
+        12,
+        4
+       ],
+       "uv": [
+        16,
+        16
+       ],
+       "inflate": 1
+      }
+     ]
+    },
+    {
+     "name": "ar_rarm",
+     "parent": "ra_b",
+     "pivot": [
+      -5,
+      10,
+      0
+     ],
+     "cubes": [
+      {
+       "origin": [
+        -8,
+        6,
+        -2
+       ],
+       "size": [
+        4,
+        6,
+        4
+       ],
+       "uv": [
+        40,
+        16
+       ],
+       "inflate": 1
+      }
+     ]
+    },
+    {
+     "name": "ar_rarmLo",
+     "parent": "ra_d",
+     "pivot": [
+      -5,
+      6,
+      0
+     ],
+     "cubes": [
+      {
+       "origin": [
+        -8,
+        0,
+        -2
+       ],
+       "size": [
+        4,
+        6,
+        4
+       ],
+       "uv": [
+        40,
+        22
+       ],
+       "inflate": 1
+      }
+     ]
+    },
+    {
+     "name": "ar_larm",
+     "parent": "la_b",
+     "pivot": [
+      5,
+      10,
+      0
+     ],
+     "cubes": [
+      {
+       "origin": [
+        4,
+        6,
+        -2
+       ],
+       "size": [
+        4,
+        6,
+        4
+       ],
+       "uv": [
+        40,
+        16
+       ],
+       "inflate": 1,
+       "mirror": true
+      }
+     ]
+    },
+    {
+     "name": "ar_larmLo",
+     "parent": "la_d",
+     "pivot": [
+      5,
+      6,
+      0
+     ],
+     "cubes": [
+      {
+       "origin": [
+        4,
+        0,
+        -2
+       ],
+       "size": [
+        4,
+        6,
+        4
+       ],
+       "uv": [
+        40,
+        22
+       ],
+       "inflate": 1,
+       "mirror": true
+      }
+     ]
+    },
+    {
+     "name": "ar_rboot",
+     "parent": "rl_d",
+     "pivot": [
+      -1.9,
+      -6,
+      0
+     ],
+     "cubes": [
+      {
+       "origin": [
+        -3.9,
+        -12,
+        -2
+       ],
+       "size": [
+        4,
+        6,
+        4
+       ],
+       "uv": [
+        0,
+        22
+       ],
+       "inflate": 1
+      }
+     ]
+    },
+    {
+     "name": "ar_lboot",
+     "parent": "ll_d",
+     "pivot": [
+      1.9,
+      -6,
+      0
+     ],
+     "cubes": [
+      {
+       "origin": [
+        -0.1,
+        -12,
+        -2
+       ],
+       "size": [
+        4,
+        6,
+        4
+       ],
+       "uv": [
+        0,
+        22
+       ],
+       "inflate": 1,
+       "mirror": true
+      }
+     ]
+    }
+   ]
+  },
+  {
+   "description": {
+    "identifier": "geometry.war_ragdoll_armor2",
+    "texture_width": 64,
+    "texture_height": 32,
+    "visible_bounds_width": 5,
+    "visible_bounds_height": 4,
+    "visible_bounds_offset": [
+     0,
+     0,
+     0
+    ]
+   },
+   "bones": [
+    {
+     "name": "root",
+     "pivot": [
+      0,
+      0,
+      0
+     ]
+    },
+    {
+     "name": "t_a",
+     "parent": "root",
+     "pivot": [
+      0,
+      0,
+      0
+     ]
+    },
+    {
+     "name": "t_b",
+     "parent": "t_a",
+     "pivot": [
+      0,
+      0,
+      0
+     ]
+    },
+    {
+     "name": "t_g",
+     "parent": "t_b",
+     "pivot": [
+      0,
+      0,
+      0
+     ]
+    },
+    {
+     "name": "h_a",
+     "parent": "t_g",
+     "pivot": [
+      0,
+      12,
+      0
+     ]
+    },
+    {
+     "name": "h_b",
+     "parent": "h_a",
+     "pivot": [
+      0,
+      12,
+      0
+     ]
+    },
+    {
+     "name": "ra_a",
+     "parent": "t_g",
+     "pivot": [
+      -5,
+      10,
+      0
+     ]
+    },
+    {
+     "name": "ra_b",
+     "parent": "ra_a",
+     "pivot": [
+      -5,
+      10,
+      0
+     ]
+    },
+    {
+     "name": "ra_c",
+     "parent": "ra_b",
+     "pivot": [
+      -5,
+      6.0,
+      0
+     ]
+    },
+    {
+     "name": "ra_d",
+     "parent": "ra_c",
+     "pivot": [
+      -5,
+      6.0,
+      0
+     ]
+    },
+    {
+     "name": "la_a",
+     "parent": "t_g",
+     "pivot": [
+      5,
+      10,
+      0
+     ]
+    },
+    {
+     "name": "la_b",
+     "parent": "la_a",
+     "pivot": [
+      5,
+      10,
+      0
+     ]
+    },
+    {
+     "name": "la_c",
+     "parent": "la_b",
+     "pivot": [
+      5,
+      6.0,
+      0
+     ]
+    },
+    {
+     "name": "la_d",
+     "parent": "la_c",
+     "pivot": [
+      5,
+      6.0,
+      0
+     ]
+    },
+    {
+     "name": "rl_a",
+     "parent": "t_g",
+     "pivot": [
+      -1.9,
+      0,
+      0
+     ]
+    },
+    {
+     "name": "rl_b",
+     "parent": "rl_a",
+     "pivot": [
+      -1.9,
+      0,
+      0
+     ]
+    },
+    {
+     "name": "rl_c",
+     "parent": "rl_b",
+     "pivot": [
+      -1.9,
+      -6.0,
+      0
+     ]
+    },
+    {
+     "name": "rl_d",
+     "parent": "rl_c",
+     "pivot": [
+      -1.9,
+      -6.0,
+      0
+     ]
+    },
+    {
+     "name": "ll_a",
+     "parent": "t_g",
+     "pivot": [
+      1.9,
+      0,
+      0
+     ]
+    },
+    {
+     "name": "ll_b",
+     "parent": "ll_a",
+     "pivot": [
+      1.9,
+      0,
+      0
+     ]
+    },
+    {
+     "name": "ll_c",
+     "parent": "ll_b",
+     "pivot": [
+      1.9,
+      -6.0,
+      0
+     ]
+    },
+    {
+     "name": "ll_d",
+     "parent": "ll_c",
+     "pivot": [
+      1.9,
+      -6.0,
+      0
+     ]
+    },
+    {
+     "name": "ar_waist",
+     "parent": "t_g",
+     "pivot": [
+      0,
+      12,
+      0
+     ],
+     "cubes": [
+      {
+       "origin": [
+        -4,
+        0,
+        -2
+       ],
+       "size": [
+        8,
+        12,
+        4
+       ],
+       "uv": [
+        16,
+        16
+       ],
+       "inflate": 0.5
+      }
+     ]
+    },
+    {
+     "name": "ar_rleg",
+     "parent": "rl_b",
+     "pivot": [
+      -1.9,
+      0,
+      0
+     ],
+     "cubes": [
+      {
+       "origin": [
+        -3.9,
+        -6,
+        -2
+       ],
+       "size": [
+        4,
+        6,
+        4
+       ],
+       "uv": [
+        0,
+        16
+       ],
+       "inflate": 0.5
+      }
+     ]
+    },
+    {
+     "name": "ar_rlegLo",
+     "parent": "rl_d",
+     "pivot": [
+      -1.9,
+      -6,
+      0
+     ],
+     "cubes": [
+      {
+       "origin": [
+        -3.9,
+        -12,
+        -2
+       ],
+       "size": [
+        4,
+        6,
+        4
+       ],
+       "uv": [
+        0,
+        22
+       ],
+       "inflate": 0.5
+      }
+     ]
+    },
+    {
+     "name": "ar_lleg",
+     "parent": "ll_b",
+     "pivot": [
+      1.9,
+      0,
+      0
+     ],
+     "cubes": [
+      {
+       "origin": [
+        -0.1,
+        -6,
+        -2
+       ],
+       "size": [
+        4,
+        6,
+        4
+       ],
+       "uv": [
+        0,
+        16
+       ],
+       "inflate": 0.5,
+       "mirror": true
+      }
+     ]
+    },
+    {
+     "name": "ar_llegLo",
+     "parent": "ll_d",
+     "pivot": [
+      1.9,
+      -6,
+      0
+     ],
+     "cubes": [
+      {
+       "origin": [
+        -0.1,
+        -12,
+        -2
+       ],
+       "size": [
+        4,
+        6,
+        4
+       ],
+       "uv": [
+        0,
+        22
+       ],
+       "inflate": 0.5,
+       "mirror": true
+      }
+     ]
+    }
+   ]
   }
  ]
 }

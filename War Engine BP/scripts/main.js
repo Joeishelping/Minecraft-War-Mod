@@ -591,6 +591,7 @@ function setupSoldier(e, s, player, { heal = true } = {}) {
     sdp(e, "war:kit", kit); sdp(e, "war:throw", kit === "at" ? undefined : kit);
     weapon = kit === "at" ? "at" : "pistol";
   } else { sdp(e, "war:kit", undefined); sdp(e, "war:throw", undefined); }
+  weapon = cmFix(e, div, weapon);                                  // (v9.14: the content level)
   sdp(e, "war:weapon", weapon);
   setP(e, "war:ranged", isRangedW(weapon));
   setP(e, "war:skin", s.skin ?? 0);
@@ -696,6 +697,38 @@ function giveFunction(e, func, player, goalSlot) {
   return e;
 }
 
+// v9.14: content level. "vanilla": only what the game itself has (swords, spears, crossbows; vanilla mounts; no add-on
+// vehicles), "light": no MG, sniper or bazooka and only sensible mounts, "full": everything. Soldiers already out
+// there switch over by themselves, and get their own weapons back when it's switched up again.
+const contentMode = () => { const v = String(setting("content", "full")); return v === "vanilla" || v === "light" ? v : "full"; };
+const CM_OFF = { vanilla: ["rifle", "semi", "smg", "mg", "shotgun", "pistol", "sniper", "at", "molotov", "mixguns"], light: ["mg", "sniper", "at"], full: [] };
+const cmWeaponOK = (w) => !CM_OFF[contentMode()].includes(w);
+function cmWeapon(w) {
+  if (cmWeaponOK(w)) return w;
+  if (contentMode() === "light") return { mg: "semi", sniper: "rifle", at: "rifle" }[w] ?? "rifle";
+  return w === "molotov" ? "sword" : "crossbow";
+}
+const CM_LIGHT_MOUNTS = ["minecraft:horse", "minecraft:donkey", "minecraft:mule", "minecraft:camel", "worldanimals:african_elephant", "worldanimals:asian_elephant"];
+const cmMountOK = (t) => { const m = contentMode(); return m === "full" || (m === "vanilla" ? t.startsWith("minecraft:") : CM_LIGHT_MOUNTS.includes(t)); };
+// the loadout he actually carries under the current level (his chosen one is kept, for when it's allowed again)
+function cmFix(e, div, w) {
+  const m = contentMode();
+  if (div === "grenadier") {
+    const kit = String(gdp(e, "war:kit") ?? "grenade"), k = m === "vanilla" ? "" : m === "light" && kit === "at" ? "grenade" : kit;
+    sdp(e, "war:throw", k && k !== "at" ? k : undefined);
+    sdp(e, "war:cmv", m);
+    return !k ? "crossbow" : k === "at" ? "at" : "pistol";
+  }
+  const fin = cmWeapon(w);
+  sdp(e, "war:weapon0", fin !== w ? w : undefined);
+  sdp(e, "war:cmv", m);
+  return fin;
+}
+function cmApply(e, d) {
+  const w0 = String(gdp(e, "war:weapon0") ?? d.weapon), fin = cmFix(e, d.div, w0);
+  sdp(e, "war:weapon", fin); setP(e, "war:ranged", isRangedW(fin)); sdDrop(e);
+  try { equip(e, weaponItem(e)); } catch {}
+}
 // ================================================================ surrender
 function surrender(e, captor) {
   try { sdDrop(e); } catch {}
@@ -753,8 +786,9 @@ function think(e) {
   if (!ridingNest(e) && (P(e, "war:nest") || gdp(e, "war:gunSaved"))) { setP(e, "war:nest", false); sdp(e, "war:gunSaved", undefined); if (!pows.has(e.id)) equip(e, weaponItem(e)); }
   if (pows.has(e.id) && Number(P(e, "war:gun") ?? 0) !== 0) { setP(e, "war:gun", 0); equip(e, "air"); }   // stays disarmed
   if (pows.has(e.id)) { const pm = powMove(e, tick()); if (pm) { if (pm.slot !== undefined) setGoal(e, pm.g === "g_wp" ? pm.slot : 0); setGroups(e, { w: pm.w, t: pm.t, g: pm.g, s: pm.s, d: pm.d, r: pm.r }); } return; }
-  const d = sd(e);
+  let d = sd(e);
   const now = tick();
+  if (gdp(e, "war:cmv") !== contentMode()) { cmApply(e, d); d = sd(e); }   // (v9.14: the content level changed)
   // while engaging, the order's own goal is parked in war:ordergoal
   const parked = gdp(e, "war:ordergoal");
   if (parked !== undefined) d.goal = Number(parked);
@@ -1495,13 +1529,22 @@ function rdStep(s) {
       }
     }
   }
+  if (s.near) for (const o of s.near) {                                                            // (v9.14: bodies pile up on each other, no clipping)
+    if (!o.c?.isValid) continue;
+    for (const q of s.pts) for (const r of o.pts) {
+      const dx = q.p.x - r.p.x, dy = q.p.y - r.p.y, dz = q.p.z - r.p.z, d2 = dx * dx + dy * dy + dz * dz;
+      if (d2 > 0.0484 || d2 < 1e-6) continue;
+      const d = Math.sqrt(d2), k = (0.22 - d) / d;
+      q.p = V3(q.p.x + dx * k, q.p.y + Math.max(0, dy * k) + (dy > -0.05 ? 0.01 : 0), q.p.z + dz * k);
+    }
+  }
   let mv = 0;
   for (let i = 0; i < s.pts.length; i++) {                                                         // (nothing ends up inside a block)
     const q = s.pts[i], r = s.rad[i];
     if (rdSolid(s, q.p.x, q.p.y - r, q.p.z) && !rdSolid(s, q.p.x, q.p.y - r + 1, q.p.z)) { const ny = Math.floor(q.p.y - r) + 1 + r; q.o = V3(q.o.x, q.o.y + (ny - q.p.y), q.o.z); q.p = V3(q.p.x, ny, q.p.z); }
     mv = Math.max(mv, vlen(vsub(q.p, q.o)));
   }
-  s.t++; s.still = mv < 0.006 ? s.still + 1 : 0;
+  s.t++; s.still = mv < (s.t > 50 ? 0.03 : 0.006) ? s.still + 1 : 0;
   return s.still >= 8 || s.t >= 160;
 }
 function rdRender(s, final) {
@@ -1535,13 +1578,31 @@ system.runInterval(() => {
     try {
       if (!s.c?.isValid) { RD.delete(id); continue; }
       if (!s.act) continue;
+      if (s.t % 10 === 0) { const h0 = s.pts[0].p; s.near = [...RD.values()].filter((o) => o !== s && !o.gib && o.dim.id === s.dim.id && Math.abs(o.pts[0].p.x - h0.x) < 2.5 && Math.abs(o.pts[0].p.z - h0.z) < 2.5 && Math.abs(o.pts[0].p.y - h0.y) < 2.5); }
       const done = rdStep(s);
       if (done || s.t % 2 === 0 || s.t < 4) rdRender(s, done);                                 // (the client smooths in between)
-      if (done) { s.act = false; s.cells.clear(); }
+      if (done) { s.act = false; s.cells.clear(); if (!s.gib && !s.pooled && !s.fall && gore()) { s.pooled = true; const p0 = s.pts[0].p, p1 = s.pts[1].p, p2 = s.pts[2].p; try { s.dim.spawnParticle("war:bpool", { x: (p0.x + p1.x + p2.x) / 3, y: Math.min(p0.y, p1.y) - 0.1, z: (p0.z + p1.z + p2.z) / 3 }); } catch {} } }
     } catch (err) { RD.delete(id); oops("ragdoll", err); }
   }
   const ms = Date.now() - t0; if (ms > (globalThis.__rdMs ?? 0)) globalThis.__rdMs = ms;
 }, 1);
+function rdShot(dim, from, u, end) {
+  for (const s of RD.values()) {
+    if (s.dim.id !== dim.id) continue;
+    const h = s.pts[0].p, hx = h.x - from.x, hy = h.y - from.y, hz = h.z - from.z, t0 = hx * u.x + hy * u.y + hz * u.z;
+    if (t0 < -1.5 || t0 > end + 1.5) continue;
+    if (Math.hypot(hx - u.x * t0, hy - u.y * t0, hz - u.z * t0) > 2) continue;
+    for (const q of s.pts) {
+      const qx = q.p.x - from.x, qy = q.p.y - from.y, qz = q.p.z - from.z, t = qx * u.x + qy * u.y + qz * u.z;
+      if (t < 0 || t > end) continue;
+      if (Math.hypot(qx - u.x * t, qy - u.y * t, qz - u.z * t) > 0.28) continue;
+      q.o = vsub(q.o, vmul(V3(u.x, u.y * 0.3, u.z), 0.16));
+      s.act = true; s.still = 0; s.t = Math.min(s.t, 100);
+      if (gore()) sprayBlood(dim, q.p, 0);
+      return;                                                                                       // (one body per round)
+    }
+  }
+}
 function rdBlast(dim, at, power) {                                                                 // (a blast throws the dead too)
   for (const s of RD.values()) {
     if (s.dim.id !== dim.id) continue;
@@ -1567,7 +1628,7 @@ function spawnCorpse(v, how) {
   const mask = gore() ? (how?.mask ?? (how?.limb ? 1 << (how.limb - 1) : 0)) : 0;
   const make = (at, gibIdx) => {
     const c = dim.spawnEntity("war:corpse", at);
-    try { c.setProperty("war:faction", Math.max(0, Math.min(40, f))); c.setProperty("war:skin", Math.max(0, Math.min(64, sk))); c.setProperty("war:medic", med); try { c.setProperty("war:cav", cav); } catch {} if (gibIdx) { c.setProperty("war:gib", true); c.setProperty("war:limb", gibIdx); } else c.setProperty("war:limb", mask); c.setRotation({ x: 0, y: 0 }); } catch {}
+    try { c.setProperty("war:faction", Math.max(0, Math.min(40, f))); c.setProperty("war:skin", Math.max(0, Math.min(64, sk))); c.setProperty("war:medic", med); try { c.setProperty("war:cav", cav); } catch {} try { c.setProperty("war:armor", Math.max(0, ARMOR.indexOf(String(gdp(v, "war:armor") ?? "none")))); } catch {} if (gibIdx) { c.setProperty("war:gib", true); c.setProperty("war:limb", gibIdx); } else c.setProperty("war:limb", mask); c.setRotation({ x: 0, y: 0 }); } catch {}
     CORPSES.push({ id: c.id, t: now });
     return c;
   };
@@ -1632,7 +1693,7 @@ try {
       const c = ev.removedEntity; if (c?.typeId !== "war:corpse") return;
       const now = tick(), at = c.location, dimId = c.dimension.id;
       const b = BLASTS.find((q) => q.dim === dimId && now - q.t <= 3 && dist(q.at, at) <= q.power * 2 + 1); if (!b) return;
-      const pr = {}; for (const k of ["war:faction", "war:skin", "war:medic", "war:limb", "war:gib", "war:ga", "war:gb", ...RD_BODY_PROPS]) { try { pr[k] = c.getProperty(k); } catch {} }
+      const pr = {}; for (const k of ["war:faction", "war:skin", "war:medic", "war:limb", "war:gib", "war:ga", "war:gb", "war:cav", "war:armor", ...RD_BODY_PROPS]) { try { pr[k] = c.getProperty(k); } catch {} }
       const old = c.id, st = RD.get(old);
       system.run(() => {
         try {
@@ -2429,7 +2490,7 @@ async function eggUse(player, div) {
   if (!DIV[div]) return;
   const key = `war:egg_${div}`;
   const def = getJSON(player, key, { faction: playerFaction(player) || 1, squad: 0, func: 0, weapon: "sword", count: 1, radius: 8 });
-  const WL = div === "cavalier" ? CAV_WEAPONS : [...WEAPONS, ["mixguns", "Mixed guns (rifle / SMG / semi-auto / MG)"], ["mixmelee", "Mixed melee (swords + crossbows)"]];
+  const WL = (div === "cavalier" ? CAV_WEAPONS : [...WEAPONS, ["mixguns", "Mixed guns (rifle / SMG / semi-auto / MG)"], ["mixmelee", "Mixed melee (swords + crossbows)"]]).filter((w) => cmWeaponOK(w[0]));
   const wl = WL.map((w) => w[1]);
   const wIdx = Math.max(0, WL.findIndex((w) => w[0] === (def.weapon ?? (def.ranged ? "crossbow" : "sword"))));
   const funcs = FUNCS[div];
@@ -2445,12 +2506,13 @@ async function eggUse(player, div) {
     .slider("How many (a coalition: in total, mixed)", 1, 30, { valueStep: 1, defaultValue: def.count })
     .slider("Patrol / sentry radius", 4, 150, { valueStep: 2, defaultValue: def.radius })
     .dropdown("Armor", ARMOR_LABEL, { defaultValueIndex: Math.max(0, ARMOR.indexOf(def.armor ?? "none")) });   // (v9.13: armor straight from the egg)
-  if (div === "cavalier") f.dropdown("Mount", CAV_MOUNTS.map((m) => m[1]), { defaultValueIndex: Math.max(0, CAV_MOUNTS.findIndex((m) => m[0] === def.mount)) });
+  const ML = CAV_MOUNTS.filter((m) => cmMountOK(m[0]));
+  if (div === "cavalier") f.dropdown("Mount", ML.map((m) => m[1]), { defaultValueIndex: Math.max(0, ML.findIndex((m) => m[0] === def.mount)) });
   const r = await show(f, player);
   if (!r || r.canceled || !r.formValues) return;
   const v = r.formValues;
   const pick = Number(v[0]), coal = pick >= NF ? coals[pick - NF] : undefined;
-  const cfg = { faction: coal ? (def.faction || 1) : pick + 1, coal: coal ? pick - NF : undefined, squad: Number(v[1]), func: Number(v[2]), weapon: DIV[div].weapon ? WL[Number(v[3])][0] : div === "grenadier" ? DEMO[Number(v[3])][0] : "sword", count: Number(v[4]), radius: Number(v[5]), armor: ARMOR[Number(v[6])] ?? "none", mount: div === "cavalier" ? CAV_MOUNTS[Number(v[7])]?.[0] : undefined };
+  const cfg = { faction: coal ? (def.faction || 1) : pick + 1, coal: coal ? pick - NF : undefined, squad: Number(v[1]), func: Number(v[2]), weapon: DIV[div].weapon ? WL[Number(v[3])][0] : div === "grenadier" ? DEMO[Number(v[3])][0] : "sword", count: Number(v[4]), radius: Number(v[5]), armor: ARMOR[Number(v[6])] ?? "none", mount: div === "cavalier" ? ML[Number(v[7])]?.[0] : undefined };
   setJSON(player, key, cfg);
   if (coal) {
     const mem = coal.members.slice(0, Math.max(1, cfg.count));         // (fewer men than factions: the first few get one each)
@@ -2780,31 +2842,33 @@ async function editSoldier(player, e) {
   const d = sd(e);
   const funcs = FUNCS[d.div];
   const skins = skinChoices();
+  const WLW = (d.div === "cavalier" ? CAV_WEAPONS : WEAPONS).filter((w) => cmWeaponOK(w[0]));
   const f = new ModalFormData().title(`Edit ${DIV[d.div].name}`)
     .dropdown("Faction", ["None", ...factionList()], { defaultValueIndex: d.faction })
     .dropdown("Squad", squadList(d.faction, "No squad"), { defaultValueIndex: d.squad })
     .dropdown("Function", funcs.map((x) => x[1]), { defaultValueIndex: Math.max(0, funcs.findIndex((x) => x[0] === d.func)) })
-    .dropdown(d.div === "grenadier" ? "Kit" : "Weapon", d.div === "grenadier" ? DEMO.map((k) => k[1]) : DIV[d.div].weapon ? (d.div === "cavalier" ? CAV_WEAPONS : WEAPONS).map((w) => w[1]) : ["(fixed for this unit)"], { defaultValueIndex: d.div === "grenadier" ? Math.max(0, DEMO.findIndex((k) => k[0] === String(gdp(e, "war:kit") ?? "grenade"))) : DIV[d.div].weapon ? Math.max(0, (d.div === "cavalier" ? CAV_WEAPONS : WEAPONS).findIndex((w) => w[0] === d.weapon)) : 0 })
+    .dropdown(d.div === "grenadier" ? "Kit" : "Weapon", d.div === "grenadier" ? DEMO.map((k) => k[1]) : DIV[d.div].weapon ? WLW.map((w) => w[1]) : ["(fixed for this unit)"], { defaultValueIndex: d.div === "grenadier" ? Math.max(0, DEMO.findIndex((k) => k[0] === String(gdp(e, "war:kit") ?? "grenade"))) : DIV[d.div].weapon ? Math.max(0, WLW.findIndex((w) => w[0] === String(gdp(e, "war:weapon0") ?? d.weapon))) : 0 })
     .dropdown("Armor", ARMOR_LABEL, { defaultValueIndex: Math.max(0, ARMOR.indexOf(d.armor)) })
     .dropdown("Skin", ["Faction uniform", ...skins.map((s) => s.name)], { defaultValueIndex: Math.max(0, skins.findIndex((s) => s.slot === d.skin) + 1) })
     .slider("Patrol / sentry radius", 4, 150, { valueStep: 2, defaultValue: Math.min(150, Math.max(4, d.radius)) })
     .textField("Name (blank = automatic)", "e.g. Sgt. Rossi", { defaultValue: d.custom })
     .dropdown("Stance", ["Aggressive", "Defensive", "Hold fire"], { defaultValueIndex: Math.max(0, ["aggressive", "defensive", "holdfire"].indexOf(String(gdp(e, "war:stance") ?? "aggressive"))) });
-  if (d.div === "cavalier") f.dropdown("Mount", CAV_MOUNTS.map((m) => m[1]), { defaultValueIndex: Math.max(0, CAV_MOUNTS.indexOf(cavMountOf(e))) });
+  const MLW = CAV_MOUNTS.filter((m) => cmMountOK(m[0]));
+  if (d.div === "cavalier") f.dropdown("Mount", MLW.map((m) => m[1]), { defaultValueIndex: Math.max(0, MLW.indexOf(cavMountOf(e))) });
   const r = await show(f, player);
   if (!r || r.canceled || !r.formValues || !e.isValid) return;
   const v = r.formValues;
   const skinIdx = Number(v[5]);
-  const wpn = d.div === "grenadier" ? DEMO[Number(v[3])][0] : DIV[d.div].weapon ? (d.div === "cavalier" ? CAV_WEAPONS : WEAPONS)[Number(v[3])][0] : d.weapon;
+  const wpn = d.div === "grenadier" ? DEMO[Number(v[3])][0] : DIV[d.div].weapon ? (WLW[Number(v[3])] ?? WLW[0])[0] : d.weapon;
   const s = { ...snapshot(e), faction: Number(v[0]), squad: Number(v[1]), weapon: wpn, ranged: isRangedW(wpn),
     armor: ARMOR[Number(v[4])] ?? "none",
     skin: skinIdx ? skins[skinIdx - 1].slot : 0, radius: Number(v[6]), custom: String(v[7]).trim(), owner: d.owner, func: "__none" };
   const func = funcs[Number(v[2])][0];
   sdp(e, "war:stance", ["aggressive", "defensive", "holdfire"][Number(v[8])] ?? "aggressive");
-  if (d.div === "cavalier" && v[9] !== undefined && CAV_MOUNTS[Number(v[9])] && CAV_MOUNTS[Number(v[9])][0] !== cavMountOf(e)[0]) {   // (a new mount: the old one goes, a fresh one comes)
+  if (d.div === "cavalier" && v[9] !== undefined && MLW[Number(v[9])] && MLW[Number(v[9])][0] !== cavMountOf(e)[0]) {   // (a new mount: the old one goes, a fresh one comes)
     const old = gdp(e, "war:mountId"), om = old ? world.getEntity(String(old)) : undefined;
     try { om?.getComponent("minecraft:rideable")?.ejectRider(e); if (om?.hasTag("war_cav")) om.remove(); } catch {}
-    mountOf.delete(e.id); sdp(e, "war:mountId", undefined); sdp(e, "war:mountTry", undefined); sdp(e, "war:mount", CAV_MOUNTS[Number(v[9])][0]);
+    mountOf.delete(e.id); sdp(e, "war:mountId", undefined); sdp(e, "war:mountTry", undefined); sdp(e, "war:mount", MLW[Number(v[9])][0]);
   }
   const ne = setupSoldier(e, s, player, { heal: false });
   giveFunction(ne, func, player, ANCHORED.includes(func) && func === d.func ? d.goal || undefined : undefined);
@@ -2966,7 +3030,8 @@ async function warTable(player, pre) {
       .dropdown("Radio messages", ["Off", "Important only", "Everything"], { defaultValueIndex: Number(setting("radio", 1)) })
       .toggle("Shot diagnostics (draw every shot's path, count shots not fired by the soldiers' aim)", { defaultValue: !!setting("diag", false) })
       .dropdown("Bullets", ["Precise (the hit is decided along the exact line of the shot)", "Gun pack's own bullets (flying projectiles)"], { defaultValueIndex: preciseHits() ? 0 : 1 })
-      .toggle("Gore: blood, and now and then a limb coming off (bodies and outright kills stay either way)", { defaultValue: setting("gore", true) !== false });
+      .toggle("Gore: blood, and now and then a limb coming off (bodies and outright kills stay either way)", { defaultValue: setting("gore", true) !== false })
+      .dropdown("Content", ["Vanilla (only what the game has: swords, spears, crossbows, vanilla mounts, no add-on vehicles)", "Light (no MG, sniper or bazooka; sensible mounts only)", "Full experience"], { defaultValueIndex: ["vanilla", "light", "full"].indexOf(contentMode()) });
     const sr = await show(sf, player);
     if (!sr || sr.canceled || !sr.formValues) return;
     sdp(world, "war:set_capture", sr.formValues[0] === 0 ? "neutral" : "surrender");
@@ -2989,6 +3054,8 @@ async function warTable(player, pre) {
     sdp(world, "war:set_diag", !!sr.formValues[16]);
     sdp(world, "war:set_bullets", Number(sr.formValues[17] ?? 0) === 1 ? "pack" : "precise");
     sdp(world, "war:set_gore", !!sr.formValues[18]);
+    const cm0 = contentMode(); sdp(world, "war:set_content", ["vanilla", "light", "full"][Number(sr.formValues[19] ?? 2)] ?? "full");
+    if (contentMode() !== cm0) player.sendMessage(`§eContent set to ${contentMode()}: soldiers switch their weapons and mounts over as they're near.`);
     player.sendMessage("§aSettings saved.");
     return warTable(player, 5);
     player.sendMessage("§aSettings saved.");
@@ -3019,6 +3086,14 @@ function removeEnt(o) {
   try { o.remove(); } catch { try { o.kill(); } catch {} }
 }
 // new things are stamped with the current generation; things from before a removal are removed when they load
+world.afterEvents.entitySpawn.subscribe((ev) => {                                // v9.14: vanilla content: no add-on vehicles (the item comes back)
+  try {
+    const o = ev.entity; if (contentMode() !== "vanilla" || !(VEHICLES.includes(o?.typeId) || o?.typeId === NEST)) return;
+    const item = { "war:boat": "war:boat_item", "war:plane": "war:plane_item", "war:tank": "war:tank_item", "war:mg_nest": "war:mg_nest_item", "war:truck": "war:truck_item", "war:gunboat": "war:gunboat_item", "war:heli": "war:heli_item" }[o.typeId];
+    const p = o.dimension.getPlayers({ location: o.location, maxDistance: 10, closest: 1 })[0];
+    system.run(() => { try { if (o.isValid) o.remove(); if (p && item) { giveItem(p, item); p.onScreenDisplay.setActionBar("§7Vanilla content: add-on vehicles are off (War Table > Settings > Content)."); } } catch {} });
+  } catch {}
+});
 world.afterEvents.entitySpawn.subscribe((ev) => { try { const o = ev.entity; if (PACK.includes(o.typeId) && gdp(o, "war:gen") === undefined) sdp(o, "war:gen", purgeState().gen); } catch {} });
 system.runInterval(() => {
   const ps = purgeState();
@@ -3795,6 +3870,7 @@ function hitscan(e, spec, from, dir, range, weapon) {
     for (const r of hits) { if (r.distance > blockD + 0.3) break; if (hittable(r.entity, e)) { hit = r; break; } }
   } catch {}
   const end = hit ? hit.distance : blockD;
+  if (RD.size) try { rdShot(dim, from, u, end); } catch {}                // (v9.14: rounds kick the bodies they pass through)
   if (hit) {
     const dmg = HIT_DMG[weapon] ?? 5;
     try { const he = hit.entity; if (he.typeId === SOLDIER) lastHit.set(he.id, { t: tick(), head: from.y + u.y * hit.distance - he.location.y > 1.42, weapon, dd: hit.distance, dir: u }); } catch {}   // (v9.7: where it hit him)
@@ -10622,16 +10698,26 @@ const cavMountOf = (e) => CAV_MOUNTS.find((m) => m[0] === String(gdp(e, "war:mou
 const CAV_TGT = new Map();    // rider id -> { id, t } the man he's riding at
 const CAV_PASS = new Map();   // rider id -> { at, until } where he rides on to after a strike
 const CAV_HIT = new Map();    // rider id -> tick of his last strike
+// v9.14: tamed and saddled the way every game version takes (the spawn events differ between versions: a wild horse
+// throws its rider off): the taming component, and a saddle in its own saddle slot
+function readyMount(m) {
+  try { const tm = m.getComponent("minecraft:tamemount"); if (tm && !m.hasComponent("minecraft:is_tamed")) tm.tame(false); } catch {}
+  try { if (!m.hasComponent("minecraft:is_saddled")) { const inv = m.getComponent("minecraft:inventory")?.container; if (inv && inv.size >= 1 && !inv.getItem(0)) inv.setItem(0, new ItemStack("minecraft:saddle", 1)); } } catch {}
+}
 function spawnCavMount(e) {
   const [type, , ev, saddle] = cavMountOf(e), l = e.location, dim = e.dimension;
   let m;
   for (let k = 0; k < 3 && !m; k++) {
-    try { m = dim.spawnEntity(type, l, ev ? { spawnEvent: ev, initialPersistence: true } : { initialPersistence: true }); } catch { try { m = dim.spawnEntity(type, l); } catch {} }
+    for (const sev of [ev, "minecraft:spawn_adult", undefined]) {                              // (an event this game version lacks: the next one)
+      if (m) break;
+      try { m = dim.spawnEntity(type, l, sev ? { spawnEvent: sev, initialPersistence: true } : { initialPersistence: true }); } catch { try { if (!sev) m = dim.spawnEntity(type, l); } catch {} }
+    }
     if (!m && type !== "minecraft:horse") { sdp(e, "war:mount", "minecraft:horse"); return spawnCavMount(e); }   // (World Animals not installed: a horse)
     try { if (m?.hasComponent("minecraft:is_baby")) { m.remove(); m = undefined; } } catch {}            // (a grown one, not a foal)
   }
   if (!m) return undefined;
   for (const s2 of saddle) { try { m.triggerEvent(s2); } catch {} }
+  readyMount(m);
   try { m.addTag("war_cav"); m.setDynamicProperty("war:cavf", Number(sd(e).faction ?? 0)); } catch {}
   return m;
 }
@@ -10641,12 +10727,17 @@ function cavTick(e, d, now) {
       setP(e, "war:cav", false); e.triggerEvent("war:body_foot"); equip(e, weaponItem(e));
     }
     if (downed.has(e.id) || d.surr || pows.has(e.id)) return;
+    if (!cmMountOK(cavMountOf(e)[0])) {                                                       // (v9.14: not at this content level: a horse instead)
+      const om = world.getEntity(String(gdp(e, "war:mountId") ?? ""));
+      try { om?.getComponent("minecraft:rideable")?.ejectRider(e); if (om?.hasTag("war_cav")) om.remove(); } catch {}
+      mountOf.delete(e.id); sdp(e, "war:mountId", undefined); sdp(e, "war:mountTry", undefined); sdp(e, "war:mount", "minecraft:horse");
+    }
     const on = e.getComponent("minecraft:riding")?.entityRidingOn;
     if (on) { if (!mountOf.has(e.id)) mountOf.set(e.id, { id: on.id, auto: false }); }
     else if (now - Number(gdp(e, "war:mountTry") ?? -999) > 60) {
       sdp(e, "war:mountTry", now);
       const mid = gdp(e, "war:mountId"), m = mid ? world.getEntity(String(mid)) : undefined;
-      if (m?.isValid && dist(m.location, e.location) < 24) { try { e.teleport({ x: m.location.x, y: m.location.y + 0.4, z: m.location.z }); } catch {} mountSoldier(e, m, false); }
+      if (m?.isValid && dist(m.location, e.location) < 24) { readyMount(m); try { e.teleport({ x: m.location.x, y: m.location.y + 0.4, z: m.location.z }); } catch {} mountSoldier(e, m, false); }
       else if (!mid) { const nm = spawnCavMount(e); if (nm) { sdp(e, "war:mountId", nm.id); mountSoldier(e, nm, false); } }
       else if (mountUp([e], false)) note(e, "took a free mount");                             // (his own was killed: any free saddled one near)
     }

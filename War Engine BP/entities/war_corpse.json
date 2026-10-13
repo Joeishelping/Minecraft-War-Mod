@@ -255,6 +255,15 @@
           "type": "bool",
           "default": false,
           "client_sync": true
+        },
+        "war:armor": {
+          "type": "int",
+          "range": [
+            0,
+            3
+          ],
+          "default": 0,
+          "client_sync": true
         }
       }
     },

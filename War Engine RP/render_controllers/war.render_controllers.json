@@ -1205,6 +1205,98 @@
       "textures": [
         "Array.t[q.property('war:cav') ? (144 + (math.max(q.property('war:faction'), 1) - 1)) : (q.property('war:skin') > 0 ? (39 + q.property('war:skin')) : (q.property('war:medic') ? (104 + (math.max(q.property('war:faction'), 1) - 1)) : (math.max(q.property('war:faction'), 1) - 1)))]"
       ]
+    },
+    "controller.render.war_corpse_armor1": {
+      "arrays": {
+        "textures": {
+          "Array.a": [
+            "Texture.a_leather1",
+            "Texture.a_iron1",
+            "Texture.a_netherite1"
+          ]
+        }
+      },
+      "geometry": "Geometry.armor1",
+      "materials": [
+        {
+          "*": "Material.default"
+        }
+      ],
+      "textures": [
+        "Array.a[math.clamp(q.property('war:armor') - 1, 0, 2)]"
+      ],
+      "overlay_color": {
+        "r": 0.45,
+        "g": 0.28,
+        "b": 0.14,
+        "a": "q.property('war:armor') == 1 ? 0.6 : 0"
+      },
+      "part_visibility": [
+        {
+          "*": "!q.property('war:gib') && q.property('war:armor') > 0"
+        },
+        {
+          "h_a": "(q.property('war:gib') || math.mod(math.floor(q.property('war:limb') / 1), 2) == 0)"
+        },
+        {
+          "ra_a": "(q.property('war:gib') || math.mod(math.floor(q.property('war:limb') / 2), 2) == 0)"
+        },
+        {
+          "la_a": "(q.property('war:gib') || math.mod(math.floor(q.property('war:limb') / 4), 2) == 0)"
+        },
+        {
+          "rl_a": "(q.property('war:gib') || math.mod(math.floor(q.property('war:limb') / 8), 2) == 0)"
+        },
+        {
+          "ll_a": "(q.property('war:gib') || math.mod(math.floor(q.property('war:limb') / 16), 2) == 0)"
+        }
+      ]
+    },
+    "controller.render.war_corpse_armor2": {
+      "arrays": {
+        "textures": {
+          "Array.a": [
+            "Texture.a_leather2",
+            "Texture.a_iron2",
+            "Texture.a_netherite2"
+          ]
+        }
+      },
+      "geometry": "Geometry.armor2",
+      "materials": [
+        {
+          "*": "Material.default"
+        }
+      ],
+      "textures": [
+        "Array.a[math.clamp(q.property('war:armor') - 1, 0, 2)]"
+      ],
+      "overlay_color": {
+        "r": 0.45,
+        "g": 0.28,
+        "b": 0.14,
+        "a": "q.property('war:armor') == 1 ? 0.6 : 0"
+      },
+      "part_visibility": [
+        {
+          "*": "!q.property('war:gib') && q.property('war:armor') > 0"
+        },
+        {
+          "h_a": "(q.property('war:gib') || math.mod(math.floor(q.property('war:limb') / 1), 2) == 0)"
+        },
+        {
+          "ra_a": "(q.property('war:gib') || math.mod(math.floor(q.property('war:limb') / 2), 2) == 0)"
+        },
+        {
+          "la_a": "(q.property('war:gib') || math.mod(math.floor(q.property('war:limb') / 4), 2) == 0)"
+        },
+        {
+          "rl_a": "(q.property('war:gib') || math.mod(math.floor(q.property('war:limb') / 8), 2) == 0)"
+        },
+        {
+          "ll_a": "(q.property('war:gib') || math.mod(math.floor(q.property('war:limb') / 16), 2) == 0)"
+        }
+      ]
     }
   }
 }

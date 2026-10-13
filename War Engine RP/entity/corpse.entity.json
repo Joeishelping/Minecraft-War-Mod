@@ -223,7 +223,13 @@
         "s61": "textures/war_skins/skin_61",
         "s62": "textures/war_skins/skin_62",
         "s63": "textures/war_skins/skin_63",
-        "s64": "textures/war_skins/skin_64"
+        "s64": "textures/war_skins/skin_64",
+        "a_leather1": "textures/models/armor/leather_1",
+        "a_leather2": "textures/models/armor/leather_2",
+        "a_iron1": "textures/models/armor/iron_1",
+        "a_iron2": "textures/models/armor/iron_2",
+        "a_netherite1": "textures/models/armor/netherite_1",
+        "a_netherite2": "textures/models/armor/netherite_2"
       },
       "geometry": {
         "default": "geometry.war_ragdoll",
@@ -232,7 +238,9 @@
         "gib_rarm": "geometry.war_gib2_rarm",
         "gib_larm": "geometry.war_gib2_larm",
         "gib_rleg": "geometry.war_gib2_rleg",
-        "gib_lleg": "geometry.war_gib2_lleg"
+        "gib_lleg": "geometry.war_gib2_lleg",
+        "armor1": "geometry.war_ragdoll_armor1",
+        "armor2": "geometry.war_ragdoll_armor2"
       },
       "animations": {
         "rag": "animation.war.rag",
@@ -277,7 +285,9 @@
         ]
       },
       "render_controllers": [
-        "controller.render.war_corpse"
+        "controller.render.war_corpse",
+        "controller.render.war_corpse_armor1",
+        "controller.render.war_corpse_armor2"
       ]
     }
   }

@@ -653,6 +653,22 @@ KS.atkdmg = async (o, ox, oz) => {
   for (const e of [...men, sh]) try { e.remove(); } catch {}
   return out;
 };
+// v9.14: a horse tamed and saddled the robust way (taming component, saddle in its inventory)
+KS.horseprobe = async (o, ox, oz) => {
+  floorAt(ox - 6, oz - 6, ox + 6, oz + 6);
+  const h = ow().spawnEntity("minecraft:horse", { x: ox + 0.5, y: Y, z: oz + 0.5 }, o.ev ? { spawnEvent: o.ev } : undefined);
+  await kitWait(5);
+  const r = { baby: h.hasComponent("minecraft:is_baby"), comps: ["minecraft:tamemount", "minecraft:inventory", "minecraft:equippable", "minecraft:rideable", "minecraft:is_tamed", "minecraft:is_saddled"].filter((c) => { try { return h.hasComponent(c); } catch { return false; } }) };
+  try { r.tame = String(h.getComponent("minecraft:tamemount")?.tame?.(false)); } catch (e) { r.tameErr = String(e).slice(0, 80); }
+  await kitWait(2); r.tamedAfter = h.hasComponent("minecraft:is_tamed");
+  try { const inv = h.getComponent("minecraft:inventory")?.container; r.invSize = inv?.size; inv?.setItem(0, new ItemStack("minecraft:saddle", 1)); } catch (e) { r.invErr = String(e).slice(0, 80); }
+  await kitWait(3); r.saddledAfter = h.hasComponent("minecraft:is_saddled");
+  const e = kitSoldier(1, { x: ox + 0.5, y: Y, z: oz + 1.5 }, "rifle", "hold");
+  await kitWait(5); mountSoldier(e, h, false); await kitWait(40);
+  r.riding = e.getComponent("minecraft:riding")?.entityRidingOn?.typeId ?? "no";
+  try { e.remove(); h.remove(); } catch {}
+  return r;
+};
 // v9.7: a downed man in plain view of the enemy (who hold their fire) next to a wall: does he crawl behind it?
 KS.crawl = async (o, ox, oz) => {
   floorAt(ox - 20, oz - 20, ox + 30, oz + 20);
