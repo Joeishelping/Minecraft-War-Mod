@@ -1695,7 +1695,6 @@ function finishFall(s) {
 }
 function spawnCorpse(v, how) { const T0 = Date.now(); try { return spawnCorpse0(v, how); } finally { globalThis.__scTot = (globalThis.__scTot ?? 0) + Date.now() - T0; globalThis.__scN = (globalThis.__scN ?? 0) + 1; } }
 function spawnCorpse0(v, how) {
-  const T0x = Date.now();
   const dim = v.dimension, l = v.location, now = tick();
   const f = Number(P(v, "war:faction") ?? 0), med = !!P(v, "war:medic"), yaw = (() => { try { return v.getRotation().y; } catch { return 0; } })();
   let sk = 0, cav = false; try { sk = Number(v.getProperty("war:skin") ?? 0); cav = !!v.getProperty("war:cav"); } catch {}   // (the skin he's drawn with: his own, or his faction's)
@@ -1725,9 +1724,8 @@ function spawnCorpse0(v, how) {
     return vadd(v0, vmul(mo, i >= 7 && i !== 9 && i !== 10 ? 0.4 : 1));                       // (a running man keeps going: his feet catch)
   });
   const squirt = mask & 1 ? [2, 3] : mask & 2 ? [3] : mask & 4 ? [2] : mask & 8 ? [1] : mask & 16 ? [0] : undefined;
-  const T1 = Date.now(); const body = make(hc, 0);
-  const T2 = Date.now(); const bs = rdStart(body, 0, pts, vel, mask, squirt);
-  const PT = globalThis.__ph ?? (globalThis.__ph = { make: 0, start: 0, pre: 0 }); PT.pre += T1 - T0x; PT.make += T2 - T1; PT.start += Date.now() - T2;
+  const body = make(hc, 0);
+  const bs = rdStart(body, 0, pts, vel, mask, squirt);
   if (how?.fall) { bs.fall = v.id; bs.act = true; return body; }   // (v9.14: a wounded man's fall: no gibs, no burst)
   // torn-off pieces: their own physics, thrown harder
   const GIB = { 1: [[2, 3], 4, 1], 2: [[3], 5, 2], 3: [[2], 6, 3], 4: [[1], 7, 4], 5: [[0], 8, 5] };
@@ -11050,12 +11048,16 @@ function rideRoute(e, m, want) {
     const wide = (q) => { const dx = q.x - l.x, dz = q.z - l.z, L = Math.hypot(dx, dz) || 1, px = (-dz / L) * 0.7, pz = (dx / L) * 0.7;   // (as wide as the horse)
       return [0, 1, -1].every((sg) => clearShot(m.dimension, { x: l.x + px * sg, y: l.y + 1.2, z: l.z + pz * sg }, { x: q.x + px * sg, y: q.y + 1.2, z: q.z + pz * sg })); };
     for (let j = R.idx + 1; j < Math.min(R.pts.length, R.idx + 6); j++) { const q = R.pts[j]; if (Math.abs(q.y - l.y) > 1.2 || !wide(q)) break; k = j; }
-    const v0 = m.getVelocity(); R.stuckN = Math.hypot(v0.x, v0.z) < 0.03 ? R.stuckN + 1 : 0;
     const q = R.pts[k];
+    { const dq = Math.hypot(q.x - l.x, q.z - l.z);                                                    // (stuck = no real gain on the point he's riding for in a second)
+      if (R.pk !== k || dq < (R.best ?? 1e9) - 0.3) { R.pk = k; R.best = dq; R.bestT = now; R.stuckN = 0; } else if (now - R.bestT > 20) R.stuckN = 9; }
     if (R.idx >= R.pts.length - 1 && Math.hypot(q.x - l.x, q.z - l.z) < 1.8) return want;
-    if (R.stuckN > 8) {                                                                             // (grinding on a corner: a shove off it)
+    if (R.detour && now < R.detour.until && Math.hypot(R.detour.at.x - l.x, R.detour.at.z - l.z) > 0.5) return { ...want, at: R.detour.at, stop: 0.3, route: true };
+    if (R.stuckN > 8) {                                                                             // (wedged on a corner: back off it a little, then on)
       let ox = 0, oz = 0; for (const [dx, dz] of [[1, 0], [-1, 0], [0, 1], [0, -1], [1, 1], [1, -1], [-1, 1], [-1, -1]]) if (solidAt(m.dimension, { x: l.x + dx * 0.9, y: l.y + 1.2, z: l.z + dz * 0.9 })) { ox -= dx; oz -= dz; }
-      const L = Math.hypot(ox, oz); if (L) try { m.applyImpulse({ x: (ox / L) * 0.25, y: 0, z: (oz / L) * 0.25 }); } catch {}
+      const L = Math.hypot(ox, oz), tx = q.x - l.x, tz = q.z - l.z, TL = Math.hypot(tx, tz) || 1;
+      const side = (R.flip = !R.flip) ? 1 : -1, ax = L ? ox / L : (-tz / TL) * side, az = L ? oz / L : (tx / TL) * side;   // (nothing touching: a step to one side, then the other)
+      R.detour = { at: { x: l.x + ax * 1.3 + (tx / TL) * 0.4, y: l.y, z: l.z + az * 1.3 + (tz / TL) * 0.4 }, until: now + 20 }; R.stuckN = 0; R.bestT = now + 20; R.best = 1e9; return { ...want, at: R.detour.at, stop: 0.3, route: true };
     }
     return { ...want, at: { x: q.x, y: q.y, z: q.z }, stop: 0.3, pace: want.pace, route: true };
   } catch { return want; }

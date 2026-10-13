@@ -1,5 +1,59 @@
 # War Engine changelog
 
+## v9.14 (Horses that work, content levels, better ragdolls, prisoners, cavalry that find their way)
+
+- **Riders get on their horses.** In some game versions the "spawn tamed" event is missing, so the horse came out
+  wild and threw its rider off at once. Mounts are now tamed with the game's own taming call and saddled through
+  their saddle slot, which works on every version. Wild saddled horses already in your world are tamed the next time
+  a rider tries them.
+- **Cavalry find their way.** A mounted man used to ride straight at where he was going and stop at the first wall.
+  Now the route planner works out the way (as it does on foot) and the mount follows it:
+  - route points are moved off the walls (a horse is wider than a man), and he checks his full width before cutting
+    ahead;
+  - when he's wedged on a corner he backs off and goes round;
+  - riders sent somewhere together ride in a line abreast, keeping pace.
+  Test: 4 riders sent round a 36-block wall. Before, all 4 stopped at it; now all 4 got there, 4 runs out of 4.
+- **"Markers were full" fixed.** Marches whose soldiers had been removed (not killed), or were far away, kept their
+  route markers forever, so over a long session all 1600 filled up. Marches nobody has seen for 30 minutes now let
+  go. When markers do run short, what's been held for nothing for 5 minutes is freed and the order goes through at
+  once, with no "give the order again". A spot that isn't loaded now says so, instead of blaming the markers.
+- **Content level** (War Table > Settings > Content):
+  - **Vanilla:** only what the game has: swords, spears, crossbows; vanilla mounts; add-on vehicles are refused and
+    the item comes back.
+  - **Light:** no MG, sniper or bazooka; mounts limited to horse, donkey, mule, camel and the elephants.
+  - **Full:** everything.
+  Soldiers already out there switch over by themselves, and get their own weapons back when it's switched up again.
+  Egg and Unit Wand menus only offer what the level allows.
+- **Ragdolls:**
+  - Bodies wear the armor the man wore (leather, iron or netherite), bending with the body, and lost with a torn-off
+    limb.
+  - A round through a body jolts it and sprays blood.
+  - Bodies land on each other instead of passing through.
+  - A pool of blood slowly spreads under each body once it's still, and stays as long as the body does.
+  - A body draped over an edge no longer twitches for seconds.
+- **The wounded fall like the dead.** A man who goes down wounded drops with the same physics as a body, then lies
+  where it came to rest and carries on wounded (crawl, rescue, revive). Finished off while falling, that body is
+  simply his.
+- **Cavalry:**
+  - Riders can be wounded: thrown from the saddle, and back on the horse once a medic has seen to them.
+  - When the enemy is indoors, or the horse can't get on, the rider dismounts and fights on foot, and remounts when
+    it's over.
+- **Unit Wand: "Edit everyone nearby".** Change weapon, armor, skin, stance and mount for a whole group within a
+  radius (one faction or unit type if you like). Anything left on "Keep" stays as it is.
+- **Soldiers take each other prisoner.**
+  - A man who surrendered is taken by the nearest enemy soldier and marched to that side's lines (their nearest war
+    flag, else the captor's post).
+  - Once the fight's over, the winners sometimes take wounded enemies prisoner instead of leaving them.
+  - His own side frees him by reaching him with no guard near (a player of his side frees him with a tap), and a
+    prisoner left unguarded long enough may slip away.
+- **Wounded vs. killed, fixed at the root.** By the time the game tells the add-on about a hit, it has already taken
+  the damage off his health. So "is this the blow that drops him?" was judged against health already lowered by that
+  same blow: a man on 12 HP hit for 7 went down, and overkill one-shots were far too common. This is behind the old
+  "they always go down". His health just before the hit is used now.
+- **Lag:** in a 180-man battle, bodies had cost about 15 ms a tick. Now all falling bodies share a 3 ms-a-tick budget,
+  the physics does less work, and a body beyond the 10 falling at once is simply laid down where it fell. A body now
+  costs about 1 ms to start, down from about 17.
+
 ## v9.13 (Cavalry on real mounts, cavalry guns, armor from the egg, armor that counts against bullets)
 
 - **Cavalry ride real mounts.** A Cavalier is now an ordinary soldier on a real, tamed, saddled mount instead of a
