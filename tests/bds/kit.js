@@ -1064,3 +1064,111 @@ globalThis.__dpReport = () => { const a = [...DPSTAT].sort((x, y) => y[1].n - x[
 const EVSTAT = new Map(); let evWrapped = false;
 system.runInterval(() => { if (evWrapped) return; try { const s = allOf(SOLDIER)[0]; if (!s) return; const proto = Object.getPrototypeOf(s); for (const fn of ["triggerEvent", "teleport", "applyImpulse", "clearVelocity", "addTag", "removeTag", "setProperty"]) { const f = proto[fn]; if (!f || f.__kit) continue; const w = function (...a) { let k = fn === "triggerEvent" ? `ev:${String(a[0]).split(":").pop().replace(/[0-9]+$/, "#")}` : fn; if (fn === "teleport") { const ln = (new Error().stack ?? "").split("\n").slice(2, 4).map((x) => (x.match(/main\.js:(\d+)/) ?? [])[1]).join("<"); k = `tp@${ln}${this.typeId === SOLDIER ? "" : ":mk"}`; } EVSTAT.set(k, (EVSTAT.get(k) ?? 0) + 1); return f.apply(this, a); }; w.__kit = true; proto[fn] = w; } evWrapped = true; } catch {} }, 20);
 globalThis.__evReport = (ticks) => { const a = [...EVSTAT].sort((x, y) => y[1] - x[1]).slice(0, 14).map(([k, n]) => `${k}:${(n / Math.max(1, ticks)).toFixed(1)}/t`); EVSTAT.clear(); return a; };
+// v9.15: an unhorsed cavalier walks back to his horse; a riderless, ownerless war horse is taken away; MG nests go
+KS.horseback = async (o, ox, oz) => {
+  floorAt(ox - 30, oz - 30, ox + 30, oz + 30);
+  for (const m of ow().getEntities({ type: "minecraft:horse", location: { x: ox, y: Y, z: oz }, maxDistance: 60 })) { try { m.remove(); } catch {} }
+  const e = kitCav(1, { x: ox + 0.5, y: Y, z: oz + 0.5 }, "rifle", "minecraft:horse");
+  await kitWait(60);
+  const h = world.getEntity(String(gdp(e, "war:mountId") ?? ""));
+  const was = !!e.getComponent("minecraft:riding")?.entityRidingOn;
+  try { h.getComponent("minecraft:rideable").ejectRider(e); } catch {}
+  mountOf.delete(e.id);
+  await kitWait(2);
+  try { h.teleport({ x: ox + (o.d ?? 20) + 0.5, y: Y, z: oz + 0.5 }); } catch {}
+  const trace = [];
+  let back;
+  for (let k = 0; k < 30; k++) { await kitWait(20); const on = e.getComponent("minecraft:riding")?.entityRidingOn; trace.push(`${Math.round(dist(e.location, h.location))}${on ? "ON" : ""}`); if (on?.id === h.id) { back = k; break; } }
+  // a lone horse (no owner): taken away once it's been alone long enough
+  const lone = ow().spawnEntity("minecraft:horse", { x: ox - 10.5, y: Y, z: oz + 0.5 }, { spawnEvent: "minecraft:spawn_adult" }); lone.addTag("war_cav");
+  const nest = ow().spawnEntity("war:mg_nest", { x: ox - 5.5, y: Y, z: oz - 5.5 });
+  await kitWait(620); CAV_LONE.set(lone.id, tick() - 7000); await kitWait(620);
+  const r = { wasRiding: was, backAfterSec: back, trace: trace.join(" "), loneGone: !lone.isValid, nestGone: !nest.isValid, ownStays: !!h?.isValid };
+  try { e.remove(); h.remove(); } catch {}
+  return r;
+};
+// v9.15: shields: given to swords / spears / crossbows (not guns), a raised one stops blows from the front only;
+// shield wall against shooters; the squad's sergeant wears the officer insignia
+KS.shields = async (o, ox, oz) => {
+  floorAt(ox - 30, oz - 30, ox + 30, oz + 30);
+  const a = kitSoldier(1, { x: ox + 0.5, y: Y, z: oz + 0.5 }, "sword", "hold"), g = kitSoldier(1, { x: ox + 3.5, y: Y, z: oz + 0.5 }, "rifle", "hold");
+  const b = kitSoldier(2, { x: ox + 0.5, y: Y, z: oz + 3.5 }, "sword", "hold");
+  setRelPair(1, 2, "0", false);
+  await kitWait(80);
+  const offhand = (e) => { try { return e.runCommand("testfor @s[hasitem={item=shield,location=slot.weapon.offhand}]").successCount > 0; } catch { return "err"; } };
+  const has = { sword: offhand(a), rifle: offhand(g) };
+  // blows: raised, from in front / from behind
+  const hit = (from, raised) => {
+    a.teleport({ x: ox + 0.5, y: Y, z: oz + 0.5 }); a.setRotation({ x: 0, y: 0 });                 // (facing +z)
+    b.teleport({ x: ox + 0.5, y: Y, z: oz + (from === "front" ? 2.5 : -2.5) });
+    setP(a, "war:block", raised); SHIELD_ON.set(a.id, true);
+    const h = a.getComponent("minecraft:health"); h.setCurrentValue(h.effectiveMax); const before = h.currentValue;
+    a.applyDamage(6, { cause: "entityAttack", damagingEntity: b });
+    return Math.round((before - h.currentValue) * 10) / 10;
+  };
+  const dmg = { frontRaised: hit("front", true), backRaised: hit("back", true), frontRaised2: hit("front", true) };
+  for (const e of [a, g, b]) try { e.remove(); } catch {}
+  await kitWait(5);
+  // the wall: 4 shields + 2 crossbows holding, enemy riflemen 25 blocks off
+  setRelPair(1, 2, "1", true);
+  const ours = [0, 1, 2, 3].map((i) => kitSoldier(1, { x: ox - 3 + i * 2 + 0.5, y: Y, z: oz - 2.5 }, "sword", "hold")).concat([0, 1].map((i) => kitSoldier(1, { x: ox - 1 + i * 2 + 0.5, y: Y, z: oz - 5.5 }, "crossbow", "hold")));
+  const foes = [0, 1, 2].map((i) => kitSoldier(2, { x: ox - 2 + i * 2 + 0.5, y: Y, z: oz + 22.5 }, "rifle", "hold"));
+  let walls = 0, raised = 0, maxRaised = 0, officers = new Set(); const zt = [];
+  for (let k = 0; k < 30; k++) {
+    await kitWait(10);
+    const S = squads.get(squadKey(ours[0], sd(ours[0])));
+    if (S?.wall) walls++;
+    zt.push(ours.slice(0, 4).map((e) => e.isValid ? Math.round(e.location.z - oz) : 'x').join('/') + (S?.wall ? 'W' : ''));
+    const r = ours.filter((e) => e.isValid && e.getProperty("war:block")).length; raised += r; maxRaised = Math.max(maxRaised, r);
+    for (const e of [...ours, ...foes]) try { if (e.isValid && e.getProperty("war:officer")) officers.add(`${sd(e).faction}:${e.id.slice(-3)}`); } catch {}
+  }
+  const line = ours.slice(0, 4).filter((e) => e.isValid).map((e) => `${Math.round(e.location.x - ox)},${Math.round(e.location.z - oz)}`);
+  return { has, dmg, wallSamples: walls, raisedAvg: Math.round(raised / 30 * 10) / 10, maxRaised, officers: [...officers], line, hits: SHIELD_HIT.size, zt: zt.join(' ') };
+};
+// v9.15: the bodyguard detail: diamond around the principal, a man between him and a threat, close in when he's hit
+KS.guards = async (o, ox, oz) => {
+  floorAt(ox - 30, oz - 30, ox + 30, oz + 30);
+  const pr = ow().spawnEntity("minecraft:armor_stand", { x: ox + 0.5, y: Y, z: oz + 0.5 });
+  pr.setRotation({ x: 0, y: 0 });
+  globalThis.__fakeLeader = (id) => (id === pr.id ? pr : undefined);
+  const gs = [0, 1, 2, 3].map((i) => {
+    const e = ow().spawnEntity(SOLDIER, { x: ox + (i - 1.5) * 2 + 0.5, y: Y, z: oz - 4.5 }, { spawnEvent: "war:init" });
+    const ne = setupSoldier(e, { faction: 1, squad: 3, weapon: i % 2 ? "sword" : "smg", ranged: i % 2 === 0, div: "guard", radius: 8, func: "__none", owner: pr.id }, KIT_PLAYER) ?? e;
+    const x = ne?.isValid ? ne : e; sdp(x, "war:func", "escort"); sdp(x, "war:leader", pr.id); sdDrop(x); return x;
+  });
+  const rel = () => gs.map((e) => e.isValid ? `${(e.location.x - ox - 0.5).toFixed(1)},${(e.location.z - oz - 0.5).toFixed(1)}` : "x");
+  await kitWait(140);
+  const calm = rel(), calmNotes = gs.map((e) => notes.get(e.id)?.text ?? "");
+  setRelPair(1, 2, "1", true);
+  const foe = kitSoldier(2, { x: ox + 12.5, y: Y, z: oz + 0.5 }, "rifle", "hold");
+  try { foe.addEffect("slowness", 2000, { amplifier: 10, showParticles: false }); } catch {}
+  const ct = [];
+  for (let k = 0; k < 8; k++) { await kitWait(10); ct.push(gs.map((e) => `${(e.location.x - ox - 0.5).toFixed(0)}:${(notes.get(e.id)?.text ?? "").slice(0, 14)}:${sd(e).weapon}:${(gs.indexOf(e))}`).join("|")); }
+  const D = DETAIL.get(pr.id);
+  const sh = gs.find((e) => e.id === D?.shieldId);
+  const threatX = sh ? (sh.location.x - ox - 0.5).toFixed(1) : "none";
+  const contact = rel();
+  try { foe.remove(); } catch {}
+  OWNER_HURT.set(pr.id, { t: tick(), by: undefined }); DETAIL.delete(pr.id);
+  await kitWait(60);
+  const tight = gs.filter((e) => e.isValid).map((e) => Math.hypot(e.location.x - ox - 0.5, e.location.z - oz - 0.5).toFixed(1));
+  globalThis.__fakeLeader = undefined;
+  try { pr.remove(); } catch {}
+  return { ct, calm, calmNotes, contact, shieldManX: threatX, detail: D ? { n: D.ids.length, threat: !!D.threat } : null, tightDist: tight };
+};
+// v9.15: night: muzzle flashes, and a flare that lights the ground and cleans its light up after
+KS.flares = async (o, ox, oz) => {
+  floorAt(ox - 30, oz - 30, ox + 30, oz + 30);
+  kcmd("time set midnight"); await kitWait(110);
+  setRelPair(1, 2, "1", true);
+  const a = [0, 1, 2].map((i) => kitSoldier(1, { x: ox - 2 + i * 2 + 0.5, y: Y, z: oz - 12.5 }, "rifle", "hold"));
+  const b = [0, 1, 2].map((i) => kitSoldier(2, { x: ox - 2 + i * 2 + 0.5, y: Y, z: oz + 12.5 }, "rifle", "hold"));
+  for (const e of [...a, ...b]) try { e.addEffect("resistance", 4000, { amplifier: 255, showParticles: false }); } catch {}
+  let peakLights = 0, flares = 0;
+  for (let k = 0; k < 60; k++) { await kitWait(20); peakLights = Math.max(peakLights, FLARE_LIGHTS.size); flares = Math.max(flares, FLARES.length); }
+  for (const e of [...a, ...b]) try { e.remove(); } catch {}
+  for (let k = 0; k < 30 && FLARES.length; k++) await kitWait(20);
+  let left = 0; for (let x = -30; x <= 30; x++) for (let z = -30; z <= 30; z++) for (let y = Y; y < Y + 10; y++) { try { if (ow().getBlock({ x: ox + x, y, z: oz + z })?.typeId.startsWith("minecraft:light_block")) left++; } catch {} }
+  kcmd("time set noon");
+  return { night: NIGHT, flaresSeen: flares, peakLights, lightsLeft: left, stillTracked: FLARE_LIGHTS.size, perm: lightPerm()?.type?.id };
+};

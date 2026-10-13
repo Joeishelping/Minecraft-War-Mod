@@ -498,6 +498,18 @@
           ]
         }
       }
+    },
+    "animation.war.shield_up": {
+      "loop": true,
+      "bones": {
+        "leftArm": {
+          "rotation": [
+            -50,
+            30,
+            0
+          ]
+        }
+      }
     }
   }
 }

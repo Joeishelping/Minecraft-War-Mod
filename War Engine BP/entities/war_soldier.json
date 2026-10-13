@@ -105,6 +105,16 @@
           "type": "bool",
           "default": false,
           "client_sync": true
+        },
+        "war:block": {
+          "type": "bool",
+          "default": false,
+          "client_sync": true
+        },
+        "war:officer": {
+          "type": "bool",
+          "default": false,
+          "client_sync": true
         }
       }
     },

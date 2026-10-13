@@ -1305,6 +1305,22 @@
           "ll_a": "(q.property('war:gib') || math.mod(math.floor(q.property('war:limb') / 16), 2) == 0)"
         }
       ]
+    },
+    "controller.render.war_officer": {
+      "geometry": "Geometry.insignia",
+      "materials": [
+        {
+          "*": "Material.default"
+        }
+      ],
+      "textures": [
+        "Texture.insignia_officer"
+      ],
+      "part_visibility": [
+        {
+          "*": "!q.property('war:hide')"
+        }
+      ]
     }
   }
 }

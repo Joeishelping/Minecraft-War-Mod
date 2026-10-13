@@ -223,7 +223,8 @@
         "s61": "textures/war_skins/skin_61",
         "s62": "textures/war_skins/skin_62",
         "s63": "textures/war_skins/skin_63",
-        "s64": "textures/war_skins/skin_64"
+        "s64": "textures/war_skins/skin_64",
+        "insignia_officer": "textures/entity/war_band/insignia_officer"
       },
       "geometry": {
         "default": "geometry.humanoid.custom",
@@ -255,12 +256,16 @@
         "g_mas35": "geometry.mas35",
         "g_m1903s": "geometry.m1903s",
         "g_kar98s": "geometry.kar98s",
-        "band": "geometry.war_band"
+        "band": "geometry.war_band",
+        "insignia": "geometry.war_insignia"
       },
       "render_controllers": [
         "controller.render.war_soldier",
         {
           "controller.render.war_band": "q.property('war:role') > 0 && !q.property('war:cav') && !q.property('war:down')"
+        },
+        {
+          "controller.render.war_officer": "q.property('war:officer') && !q.property('war:cav') && !q.property('war:down')"
         },
         {
           "controller.render.war_gun_m1903": "q.property('war:gun') == 1 && !q.property('war:cav')"
@@ -561,6 +566,9 @@
           },
           {
             "crawl": "q.property('war:down') && q.property('war:crawl')"
+          },
+          {
+            "shield_up": "q.property('war:block') && !q.property('war:down') && !q.property('war:cav')"
           }
         ]
       },
@@ -662,7 +670,8 @@
         "kneel": "animation.war.kneel",
         "prone": "animation.war.prone",
         "sit": "animation.war.sit",
-        "crawl": "animation.war.crawl"
+        "crawl": "animation.war.crawl",
+        "shield_up": "animation.war.shield_up"
       },
       "enable_attachables": true
     }

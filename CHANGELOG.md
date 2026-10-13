@@ -1,5 +1,41 @@
 # War Engine changelog
 
+## v9.15 (Shields, bodyguards, officers, night battles, looks after itself)
+
+- **Shields.** Swordsmen, spearmen and crossbowmen now carry a shield in the off hand (Settings: "Shields for
+  swordsmen, spearmen and crossbowmen", on by default; gunners don't get one).
+  - A raised shield stops blades, bolts and arrows from the front outright, and most of a bullet's force. Hits from
+    the side or behind get through. A lowered shield still catches some.
+  - Swordsmen and spearmen raise it and walk slower while closing in under fire.
+  - Crossbowmen under fire duck behind it between shots, and raise it against a man right on top of them.
+  - **Shield bash:** someone pressing close in front of a swordsman gets shoved back, stunned and hurt a little.
+  - **Shield wall:** three or more shields in a squad holding ground against shooters lock into a line facing them,
+    with the squad's crossbows a step behind. The line stays put instead of shuffling.
+- **Guards are a protective detail** (Guards on "Escort me"):
+  - a diamond around you, turned to where you look, with a point man ahead; it draws in tighter indoors;
+  - when a threat shows up, the nearest guard steps between you and it, the rest spread on that side and return fire
+    ("Contact! Cover the principal!");
+  - when you're hit, they close in around you ("Shots fired! Cover! Cover!");
+  - they never chase off after whoever shot at them. Sword guards only fight a threat that gets close to you.
+- **Officer insignia.** The man running each squad (the sergeant, the one who takes command when a leader falls) wears
+  gold shoulder boards and a badge. When he goes down it moves to whoever takes over. It follows the armband setting.
+- **Night battles.**
+  - At night, gunfire shows a bright muzzle flash you can see across the field.
+  - Squads in a firefight now and then send up an illumination flare over the enemy. It climbs, pops, and drifts down
+    for about 20 s, really lighting the ground under it.
+  - The light is taken away as the flare moves and when it burns out, including if the world was closed mid-flare.
+  - Settings: "Night battles: muzzle flashes and illumination flares".
+- **Riderless horses.** A cavalier who loses his horse walks back to it (or to a free saddled horse of his side
+  nearby) and gets back on, instead of popping onto it from a distance. Tested: back in the saddle from 20 blocks
+  away in ~12 s.
+- **Looks after itself:**
+  - stale marker reservations are freed every 5 minutes on their own;
+  - war horses whose rider is dead or gone are taken away after 5 minutes alone;
+  - the soldiers' saved-data churn during marches is roughly halved (an order's parked goal and retreat timer are
+    saved in the batched record; waypoint birth times are kept in memory only).
+- **MG nests removed.** The item is gone, and any nests already in a world let their gunner off (he takes his own gun
+  back) and disappear. The gunboat's and helicopter's MG seats still work as before.
+
 ## v9.14.1 (Horses, for real this time)
 
 - **Cavaliers ride their horses.** Reproduced the failure exactly. In game versions without the "spawn tamed adult"

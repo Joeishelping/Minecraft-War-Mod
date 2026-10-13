@@ -1,5 +1,5 @@
 // War Engine v7.1: faction NPC war framework
-import { world, system, Player, ItemStack, EquipmentSlot, GameMode, MolangVariableMap } from "@minecraft/server";
+import { world, system, Player, ItemStack, EquipmentSlot, GameMode, MolangVariableMap, BlockPermutation } from "@minecraft/server";
 import { ActionFormData, ModalFormData, FormCancelationReason } from "@minecraft/server-ui";
 import { SKINS } from "./skins.js";
 import { WarAPI } from "./api.js";
@@ -222,7 +222,7 @@ const DPC = new Map(); // entity id ("@world" for the world) -> Map(key -> value
 const dpMap = (h) => { const id = h === world ? "@world" : h.id; let m = DPC.get(id); if (!m) { m = new Map(); DPC.set(id, m); } return m; };
 // v5.6: bookkeeping that only matters while the world runs (stuck checks, pace rolls, heal timers) never touches the
 // game's storage at all
-const TRANSIENT = new Set(["war:born", "war:st", "p_war:firing", "p_war:aiming", "p_war:pose", "war:lp", "war:lpt", "war:pace", "war:pacet", "war:selfheal", "war:stuck", "war:calm", "war:readout", "war:healt", "war:covert"]);
+const TRANSIENT = new Set(["war:born", "p_war:block", "war:st", "p_war:firing", "p_war:aiming", "p_war:pose", "war:lp", "war:lpt", "war:pace", "war:pacet", "war:selfheal", "war:stuck", "war:calm", "war:readout", "war:healt", "war:covert"]);
 // (only records whose being up to 30 s old after a reload is harmless: the waypoint he was walking to, the march he was
 //  catching up, his own markers, who hit him last. His orders, being down, falling back and his entity properties are
 //  written at once: an old copy of those would bring back a state he'd left.)
@@ -280,7 +280,7 @@ system.runInterval(() => {
 system.runInterval(() => { for (const id of [...DPC.keys()]) if (id !== "@world" && !world.getEntity(id)) DPC.delete(id); }, 1200);
 const dist = (a, b) => Math.hypot(a.x - b.x, a.y - b.y, a.z - b.z);
 const flat = (a, b) => Math.hypot(a.x - b.x, a.z - b.z);
-const findPlayer = (id) => (id ? world.getAllPlayers().find((p) => p.id === id) : undefined);
+const findPlayer = (id) => (id ? world.getAllPlayers().find((p) => p.id === id) ?? globalThis.__fakeLeader?.(id) : undefined);   // (__fakeLeader: test kits only)
 const tick = () => TICK_NOW || system.currentTick;
 const DIMS = ["overworld", "nether", "the_end"];
 const allOfCache = new Map(); // type -> { t, list }  (one world search per type per tick)
@@ -319,7 +319,7 @@ function mainhand(player) {
 // ================================================================ entity properties
 // Values set on the same tick an entity spawns can be dropped by the game, so every
 // property is mirrored in a dynamic property and re-applied until it sticks.
-const PROPS = ["war:faction", "war:skin", "war:ranged", "war:cav", "war:medic", "war:rally", "war:gun", "war:firing", "war:aiming", "war:down", "war:nest", "war:pose", "war:role"];
+const PROPS = ["war:faction", "war:skin", "war:ranged", "war:cav", "war:medic", "war:rally", "war:gun", "war:firing", "war:aiming", "war:down", "war:nest", "war:pose", "war:role", "war:officer"];
 const propMemo = new Map(); // "id|key" -> value read from the entity (only this add-on changes them, through setP)
 function P(e, key) {
   const v = gdp(e, `p_${key}`);
@@ -1296,6 +1296,7 @@ function shotFx(owner) {
       try {
         const h = headLoc(owner), v = owner.getViewDirection();
         owner.dimension.spawnParticle("ww:flash", { x: h.x + v.x * 1.3, y: h.y - 0.25 + v.y * 1.3, z: h.z + v.z * 1.3 });
+        if (NIGHT && setting("nightfx", true)) owner.dimension.spawnParticle("war:muzzle", { x: h.x + v.x * 1.4, y: h.y - 0.25 + v.y * 1.4, z: h.z + v.z * 1.4 });   // (v9.15: a flash you see across the field at night)
       } catch {}
     } catch {}
 }
@@ -1810,6 +1811,11 @@ world.beforeEvents.entityHurt.subscribe((ev) => {
       ev.cancel = true;
       system.run(() => { try { pickUp(src, v); } catch (err) { oops("tp wand", err); } });
       return;
+    }
+    if (v?.typeId === SOLDIER && !downed.has(v.id) && SHIELD_ON.get(v.id)) {   // v9.15: a shield takes what comes at it from the front
+      const r = shieldBlock(v, ev);
+      if (r >= 1) { ev.cancel = true; return; }
+      if (r > 0) ev.damage = ev.damage * (1 - r);
     }
     if (v?.typeId === SOLDIER && !downed.has(v.id)) {
       const cause = String(ev.damageSource.cause ?? "");
@@ -2501,7 +2507,6 @@ function tool(player, typeId, target) {
     case "war:gunboat_item": return run(() => placeVehicle(player, "war:gunboat"));
     case "war:heli_item": return run(() => placeVehicle(player, "war:heli"));
     case "war:war_horn": return run(() => blowHorn(player));
-    case "war:mg_nest_item": return run(() => placeVehicle(player, NEST));
   }
 }
 system.beforeEvents.startup.subscribe((ev) => {
@@ -3165,7 +3170,9 @@ async function warTable(player, pre) {
       .toggle("Shot diagnostics (draw every shot's path, count shots not fired by the soldiers' aim)", { defaultValue: !!setting("diag", false) })
       .dropdown("Bullets", ["Precise (the hit is decided along the exact line of the shot)", "Gun pack's own bullets (flying projectiles)"], { defaultValueIndex: preciseHits() ? 0 : 1 })
       .toggle("Gore: blood, and now and then a limb coming off (bodies and outright kills stay either way)", { defaultValue: setting("gore", true) !== false })
-      .dropdown("Content", ["Vanilla (only what the game has: swords, spears, crossbows, vanilla mounts, no add-on vehicles)", "Light (no MG, sniper or bazooka; sensible mounts only)", "Full experience"], { defaultValueIndex: ["vanilla", "light", "full"].indexOf(contentMode()) });
+      .dropdown("Content", ["Vanilla (only what the game has: swords, spears, crossbows, vanilla mounts, no add-on vehicles)", "Light (no MG, sniper or bazooka; sensible mounts only)", "Full experience"], { defaultValueIndex: ["vanilla", "light", "full"].indexOf(contentMode()) })
+      .toggle("Shields for swordsmen, spearmen and crossbowmen", { defaultValue: setting("shields", true) !== false })
+      .toggle("Night battles: muzzle flashes and illumination flares", { defaultValue: setting("nightfx", true) !== false });
     const sr = await show(sf, player);
     if (!sr || sr.canceled || !sr.formValues) return;
     sdp(world, "war:set_capture", sr.formValues[0] === 0 ? "neutral" : "surrender");
@@ -3189,6 +3196,8 @@ async function warTable(player, pre) {
     sdp(world, "war:set_bullets", Number(sr.formValues[17] ?? 0) === 1 ? "pack" : "precise");
     sdp(world, "war:set_gore", !!sr.formValues[18]);
     const cm0 = contentMode(); sdp(world, "war:set_content", ["vanilla", "light", "full"][Number(sr.formValues[19] ?? 2)] ?? "full");
+    sdp(world, "war:set_shields", !!sr.formValues[20]);
+    sdp(world, "war:set_nightfx", !!sr.formValues[21]);
     if (contentMode() !== cm0) player.sendMessage(`§eContent set to ${contentMode()}: soldiers switch their weapons and mounts over as they're near.`);
     player.sendMessage("§aSettings saved.");
     return warTable(player, 5);
@@ -7668,77 +7677,16 @@ function sandbagSpot(e, enemyC, anchor, leash, now) {
   return best;
 }
 
-// ---- MG nests: a placeable emplacement a soldier or a player can man
+// ---- MG nests (removed in v9.15; the gunboat's / helicopter's MG seat still fires the same way)
 const NEST = "war:mg_nest";
 const NEST_SPEC = { bullet: "ww:nlmg_projectile", sight: 200, fire: 200, mag: 40, gap: 2, reload: 50, speed: 5.0, spread: 0.006 };
-const nestRider = (n) => (n.getComponent("minecraft:rideable")?.getRiders() ?? [])[0];
 function ridingNest(e) { try { const on = rideInfo(e).on; return on === NEST || (MG_SEAT.includes(on) && gunSeat(e)); } catch { return false; } }
 // v9.2: the gunboat's / helicopter's second seat is the MG: a soldier there fires it as from a nest
 function gunSeat(e) { try { const v = e.getComponent("minecraft:riding")?.entityRidingOn; const rs = v?.getComponent("minecraft:rideable")?.getRiders() ?? []; return rs[1]?.id === e.id; } catch { return false; } }
-const nestState = new Map(); // nest id -> { ammo, next }
+// v9.15: MG nests are gone: any left in a world lets its gunner off (he takes his own gun back) and is taken away
 system.runInterval(() => {
-  const now = tick();
-  for (const n of allOf(NEST)) {
-    try {
-      const r = nestRider(n);
-      n.clearVelocity?.();
-      if (!r) continue;
-      let st = nestState.get(n.id); if (!st) { st = { ammo: NEST_SPEC.mag, next: 0 }; nestState.set(n.id, st); }
-      if (r.typeId === "minecraft:player") {
-        n.setRotation({ x: 0, y: r.getRotation().y });                         // the gun follows your view
-        if (consumeFire(r) && now >= st.next) {
-          const dir = r.getViewDirection(), h = headLoc(r);
-          for (let k = 0; k < 6 && st.ammo > 0; k++) {
-            system.runTimeout(() => {
-              try {
-                const s = NEST_SPEC.spread, rr = () => (Math.random() + Math.random() - 1) * s * 1.6;
-                const d2 = { x: dir.x + rr(), y: dir.y + rr(), z: dir.z + rr() };
-                const b = n.dimension.spawnEntity(NEST_SPEC.bullet, { x: h.x + d2.x * 1.4, y: h.y - 0.2 + d2.y * 1.4, z: h.z + d2.z * 1.4 });
-                const pc = b.getComponent("minecraft:projectile"); if (pc) { pc.owner = r; pc.shoot({ x: d2.x * NEST_SPEC.speed, y: d2.y * NEST_SPEC.speed, z: d2.z * NEST_SPEC.speed }); }
-                n.dimension.playSound("mg42_shot_mid", n.location, { volume: 2 });
-              } catch {}
-            }, k * 2);
-            st.ammo--;
-          }
-          st.next = now + 12;
-          if (st.ammo <= 0) { st.ammo = NEST_SPEC.mag; st.next = now + NEST_SPEC.reload; try { r.onScreenDisplay.setActionBar("§7Reloading..."); } catch {} }
-          else try { r.onScreenDisplay.setActionBar(`§7MG ${st.ammo}/${NEST_SPEC.mag}`); } catch {}
-        }
-      } else if (r.typeId === SOLDIER) {
-        if (Number(P(r, "war:gun") ?? 0) !== 0) { sdp(r, "war:gunSaved", true); setP(r, "war:gun", 0); }   // his own gun is put away
-        if (!P(r, "war:nest")) setP(r, "war:nest", true);                                                     // standing, hands on the gun
-        const t = perc.get(r.id)?.threat;
-        if (t?.isValid) {
-          const want = (Math.atan2(-(t.location.x - n.location.x), t.location.z - n.location.z) * 180) / Math.PI;
-          n.setRotation({ x: 0, y: turnToward(n.getRotation().y, want, 9) });                              // smooth traverse
-          r.setRotation({ x: 0, y: n.getRotation().y });
-          // overrun from behind or the side up close: get off the gun
-          const vx = t.location.x - n.location.x, vz = t.location.z - n.location.z, L = Math.hypot(vx, vz) || 1, yaw = n.getRotation().y * Math.PI / 180;
-          if (L < 6 && (vx * -Math.sin(yaw) + vz * Math.cos(yaw)) / L < 0) { n.getComponent("minecraft:rideable")?.ejectRider(r); }
-        }
-      }
-    } catch {}
-  }
-}, 2);
-// soldiers holding a position man an empty nest close by (further out once the enemy shows up)
-system.runInterval(() => {
-  for (const n of allOf(NEST)) {
-    try {
-      if (nestRider(n)) continue;
-      let best, bd = 15;
-      for (const o of nearbyCombatants(n.dimension.id, n.location, 15)) {
-        if (o.typeId !== SOLDIER || isRiding(o) || isDowned(o) || isPow(o)) continue;
-        const d = sd(o);
-        if (!["hold", "post", "sentry", "stand"].includes(d.func) || d.div === "medic" || d.div === "guard" || d.retreat) continue;
-        const dd = dist(o.location, n.location);
-        const contact = !!squads.get(squadKey(o, d))?.known?.size;
-        if (dd > 9 && !contact) continue;                                // far ones only come once there's a fight
-        if (dd < bd) { bd = dd; best = o; }
-      }
-      if (best) { n.getComponent("minecraft:rideable")?.addRider(best); note(best, "manning the MG"); callout(best, "On the gun!"); }
-    } catch {}
-  }
-}, 40);
+  for (const n of allOf(NEST)) { try { const rd = n.getComponent("minecraft:rideable"); for (const r of rd?.getRiders() ?? []) rd.ejectRider(r); n.remove(); } catch {} }
+}, 100);
 
 // one menu for the downed and for prisoners (Unit Wand or right-click)
 async function captiveMenu(p, e) {
@@ -10926,6 +10874,41 @@ function spawnCavMount(e) {
   try { m.addTag("war_cav"); m.setDynamicProperty("war:cavf", Number(sd(e).faction ?? 0)); } catch {}
   return m;
 }
+// a saddled war horse of his side with nobody on it and no living owner nearby on foot going for it
+function freeCavHorse(e) {
+  const f = Number(sd(e).faction ?? 0); let best, bd = 48;
+  try {
+    for (const h of e.dimension.getEntities({ tags: ["war_cav"], location: e.location, maxDistance: 48 })) {
+      if (Number(h.getDynamicProperty("war:cavf") ?? -1) !== f || !mountReady(h) || CAV_CLAIM.get(h.id)?.by !== undefined && CAV_CLAIM.get(h.id).by !== e.id && tick() - CAV_CLAIM.get(h.id).t < 200) continue;
+      const dd = dist(h.location, e.location); if (dd < bd) { bd = dd; best = h; }
+    }
+  } catch {}
+  if (best) CAV_CLAIM.set(best.id, { by: e.id, t: tick() });
+  return best;
+}
+const CAV_CLAIM = new Map();   // horse id -> { by, t }: the man walking to it
+// v9.15: horses with nobody to ride them (their rider dead or gone) don't pile up: after 5 minutes riderless, gone
+const CAV_LONE = new Map();    // horse id -> tick first seen riderless and ownerless
+system.runInterval(() => {
+  const now = tick(), owners = new Set();
+  for (const e of allOf(SOLDIER)) { const mid = gdp(e, "war:mountId"); if (mid !== undefined) owners.add(String(mid)); }
+  const seen = new Set();
+  for (const dim of ["overworld", "nether", "the_end"]) {
+    let hs = []; try { hs = world.getDimension(dim).getEntities({ tags: ["war_cav"] }); } catch {}
+    for (const h of hs) {
+      try {
+        seen.add(h.id);
+        if (owners.has(h.id) || (h.getComponent("minecraft:rideable")?.getRiders().length ?? 0) > 0) { CAV_LONE.delete(h.id); continue; }
+        if (!CAV_LONE.has(h.id)) CAV_LONE.set(h.id, now);
+        else if (now - CAV_LONE.get(h.id) > 6000 && !PLAYERS_LIST.some((p) => p.dimension.id === h.dimension.id && dist(p.location, h.location) < 6)) { CAV_LONE.delete(h.id); h.remove(); }
+      } catch {}
+    }
+  }
+  for (const id of [...CAV_LONE.keys()]) if (!seen.has(id)) CAV_LONE.delete(id);
+  for (const [id, c] of [...CAV_CLAIM]) if (now - c.t > 400) CAV_CLAIM.delete(id);
+}, 600);
+// v9.15: stale marker holds are let go on their own every 5 minutes (no "Markers were full" after a long session)
+system.runInterval(() => { try { freeSlots(); } catch {} }, 6000);
 function cavTick(e, d, now) {
   try {
     if (P(e, "war:cav")) {                                                                    // (a cavalier from before: his old horse body goes)
@@ -10950,7 +10933,11 @@ function cavTick(e, d, now) {
       if (afoot !== undefined) sdp(e, "war:afoot", undefined);
       sdp(e, "war:mountTry", now);
       const mid = gdp(e, "war:mountId"), m = mid ? world.getEntity(String(mid)) : undefined;
-      if (m?.isValid && dist(m.location, e.location) < 24) { readyMount(m); try { e.teleport({ x: m.location.x, y: m.location.y + 0.4, z: m.location.z }); } catch {} mountSoldier(e, m, false); }
+      // v9.15: unhorsed, he walks back to his own horse (or a free one of his side's), never pops onto it from afar
+      const own = m?.isValid && m.dimension.id === e.dimension.id && dist(m.location, e.location) < 64 && mountReady(m) ? m : undefined;
+      const tgtM = own ?? (mid ? freeCavHorse(e) : undefined);
+      if (tgtM && dist(tgtM.location, e.location) < 3) { readyMount(tgtM); if (tgtM !== own) sdp(e, "war:mountId", tgtM.id); mountSoldier(e, tgtM, false); note(e, own ? "back in the saddle" : "took a riderless horse"); }
+      else if (tgtM) { try { tgtM.clearVelocity?.(); } catch {} planPersonalTo(e, "settle", { ...tgtM.location }, now); sdp(e, "war:mountTry", now - 45); note(e, own ? "going back for his horse" : "going for a riderless horse"); }
       else if (!mid) { const nm = spawnCavMount(e); if (nm) { sdp(e, "war:mountId", nm.id); mountSoldier(e, nm, false); } }
       else if (mountUp([e], false)) note(e, "took a free mount");                             // (his own was killed: any free saddled one near)
     }
@@ -11264,3 +11251,328 @@ system.runInterval(() => {
     }
   } catch (err) { oops("memory sweep", err); }
 }, 1200);
+
+
+// ================================================================ v9.15: shields
+// Swordsmen, spearmen and crossbowmen carry a shield in the off hand. Raised (war:block), it stops what comes at it
+// from the front: blades, bolts and arrows outright, most of a bullet's force. Lowered, it still catches some.
+// Tactics: raised while closing under fire (slower), crossbowmen duck behind it between shots, a shield bash for a man
+// pressing too close, and three or more shields in a squad holding ground lock into a wall with the crossbows behind.
+const SHIELD_ON = new Map();     // soldier id -> true (has one) / false (cleared)
+const SHIELD_HIT = new Map();    // soldier id -> tick his shield last took a hit
+const BASH_T = new Map();        // soldier id -> tick of his last bash
+const shieldMelee = (d) => d.weapon === "sword" || d.weapon === "spear" || (!d.ranged && !GUNS.includes(d.weapon));
+function shieldFit(d) {
+  if (setting("shields", true) === false || d.surr || ["medic", "grenadier"].includes(d.div) || GUNS.includes(d.weapon) || ["at", "molotov", "grenade"].includes(d.weapon)) return false;
+  return d.weapon === "sword" || d.weapon === "spear" || d.weapon === "crossbow" || !!d.ranged || !d.weapon;
+}
+function shieldBlock(v, ev) {
+  const cause = String(ev.damageSource?.cause ?? "");
+  let fx, fz, bullet = false;
+  const lh = lastHit.get(v.id);
+  if (lh && tick() - lh.t <= 1 && lh.dir && !cause.includes("xplosion")) { fx = -lh.dir.x; fz = -lh.dir.z; bullet = true; }   // (our own rounds)
+  else {
+    if (cause !== "entityAttack" && cause !== "projectile") return 0;                // (blasts, fire, falls: a shield is no help)
+    const src = ev.damageSource?.damagingProjectile ?? ev.damageSource?.damagingEntity;
+    if (!src?.isValid) return 0;
+    fx = src.location.x - v.location.x; fz = src.location.z - v.location.z;
+    bullet = String(ev.damageSource?.damagingProjectile?.typeId ?? "").startsWith("ww:");
+  }
+  const L = Math.hypot(fx, fz); if (L < 0.01) return 0;
+  const yaw = v.getRotation().y * Math.PI / 180, cos = (fx * -Math.sin(yaw) + fz * Math.cos(yaw)) / L;
+  if (cos < 0.35) return 0;                                                        // (from the side or behind: nothing)
+  const raised = !!P(v, "war:block");
+  const melee = cause === "entityAttack";
+  let r = 0;
+  if (raised) r = bullet ? 0.8 : 1;
+  else if (Math.random() < (melee ? 0.4 : 0.25)) r = bullet ? 0.6 : 1;
+  if (r > 0) {
+    SHIELD_HIT.set(v.id, tick());
+    system.run(() => { try { v.dimension.playSound("item.shield.block", v.location, { volume: 1 }); } catch {} });
+  }
+  return r;
+}
+// the shield in his hand: given or taken as his kit and the setting say
+system.runInterval(() => {
+  let n = 0;
+  for (const e of allOf(SOLDIER)) {
+    try {
+      const d = sd(e), want = shieldFit(d) && !pows.has(e.id);
+      if (SHIELD_ON.get(e.id) === want || n > 30) continue;
+      if (!want && !SHIELD_ON.has(e.id) && !shieldFit({ ...d, surr: false }) && setting("shields", true) !== false) { SHIELD_ON.set(e.id, false); continue; }   // (never had one)
+      e.runCommand(`replaceitem entity @s slot.weapon.offhand 0 ${want ? "shield" : "air"}`); n++;
+      SHIELD_ON.set(e.id, want);
+      if (!want) setP(e, "war:block", false);
+    } catch {}
+  }
+  for (const id of [...SHIELD_ON.keys()]) if (!world.getEntity(id)) { SHIELD_ON.delete(id); SHIELD_HIT.delete(id); BASH_T.delete(id); }
+}, 40);
+// raised or lowered, and the bash
+system.runInterval(() => {
+  const now = tick();
+  for (const [id, has] of SHIELD_ON) {
+    if (!has) continue;
+    const e = world.getEntity(id);
+    if (!e?.isValid) continue;
+    try {
+      const d = sd(e);
+      let up = false;
+      const th = perc.get(id)?.threat;
+      if (!downed.has(id) && !pows.has(id) && !d.surr && th?.isValid) {
+        const dd = dist(th.location, e.location);
+        const fired = now - (firedAt.get(id)?.t ?? -999) < 60 || now - (SHIELD_HIT.get(id) ?? -999) < 60 || now - Number(gdp(e, "war:hurt") ?? -999) < 60;
+        const shooter = th.typeId === SOLDIER ? (GUNS.includes(sd(th).weapon) || !!sd(th).ranged) : th.typeId === "minecraft:player" || th.typeId === "minecraft:skeleton" || th.typeId === "minecraft:pillager";
+        if (shieldMelee(d)) {
+          up = dd > 2.6 && (fired || (shooter && dd < 40));                                // (closing in under fire: behind the shield)
+          // bash: someone pressing close in front of him, now and then
+          if (dd < 2.4 && now - (BASH_T.get(id) ?? -999) > 60 && Math.random() < 0.3 && hittable(th, e)) {
+            const yaw = e.getRotation().y * Math.PI / 180, fx = -Math.sin(yaw), fz = Math.cos(yaw), vx = th.location.x - e.location.x, vz = th.location.z - e.location.z, L = Math.hypot(vx, vz) || 1;
+            if ((vx * fx + vz * fz) / L > 0.5) {
+              BASH_T.set(id, now); up = true;
+              try { th.applyKnockback({ x: (vx / L) * 0.9, z: (vz / L) * 0.9 }, 0.25); } catch { try { th.applyKnockback(vx / L, vz / L, 0.9, 0.25); } catch {} }
+              try { preHp(th); th.applyDamage(2); } catch {}
+              try { th.addEffect("slowness", 30, { amplifier: 2, showParticles: false }); } catch {}
+              try { e.dimension.playSound("item.shield.block", e.location, { volume: 1.2, pitch: 0.7 }); } catch {}
+              note(e, "shield bash"); v9stat("shieldBash");
+            }
+          }
+        } else {
+          // crossbowman: under fire, he ducks behind it between shots (about half the time), and against a man on top of him
+          const cyc = (now + id.charCodeAt(id.length - 1) * 7) % 60;
+          up = (fired && dd > 5 && cyc < 32) || dd < 2.2;
+        }
+      }
+      if (!!P(e, "war:block") !== up) setP(e, "war:block", up);
+      if (up) { try { e.addEffect("slowness", 8, { amplifier: 0, showParticles: false }); } catch {} }
+    } catch {}
+  }
+}, 5);
+// the shield wall: three or more shields of a squad holding ground against shooters lock into a line facing them,
+// the squad's crossbows a step behind
+system.runInterval(() => {
+  const now = tick();
+  for (const [k, S] of squads) {
+    try {
+      S.wall = undefined;
+      if (!S.ours?.length || now - S.t > 40 || !S.known?.size || !S.ourC) continue;
+      const ours = S.ours.filter((o) => o.isValid && !downed.has(o.id) && !isRiding(o) && !pows.has(o.id));
+      const anch = (o) => ["hold", "post", "stand", "sentry"].includes(sd(o).func);
+      const shields = ours.filter((o) => SHIELD_ON.get(o.id) && shieldMelee(sd(o)) && anch(o));
+      if (shields.length < 3) continue;
+      let oc = S.ourC;
+      let q, qd = 1e9; for (const kk of S.known.values()) { const dd = Math.hypot(kk.x - oc.x, kk.z - oc.z); if (dd < qd) { qd = dd; q = kk; } }
+      if (!q || qd < 8 || qd > 48) continue;                                          // (too close: a melee, not a wall)
+      let ux = (q.x - oc.x) / qd, uz = (q.z - oc.z) / qd;
+      const A = S.wallAt;                                                             // (the line stays put while the picture holds: no shuffling)
+      if (A && now - A.t < 60 && Math.hypot(A.x - oc.x, A.z - oc.z) < 3 && A.ux * ux + A.uz * uz > 0.9) { oc = A; ux = A.ux; uz = A.uz; }
+      S.wallAt = { x: oc.x, y: oc.y, z: oc.z, ux, uz, t: now };
+      const px = -uz, pz = ux;
+      const dim = shields[0].dimension, spots = new Map();
+      const line = (list, ahead, gap) => {
+        list.sort((a, b) => ((a.location.x - oc.x) * px + (a.location.z - oc.z) * pz) - ((b.location.x - oc.x) * px + (b.location.z - oc.z) * pz));
+        list.forEach((o, i) => {
+          const off = (i - (list.length - 1) / 2) * gap;
+          const w = walkableNear(dim, oc.x + ux * ahead + px * off, oc.z + uz * ahead + pz * off, oc.y);
+          if (w && Math.abs(w.y - oc.y) < 2.5) spots.set(o.id, { x: w.x, y: w.y, z: w.z });
+        });
+      };
+      line(shields, 3, 1.1);
+      const bows = ours.filter((o) => { const d = sd(o); return !shieldMelee(d) && !GUNS.includes(d.weapon) && d.ranged && anch(o) && dist(o.location, oc) < 14; });
+      if (bows.length) line(bows, 0.8, 1.4);
+      if (spots.size < 3) continue;
+      S.wall = { t: now, spots, ux, uz };
+      if (now - (S.wallCall ?? -9999) > 1200) { S.wallCall = now; callout(shields[0], "Shields up! Form the wall!", { event: true }); v9stat("shieldWall"); }
+    } catch {}
+  }
+}, 20);
+WarAPI.registerBehavior({
+  name: "shield wall", when: "first", priority: 90,
+  decide(e, d, now) {
+    const S = squads.get(squadKey(e, d)), W = S?.wall;
+    if (!W || now - W.t > 40) return undefined;
+    const sp = W.spots.get(e.id); if (!sp) return undefined;
+    const th = perc.get(e.id)?.threat;
+    if (th?.isValid && dist(th.location, e.location) < 4) return undefined;               // (someone got through: fight him)
+    const t = shieldMelee(d) ? "t_short" : "t_mid";
+    if (personal.has(e.id)) { personal.delete(e.id); travelTo.delete(e.id); }               // (his own way forward waits: the line holds)
+    if (dist(sp, e.location) < 3.2 && dist(sp, e.location) >= 0.7) push(e, { x: (sp.x - e.location.x) * 0.2, y: 0.02, z: (sp.z - e.location.z) * 0.2 }, 3);
+    if (dist(sp, e.location) < 0.7) { try { e.setRotation({ x: 0, y: Math.atan2(-W.ux, W.uz) * 180 / Math.PI }); } catch {} return { g: "g_none", t, urgent: false, note: "holding the shield wall" }; }
+    const slot = myMarker(e, sp, "war:mymk", 0.6);
+    return slot !== undefined ? { g: "g_wp", slot, t, urgent: true, note: "forming the shield wall" } : undefined;
+  },
+});
+
+// ================================================================ v9.15: bodyguards
+// Guards on "Escort me" work like a protective detail: a diamond around you (tighter indoors, a point man ahead),
+// the nearest one steps in between you and a threat while the rest spread on that side and return fire, and when
+// you're hit they close in around you. They never chase off: the man is the job.
+const OWNER_HURT = new Map();    // player id -> { t, by }
+const GUARD_ON = new Map();      // guard id -> tick he last worked the detail
+// (on the detail he doesn't go after whoever hits him: no chasing off; the detail decides when he fights)
+WarAPI.on("think", (e, d, want, now) => { if (d.div === "guard" && d.func === "escort" && now - (GUARD_ON.get(e.id) ?? -999) < 20) { want.r = "r_off"; if (shieldMelee(d) && !GUNS.includes(d.weapon)) { want.w = "w_none"; want.t = "t_off"; } } });
+const DETAIL = new Map();        // player id -> { t, ids, threat, shieldId, callT, hurtCallT }
+world.afterEvents.entityHurt.subscribe((ev) => {
+  try {
+    const p = ev.hurtEntity; if (p?.typeId !== "minecraft:player") return;
+    let a = ev.damageSource?.damagingEntity; if (!a) a = ev.damageSource?.damagingProjectile?.getComponent?.("minecraft:projectile")?.owner;
+    OWNER_HURT.set(p.id, { t: tick(), by: a?.id });
+  } catch {}
+});
+function detailOf(p, now) {
+  let D = DETAIL.get(p.id);
+  if (D && now - D.t < 10) return D;
+  D = { ...(D ?? {}), t: now };
+  const ids = [];
+  for (const o of p.dimension.getEntities({ type: SOLDIER, location: p.location, maxDistance: 40 })) { try { const d = sd(o); if (d.div === "guard" && d.func === "escort" && d.leader === p.id && !downed.has(o.id)) ids.push(o.id); } catch {} }
+  D.ids = ids.sort();
+  const f = ids.length ? Number(sd(world.getEntity(ids[0])).faction ?? 0) : 0;
+  let th;
+  const oh = OWNER_HURT.get(p.id);
+  if (oh?.by && now - oh.t < 200) { const a = world.getEntity(oh.by); if (a?.isValid && a.id !== p.id && dist(a.location, p.location) < 40 && !(a.typeId === SOLDIER && downed.has(a.id))) th = a; }
+  if (!th) {
+    let bd = 18;
+    for (const c of nearSnap(p.dimension.id, p.location, 18)) {
+      if (c.down || !c.e.isValid || !(c.type === SOLDIER || c.type === HOUND || c.type === "minecraft:player") || !c.f || !isHostile(f, c.f)) continue;
+      const dd = dist(c.e.location, p.location); if (dd < bd) { bd = dd; th = c.e; }
+    }
+  }
+  D.threat = th;
+  D.shieldId = undefined;
+  if (th && ids.length) {
+    const ux = th.location.x - p.location.x, uz = th.location.z - p.location.z, L = Math.hypot(ux, uz) || 1;
+    let bs = 1e9;
+    for (const id of ids) { const o = world.getEntity(id); if (!o) continue; const ox = o.location.x - p.location.x, oz = o.location.z - p.location.z; const sc = Math.hypot(ox - ux / L * 1.5, oz - uz / L * 1.5); if (sc < bs) { bs = sc; D.shieldId = id; } }
+    if (now - (D.callT ?? -9999) > 300) { D.callT = now; const g = world.getEntity(D.shieldId); if (g) callout(g, ["Contact! Cover the principal!", "Threat! Get behind me!", "Covering! Stay down!"][Math.floor(Math.random() * 3)], { event: true }); v9stat("guardCover"); }
+  }
+  if (oh && now - oh.t < 20 && now - (D.hurtCallT ?? -9999) > 200 && ids.length) { D.hurtCallT = now; const g = world.getEntity(ids[ids.length - 1]); if (g) callout(g, "Shots fired! Cover! Cover!", { event: true }); }
+  DETAIL.set(p.id, D);
+  return D;
+}
+system.runInterval(() => { const now = tick(); for (const [k, D] of [...DETAIL]) if (now - D.t > 600) DETAIL.delete(k); for (const [k, h] of [...OWNER_HURT]) if (now - h.t > 600) OWNER_HURT.delete(k); for (const [k, t] of [...GUARD_ON]) if (now - t > 600) GUARD_ON.delete(k); }, 200);
+WarAPI.registerBehavior({
+  name: "bodyguard", when: "first", priority: 100,
+  decide(e, d, now) {
+    if (d.div !== "guard" || d.func !== "escort" || !d.leader) return undefined;
+    const p = findPlayer(d.leader);
+    if (!p || p.dimension.id !== e.dimension.id || isRiding(p) || dist(p.location, e.location) > 24) return undefined;
+    const D = detailOf(p, now), idx = Math.max(0, D.ids.indexOf(e.id)), n = Math.max(1, D.ids.length);
+    const pl = p.location, melee = shieldMelee(d) && !GUNS.includes(d.weapon);
+    const inside = isIndoors(p);
+    let spot, t = "t_off", what;
+    const th = D.threat?.isValid ? D.threat : undefined;
+    if (th) {
+      const tx = th.location.x - pl.x, tz = th.location.z - pl.z, L = Math.hypot(tx, tz) || 1, ux = tx / L, uz = tz / L;
+      if (melee && (L < 7 || dist(th.location, e.location) < 3) && e.id !== D.shieldId) { GUARD_ON.set(e.id, -999); return { g: "g_wp", slot: myMarker(e, th.location, "war:mymk", 0.8), t: "t_short", urgent: true, note: "taking down the threat" }; }   // (close: put him down)
+      if (e.id === D.shieldId) { spot = { x: pl.x + ux * 1.4, z: pl.z + uz * 1.4 }; what = "shielding you"; }
+      else {
+        const k = D.ids.filter((id) => id !== D.shieldId).indexOf(e.id), m = Math.max(1, n - 1);
+        const ang = m === 1 ? 0.9 : -1.2 + (2.4 * k) / (m - 1), ca = Math.cos(ang), sa = Math.sin(ang);
+        const r = 2.4, dx = ux * ca - uz * sa, dz = ux * sa + uz * ca;
+        spot = { x: pl.x + dx * r, z: pl.z + dz * r }; what = "covering you";
+      }
+      t = melee ? "t_off" : "t_mid";
+    } else if (now - (OWNER_HURT.get(p.id)?.t ?? -9999) < 120) {
+      const a = (idx / n) * Math.PI * 2; spot = { x: pl.x + Math.cos(a) * 1.3, z: pl.z + Math.sin(a) * 1.3 }; what = "covering you"; t = melee ? "t_off" : "t_mid";
+    } else {
+      // the diamond (more men: a ring), turned to where you look; indoors it draws in, the point man still a step ahead
+      const yaw = p.getRotation().y * Math.PI / 180, fx = -Math.sin(yaw), fz = Math.cos(yaw), rx = -fz, rz = fx;
+      const S = inside ? 0.65 : 1;
+      const SLOTS = [[3.2, 0], [-2.6, 0], [0, 2.6], [0, -2.6], [2.4, 2.4], [2.4, -2.4], [-2.2, 2.2], [-2.2, -2.2]];
+      const [a, b] = SLOTS[idx % SLOTS.length], ring = 1 + Math.floor(idx / SLOTS.length) * 0.5;
+      spot = { x: pl.x + (fx * a + rx * b) * S * ring, z: pl.z + (fz * a + rz * b) * S * ring };
+      what = idx === 0 ? "on point" : "on the detail";
+    }
+    const w = walkableNear(e.dimension, spot.x, spot.z, pl.y);
+    if (!w || Math.abs(w.y - pl.y) > 2.5) return undefined;                                // (no footing there: plain following)
+    const gap = Math.hypot(w.x - e.location.x, w.z - e.location.z);
+    GUARD_ON.set(e.id, now);
+    if (gap < 0.7) return { g: "g_none", t, urgent: false, note: what };
+    if (gap < 3.2) push(e, { x: (w.x - e.location.x) * 0.2, y: 0.02, z: (w.z - e.location.z) * 0.2 }, 3);   // (the last steps: walking stops short of a marker)
+    const slot = myMarker(e, { x: w.x, y: w.y, z: w.z }, "war:mymk", 0.8);
+    return slot !== undefined ? { g: "g_wp", slot, t, urgent: true, note: what } : undefined;
+  },
+});
+
+// ================================================================ v9.15: officers wear an insignia
+// The man running each squad (its sergeant: the one who takes command) shows gold shoulder boards and a badge.
+system.runInterval(() => {
+  const now = tick(), officers = new Set();
+  if (setting("bands", true) !== false) {
+    for (const S of squads.values()) {
+      try {
+        if (!S.ours?.length || now - S.t > 200) continue;
+        const live = S.ours.filter((o) => o.isValid && !downed.has(o.id));
+        if (live.length < 2) continue;
+        let sg = S.sgt ? live.find((o) => o.id === S.sgt) : undefined;
+        if (!sg) { sg = live.filter((o) => GUNS.includes(sd(o).weapon)).sort((a, b) => (a.id < b.id ? -1 : 1))[0] ?? live.sort((a, b) => (a.id < b.id ? -1 : 1))[0]; S.sgt = sg.id; }
+        officers.add(sg.id);
+      } catch {}
+    }
+  }
+  for (const e of allOf(SOLDIER)) { try { const want = officers.has(e.id); if (!!P(e, "war:officer") !== want) setP(e, "war:officer", want); } catch {} }
+}, 100);
+
+// ================================================================ v9.15: night battles: illumination flares
+// At night a squad in a firefight now and then sends up a flare over the enemy: it climbs, pops, and drifts down for
+// ~20 s lighting the ground under it (invisible light blocks in the air, taken away as it moves and when it's out).
+const FLARES = [];
+let FLARE_LIGHTS = new Map();    // "dim|x|y|z" -> true: light blocks placed
+let LIGHT_PERM, LIGHT_TRIED = false;
+function lightPerm() {                                                                // (resolved once the world runs; older versions: one block with a level)
+  if (LIGHT_TRIED) return LIGHT_PERM;
+  LIGHT_TRIED = true;
+  for (const f of [() => BlockPermutation.resolve("minecraft:light_block_15"), () => BlockPermutation.resolve("minecraft:light_block", { block_light_level: 15 })]) { try { LIGHT_PERM = f(); if (LIGHT_PERM) break; } catch {} }
+  return LIGHT_PERM;
+}
+function saveFlareLights() { try { setJSON(world, "war:flarelights", [...FLARE_LIGHTS.keys()]); } catch {} }
+function unlight(key) {
+  const [dm, x, y, z] = key.split("|");
+  try { const b = world.getDimension(dm).getBlock({ x: Number(x), y: Number(y), z: Number(z) }); if (b && b.typeId.startsWith("minecraft:light_block")) b.setType("minecraft:air"); } catch {}
+}
+system.runTimeout(() => { try { for (const k of getJSON(world, "war:flarelights", [])) unlight(k); world.setDynamicProperty("war:flarelights", undefined); } catch {} }, 60);   // (left from a flare when the world closed)
+function fireFlare(e, at) {
+  const h = headLoc(e);
+  FLARES.push({ dim: e.dimension, x: h.x, y: h.y, z: h.z, tx: at.x, tz: at.z, top: h.y + 26, t: 0, lights: new Set(), vx: (Math.random() - 0.5) * 0.03, vz: (Math.random() - 0.5) * 0.03 });
+  try { e.dimension.playSound("firework.launch", h, { volume: 3, pitch: 0.8 }); } catch {}
+  callout(e, "Flare up!", { event: true }); v9stat("flare");
+}
+system.runInterval(() => {
+  if (!NIGHT || setting("nightfx", true) === false || FLARES.length >= 2) return;
+  const now = tick();
+  for (const S of squads.values()) {
+    try {
+      if (!S.ours?.length || now - S.t > 40 || !S.known?.size || !S.ourC || now - (S.flareT ?? -99999) < 900 || Math.random() > 0.3) continue;
+      let q, qd = 1e9; for (const kk of S.known.values()) { const dd = Math.hypot(kk.x - S.ourC.x, kk.z - S.ourC.z); if (dd < qd) { qd = dd; q = kk; } }
+      if (!q || qd < 12) continue;
+      const e = S.ours.find((o) => o.isValid && !downed.has(o.id) && !isIndoors(o) && sd(o).div !== "medic");
+      if (!e) continue;
+      S.flareT = now; fireFlare(e, { x: (q.x * 2 + S.ourC.x) / 3, z: (q.z * 2 + S.ourC.z) / 3 }); return;
+    } catch {}
+  }
+}, 40);
+system.runInterval(() => {
+  let changed = false;
+  for (let i = FLARES.length - 1; i >= 0; i--) {
+    const F = FLARES[i];
+    try {
+      F.t += 2;
+      if (F.t <= 40) { const k = F.t / 40; F.x += (F.tx - F.x) * 0.06; F.z += (F.tz - F.z) * 0.06; F.y += (F.top - F.y) * 0.12 * (1 - k * 0.5); if (F.t % 4 === 0) F.dim.spawnParticle("minecraft:basic_smoke_particle", { x: F.x, y: F.y, z: F.z }); if (F.t === 40) F.dim.playSound("firework.blast", { x: F.x, y: F.y, z: F.z }, { volume: 4 }); }
+      else { F.y -= 0.12; F.x += F.vx; F.z += F.vz; F.dim.spawnParticle("war:flare", { x: F.x, y: F.y, z: F.z }); }
+      // its light: a few light blocks a little above the ground under it, moved as it drifts (every ~1.5 s)
+      if (F.t > 40 && F.t % 30 === 0 && lightPerm()) {
+        const want = new Set();
+        for (const [ox, oz] of [[0, 0], [9, 0], [-9, 0], [0, 9], [0, -9]]) {
+          let top; try { top = F.dim.getTopmostBlock({ x: F.x + ox, z: F.z + oz }); } catch {}
+          if (!top || top.location.y + 4 > F.y) continue;
+          const y = top.location.y + 4;
+          const key = `${F.dim.id}|${Math.floor(F.x + ox)}|${y}|${Math.floor(F.z + oz)}`;
+          want.add(key);
+          if (!F.lights.has(key)) { try { const b = F.dim.getBlock({ x: Math.floor(F.x + ox), y, z: Math.floor(F.z + oz) }); if (b?.isAir) { b.setPermutation(LIGHT_PERM); F.lights.add(key); FLARE_LIGHTS.set(key, true); changed = true; } } catch {} }
+        }
+        for (const k of [...F.lights]) if (!want.has(k)) { unlight(k); F.lights.delete(k); FLARE_LIGHTS.delete(k); changed = true; }
+      }
+      if (F.t > 440 || F.y < -60) { for (const k of F.lights) { unlight(k); FLARE_LIGHTS.delete(k); } changed = true; FLARES.splice(i, 1); }
+    } catch { FLARES.splice(i, 1); }
+  }
+  if (changed) saveFlareLights();
+}, 2);
