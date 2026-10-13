@@ -59,7 +59,7 @@
             -180.0,
             180.0
           ],
-          "default": -90.0,
+          "default": 0.0,
           "client_sync": true
         },
         "war:tg": {

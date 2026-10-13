@@ -542,6 +542,15 @@ function usedSlots() {
   for (const v of threatSlot.values()) used.add(v);
   return used;
 }
+// v9.14: markers run short: what holds them that nobody's used for 5 minutes lets go (old marches, soldiers out of sight)
+function freeSlots() {
+  const now = tick(), ms = getMarches(), byId = new Set(allOf(SOLDIER).map((e) => e.id));
+  for (const [id, m] of Object.entries(ms)) if (!(m.members ?? []).some((x) => byId.has(x)) && now - (m.seenT ?? now) > 6000) { for (const s2 of m.lanes ?? []) laneOf.delete(s2); delete ms[id]; }
+  try { saveMarches(); } catch {}
+  const refs = getRefs();
+  for (const id of Object.keys(refs)) if (!byId.has(id) && now - (refSeen.get(id) ?? now) > 6000) { delete refs[id]; refSeen.delete(id); }
+  gcWaypoints(allOf(SOLDIER));
+}
 function gcWaypoints(soldiers) {
   for (const s of soldiers) { try { noteRefs(s); } catch {} }
   const used = usedSlots();
@@ -1442,7 +1451,7 @@ function oneShot(v, ev, cause) {
 // on its own joint), so nothing comes apart unless it's meant to: a limb or the head torn off is its own tumbling
 // piece. Each body runs only while it moves (a second or two) and then sleeps; a later blast wakes it again.
 const RD = new Map();                      // entity id -> sim { c, pts, cons, gib, act, still, t, sent, ... }
-const RD_ACTIVE_MAX = 8;
+const RD_ACTIVE_MAX = 10;
 const RD_G = 0.075;
 const V3 = (x, y, z) => ({ x, y, z });
 const vadd = (a, b) => V3(a.x + b.x, a.y + b.y, a.z + b.z), vsub = (a, b) => V3(a.x - b.x, a.y - b.y, a.z - b.z), vmul = (a, k) => V3(a.x * k, a.y * k, a.z * k);
@@ -1460,12 +1469,14 @@ const RD_MASS = [1.4, 1.4, 1.2, 1.2, 0.8, 0.35, 0.35, 0.45, 0.45, 0.4, 0.4, 0.6,
 const RD_LIMB = { 1: [4], 2: [5], 3: [6], 4: [7], 5: [8] };   // limb -> its end point (head, right arm, left arm, right leg, left leg)
 const RD_BODY_PROPS = ["war:ta", "war:tb", "war:tg", "war:ha", "war:hb", "war:raa", "war:rab", "war:laa", "war:lab", "war:rla", "war:rlb", "war:lla", "war:llb", "war:rac", "war:rad", "war:lac", "war:lad", "war:rlc", "war:rld", "war:llc", "war:lld"];
 const hardAt = (dim, l) => { try { const b = dim.getBlock(l); return !!b && !b.isLiquid && !passable(b); } catch { return false; } };
+const RD_CELLS = new Map();   // "dim|x|y|z" -> solid? (shared by every body: they fall in the same places; cleared every 10 s)
 const rdSolid = (s, x, y, z) => {
-  const bx = Math.floor(x), by = Math.floor(y), bz = Math.floor(z), k = bx + "," + by + "," + bz;
-  let v = s.cells.get(k);
-  if (v === undefined) { v = hardAt(s.dim, { x: bx + 0.5, y: by + 0.5, z: bz + 0.5 }); s.cells.set(k, v); }
+  const bx = Math.floor(x), by = Math.floor(y), bz = Math.floor(z), k = s.dim.id + "|" + bx + "," + by + "," + bz;
+  let v = RD_CELLS.get(k);
+  if (v === undefined) { v = hardAt(s.dim, { x: bx + 0.5, y: by + 0.5, z: bz + 0.5 }); RD_CELLS.set(k, v); }
   return v;
 };
+system.runInterval(() => RD_CELLS.clear(), 200);
 function rdCons(lying, mask) {
   const P = RD_REST.map(([r, u, f]) => V3(r, u, f)), d = (i, j) => vlen(vsub(P[i], P[j]));
   const cs = [], rig = (i, j) => cs.push([i, j, d(i, j), d(i, j)]), rng = (i, j, lo, hi) => cs.push([i, j, lo, hi]);
@@ -1529,7 +1540,7 @@ function rdStep(s) {
     if (ground || rdSolid(s, x, y - r - 0.03, z)) { vx *= 0.55; vz *= 0.55; }                   // (dragging on the ground)
     q.o = V3(x - vx, y - vy, z - vz); q.p = V3(x, y, z);
   }
-  for (let it = 0; it < 8; it++) {
+  for (let it = 0; it < 6; it++) {
     for (const [i, j, lo, hi] of s.cons) {
       const a = s.pts[i], b = s.pts[j], dv = vsub(b.p, a.p), L = vlen(dv) || 1e-6;
       const t = L < lo ? lo : L > hi ? hi : L; if (t === L) continue;
@@ -1572,40 +1583,54 @@ function rdRender(s, final) {
   const at = s.gib ? vmul(vadd(p[0], p[1]), 0.5) : vmul(vadd(p[0], p[1]), 0.5);
   try { c.teleport(at, { rotation: { x: 0, y: 0 } }); } catch {}
   const ang = rdAngles(s), keys = s.gib ? ["war:ga", "war:gb"] : RD_BODY_PROPS;
-  ang.forEach((v, i) => { const val = Math.round(v * 10) / 10; if (final || s.sent[i] === undefined || Math.abs(val - s.sent[i]) >= 0.6) { try { c.setProperty(keys[i], Math.max(-180, Math.min(180, val))); s.sent[i] = val; } catch {} } });
+  ang.forEach((v, i) => { const val = Math.round(v * 10) / 10; if (final || s.sent[i] === undefined || Math.abs(val - s.sent[i]) >= 1.5) { try { c.setProperty(keys[i], Math.max(-180, Math.min(180, val))); s.sent[i] = val; } catch {} } });
   if (s.squirt && s.t < 50 && s.t % 4 === 0 && gore()) {                                            // (a stump keeps pumping for a while)
     const from = s.gib ? p[0] : s.squirt.map((i) => p[i]).reduce((a, b) => vadd(a, vmul(b, 1 / s.squirt.length)), V3(0, 0, 0));
     sprayBlood(s.dim, from, 0);
   }
 }
+// v9.14: the cheap way down: laid flat along the way he was going, on his back or his face, on the ground under him
+function rdLay(s) {
+  const p = s.pts.map((q) => q.p), hc = vmul(vadd(p[0], p[1]), 0.5);
+  if (s.gib) { const L = vlen(vsub(p[1], p[0])); let y = hc.y; for (let k = 0; k < 6 && !rdSolid(s, hc.x, y - 0.2, hc.z); k++) y -= 1; y = Math.floor(y - 0.2) + 1.12; s.pts[0].p = s.pts[0].o = V3(hc.x - L / 2, y, hc.z); s.pts[1].p = s.pts[1].o = V3(hc.x + L / 2, y, hc.z); return; }
+  const v = vsub(s.pts[2].p, s.pts[2].o), L0 = Math.hypot(v.x, v.z), dir = L0 > 0.01 ? V3(v.x / L0, 0, v.z / L0) : V3(1, 0, 0);
+  const up = Math.random() < 0.65, U = dir, F = up ? V3(0, 1, 0) : V3(0, -1, 0), R = vcross(F, U);
+  let y = hc.y; for (let k = 0; k < 6 && !rdSolid(s, hc.x, y - 0.2, hc.z); k++) y -= 1; y = Math.floor(y - 0.2) + 1.13;
+  const base = V3(hc.x, y, hc.z), spread = [0, 0, 0, 0, 0, 0.25 + Math.random() * 0.3, -0.25 - Math.random() * 0.3, 0.06, -0.06, 0.12, -0.12, 0.03, -0.03];
+  RD_REST.forEach(([r, u, f], i) => { const q = vadd(base, vadd(vmul(R, r + (spread[i] ?? 0)), vmul(U, u))); s.pts[i].p = q; s.pts[i].o = q; });
+}
 // a new body (or a torn-off piece) from where the man stood
 function rdStart(c, gibIdx, pts, vel, mask, squirt) {
-  const s = { c, dim: c.dimension, gib: gibIdx, cells: new Map(), t: 0, still: 0, sent: [], squirt,
+  const s = { c, dim: c.dimension, gib: gibIdx, cells: RD_CELLS, t: 0, still: 0, sent: gibIdx ? [] : RD_BODY_PROPS.map(() => 0), squirt,
     pts: pts.map((p, i) => ({ p, o: vsub(p, vel[i]) })) };
   if (gibIdx) { const L = vlen(vsub(pts[1], pts[0])); s.cons = [[0, 1, L, L]]; s.rad = [0.12, 0.12]; s.mass = [1, 1]; }
   else { s.cons = rdCons(false, mask); s.rad = RD_RAD; s.mass = RD_MASS; s.hinges = [[3, 9, 5, -1], [2, 10, 6, -1], [1, 11, 7, 1], [0, 12, 8, 1]].filter(([, , e]) => !(mask & { 5: 2, 6: 4, 7: 8, 8: 16 }[e])); }
   RD.set(c.id, s); s.act = true;
   const actives = [...RD.values()].filter((q) => q.act).length;
-  if (actives > RD_ACTIVE_MAX) { for (let i = 0; i < 160; i++) if (rdStep(s)) break; s.act = false; rdRender(s, true); }   // (too many falling at once: this one falls in one go)
+  if (actives > RD_ACTIVE_MAX && !s.fall) { rdLay(s); s.act = false; rdRender(s, true); }   // (too many falling at once: this one is laid down where he fell, no physics)   // (too many falling at once: this one falls in one go)
   else rdRender(s, true);
   return s;
 }
+let RD_RR = 0;
 system.runInterval(() => {
   if (!RD.size) return;
-  const t0 = Date.now();
-  for (const [id, s] of RD) {
+  const t0 = Date.now(), all = [...RD];
+  const n = all.length, start = RD_RR % Math.max(1, n); RD_RR++;
+  for (let k = 0; k < n; k++) {
+    const [id, s] = all[(start + k) % n];
+    if (Date.now() - t0 > 3) break;                                                                 // (v9.14: 3 ms a tick for all of them; the rest go on next tick)
     try {
       if (!s.c?.isValid) { RD.delete(id); continue; }
       if (!s.act) continue;
       if (s.t % 10 === 0) { const h0 = s.pts[0].p; s.near = [...RD.values()].filter((o) => o !== s && !o.gib && o.dim.id === s.dim.id && Math.abs(o.pts[0].p.x - h0.x) < 2.5 && Math.abs(o.pts[0].p.z - h0.z) < 2.5 && Math.abs(o.pts[0].p.y - h0.y) < 2.5); }
       let done = rdStep(s);
       if (s.fall && s.t >= 70) done = true;
-      if (done || s.t % 2 === 0 || s.t < 4) rdRender(s, done);                                 // (the client smooths in between)
+      if (done || s.t % 3 === 0 || s.t < 3) rdRender(s, done);                                 // (the client smooths in between)
       if (done && s.fall) { finishFall(s); RD.delete(id); continue; }
-      if (done) { s.act = false; s.cells.clear(); if (!s.gib && !s.pooled && !s.fall && gore()) { s.pooled = true; const p0 = s.pts[0].p, p1 = s.pts[1].p, p2 = s.pts[2].p; try { s.dim.spawnParticle("war:bpool", { x: (p0.x + p1.x + p2.x) / 3, y: Math.min(p0.y, p1.y) - 0.1, z: (p0.z + p1.z + p2.z) / 3 }); } catch {} } }
+      if (done) { s.act = false; if (!s.gib && !s.pooled && !s.fall && gore()) { s.pooled = true; const p0 = s.pts[0].p, p1 = s.pts[1].p, p2 = s.pts[2].p; try { s.dim.spawnParticle("war:bpool", { x: (p0.x + p1.x + p2.x) / 3, y: Math.min(p0.y, p1.y) - 0.1, z: (p0.z + p1.z + p2.z) / 3 }); } catch {} } }
     } catch (err) { RD.delete(id); oops("ragdoll", err); }
   }
-  const ms = Date.now() - t0; if (ms > (globalThis.__rdMs ?? 0)) globalThis.__rdMs = ms;
+  const ms = Date.now() - t0; if (ms > (globalThis.__rdMs ?? 0)) globalThis.__rdMs = ms; globalThis.__rdTot = (globalThis.__rdTot ?? 0) + ms;
 }, 1);
 function rdShot(dim, from, u, end) {
   for (const s of RD.values()) {
@@ -1668,7 +1693,9 @@ function finishFall(s) {
   } catch {}
   try { setP(e, "war:hide", false); equip(e, weaponItem(e)); } catch {}
 }
-function spawnCorpse(v, how) {
+function spawnCorpse(v, how) { const T0 = Date.now(); try { return spawnCorpse0(v, how); } finally { globalThis.__scTot = (globalThis.__scTot ?? 0) + Date.now() - T0; globalThis.__scN = (globalThis.__scN ?? 0) + 1; } }
+function spawnCorpse0(v, how) {
+  const T0x = Date.now();
   const dim = v.dimension, l = v.location, now = tick();
   const f = Number(P(v, "war:faction") ?? 0), med = !!P(v, "war:medic"), yaw = (() => { try { return v.getRotation().y; } catch { return 0; } })();
   let sk = 0, cav = false; try { sk = Number(v.getProperty("war:skin") ?? 0); cav = !!v.getProperty("war:cav"); } catch {}   // (the skin he's drawn with: his own, or his faction's)
@@ -1698,8 +1725,9 @@ function spawnCorpse(v, how) {
     return vadd(v0, vmul(mo, i >= 7 && i !== 9 && i !== 10 ? 0.4 : 1));                       // (a running man keeps going: his feet catch)
   });
   const squirt = mask & 1 ? [2, 3] : mask & 2 ? [3] : mask & 4 ? [2] : mask & 8 ? [1] : mask & 16 ? [0] : undefined;
-  const body = make(hc, 0);
-  const bs = rdStart(body, 0, pts, vel, mask, squirt);
+  const T1 = Date.now(); const body = make(hc, 0);
+  const T2 = Date.now(); const bs = rdStart(body, 0, pts, vel, mask, squirt);
+  const PT = globalThis.__ph ?? (globalThis.__ph = { make: 0, start: 0, pre: 0 }); PT.pre += T1 - T0x; PT.make += T2 - T1; PT.start += Date.now() - T2;
   if (how?.fall) { bs.fall = v.id; bs.act = true; return body; }   // (v9.14: a wounded man's fall: no gibs, no burst)
   // torn-off pieces: their own physics, thrown harder
   const GIB = { 1: [[2, 3], 4, 1], 2: [[3], 5, 2], 3: [[2], 6, 3], 4: [[1], 7, 4], 5: [[0], 8, 5] };
@@ -2789,7 +2817,16 @@ async function giveOrderInner(player, cfg, given) {
       slot = makeWaypoint(player.dimension, spot);
     }
   }
-  if ((order === "charge" || order === "hold" || order === "patrol" || order === "roam") && !slot) { gcWaypoints(allOf(SOLDIER)); player.onScreenDisplay.setActionBar("§eMarkers were full and have been cleaned up. Give the order again."); return; }
+  if ((order === "charge" || order === "hold" || order === "patrol" || order === "roam") && !slot) {
+    // v9.14: no marker for it: free what's held for nothing and try once more, straight away (no "give the order again")
+    freeSlots();
+    if (orderDest) { slot = makeWaypoint(player.dimension, orderDest); if (slot) { march = undefined; spotCenter = orderDest; walkTo = orderDest; } }
+    if (!slot) {
+      let loadedSpot = false; try { loadedSpot = !!orderDest && !!player.dimension.getBlock(orderDest); } catch {}
+      player.onScreenDisplay.setActionBar(loadedSpot ? "§eEvery marker is in use. Remove some old soldiers (War Table > Cleanup) and try again." : "§eThat spot isn't loaded yet (too far from any player). Pick a closer spot, or walk nearer first.");
+      return;
+    }
+  }
   let n = 0;
   for (const e of pool) {
     try {
@@ -5147,7 +5184,12 @@ system.runInterval(() => {
     m.members = m.members ?? [];
     if (!m.members.length) { for (const s of m.lanes) laneOf.delete(s); delete ms[id]; changed = true; continue; } // everyone arrived, died or got new orders
     const all = m.members.map((x) => byId.get(x)).filter((e) => e);
-    if (!all.length) continue;                                  // out of range: keep the order, resume when they load again
+    if (!all.length) {                                          // out of range: keep the order, resume when they load again
+      if (m.seenT === undefined || m.seenT > now) { m.seenT = now; changed = true; }
+      else if (now - m.seenT > 36000) { for (const s2 of m.lanes) laneOf.delete(s2); delete ms[id]; changed = true; }   // (v9.14: nobody of it seen for 30 min: gone; its markers were held for good)
+      continue;
+    }
+    m.seenT = now;
     const members = all.filter(marchActive);
     if (!members.length) continue;                              // everyone down or captured: nothing to lead
     if (!m.path && !m.planning && !m.final) {                    // (after a reload) plan again from the group
@@ -10805,6 +10847,7 @@ system.runInterval(() => {
       const d = sd(e), cd = d.div === "cavalier" ? cavDest(e, d) : undefined;
       let want = cd ?? rideDest(e, d);
       if (!cd && want && d.div === "cavalier" && rideTo.has(id)) want = cavLine(e, d, want);
+      if (want && !want.strike && !isBoatType(m.typeId)) want = rideRoute(e, m, want);          // (v9.14: round walls, along a planned route)
       if (want?.strike) cavStrike(e, d, m, want);
       const l = m.location, vel = m.getVelocity();
       let tx = 0, tz = 0;
@@ -10816,7 +10859,7 @@ system.runInterval(() => {
           sp *= want.pace ?? 1;
           if (d.div === "cavalier") { const v0 = Math.hypot(vel.x, vel.z); CAV_STUCK.set(id, L > want.stop + 3 && v0 < 0.04 ? (CAV_STUCK.get(id) ?? 0) + 1 : 0); }   // (v9.14: going nowhere)
           if (want.fast) sp *= 1.15; else if (want.slow) sp *= 0.75; else if (gunState.get(id)?.target?.isValid) sp *= 0.5;   // (firing from the saddle: easy; a charge: flat out)
-          sp *= Math.min(1, (L - want.stop) / 4 + 0.3);
+          if (!want.route) sp *= Math.min(1, (L - want.stop) / 4 + 0.3);                              // (on a route: full pace from point to point)
           tx = (dx / L) * sp; tz = (dz / L) * sp;
           const yaw = (Math.atan2(-dx, dz) * 180) / Math.PI;
           try { m.setRotation({ x: 0, y: turnToward(m.getRotation().y, yaw, 12) }); } catch {}
@@ -10975,6 +11018,47 @@ function cavStrike(e, d, m, want) {
   try { t.applyKnockback({ x: (t.location.x - e.location.x) * 0.6, z: (t.location.z - e.location.z) * 0.6 }, 0.25); } catch {}
   const dx = t.location.x - e.location.x, dz = t.location.z - e.location.z, L = Math.hypot(dx, dz) || 1;
   CAV_PASS.set(e.id, { at: { x: t.location.x + (dx / L) * 10, y: t.location.y, z: t.location.z + (dz / L) * 10 }, until: now + 80 });
+}
+// v9.14: a mounted man rode straight at where he was going and stuck on the first wall; now, when the way isn't plainly
+// clear or it's a long way, the route planner works out the way (as it does on foot) and the mount follows it point by
+// point, replanning when stuck or when the goal moves. No markers are made for it.
+const RIDE_RT = new Map();   // rider id -> { dest, pts, idx, t, job, planning }
+function rideRoute(e, m, want) {
+  try {
+    const now = tick(), l = m.location, id = e.id, far = Math.hypot(want.at.x - l.x, want.at.z - l.z);
+    if (far <= want.stop + 1) { RIDE_RT.delete(id); return want; }
+    let R = RIDE_RT.get(id);
+    const stuck = (CAV_STUCK.get(id) ?? 0) > 12 || (R?.stuckN ?? 0) > 12;
+    if (R && (Math.hypot(R.dest.x - want.at.x, R.dest.z - want.at.z) > 6 || now - R.t > 600 || (stuck && now - R.t > 40))) { if (R.job) R.job.cancel = true; RIDE_RT.delete(id); R = undefined; }
+    if (!R) {
+      const head = { x: l.x, y: l.y + 1.5, z: l.z }, tgt = { x: want.at.x, y: (want.at.y ?? l.y) + 1.5, z: want.at.z };
+      if (far < 24 && !stuck && clearShot(m.dimension, head, tgt)) return want;                   // (plainly clear: straight there)
+      R = { dest: { ...want.at }, pts: undefined, idx: 0, t: now, planning: true, stuckN: 0 };
+      RIDE_RT.set(id, R); if (RIDE_RT.size > 400) RIDE_RT.clear();
+      R.job = planRoute(m.dimension, { x: l.x, y: l.y, z: l.z }, { x: want.at.x, y: want.at.y ?? l.y, z: want.at.z }, (pts) => {
+          R.planning = false; R.idx = 0;
+          // (a horse is wider than a man: each point is moved off the walls next to it, so he doesn't catch the corners)
+          R.pts = pts?.map((q) => { let ox = 0, oz = 0; for (const [dx, dz] of [[1, 0], [-1, 0], [0, 1], [0, -1], [1, 1], [1, -1], [-1, 1], [-1, -1]]) if (solidAt(m.dimension, { x: q.x + dx, y: q.y + 1.2, z: q.z + dz })) { ox -= dx; oz -= dz; } const L = Math.hypot(ox, oz); return L ? { x: q.x + (ox / L) * 0.9, y: q.y, z: q.z + (oz / L) * 0.9 } : q; });
+        },
+        { max: Math.min(20000, Math.max(3000, Math.round(far * 300))), maxRadius: Math.min(90, far + 30) });
+    }
+    if (!R.pts?.length) return want;                                                                // (still working it out: straight on meanwhile)
+    { let bj = R.idx, bd = Infinity; for (let j = R.idx; j < Math.min(R.pts.length, R.idx + (R.idx === 0 ? R.pts.length : 12)); j++) { const q2 = R.pts[j], dd = Math.hypot(q2.x - l.x, q2.z - l.z) + Math.abs(q2.y - l.y) * 2; if (dd < bd) { bd = dd; bj = j; } } R.idx = bj; }   // (he rode on while it was worked out: from the point he's nearest)
+    while (R.idx < R.pts.length - 1 && Math.hypot(R.pts[R.idx].x - l.x, R.pts[R.idx].z - l.z) < 1.8) R.idx++;
+    // (look ahead: the furthest of the next few points he can ride straight to)
+    let k = R.idx;
+    const wide = (q) => { const dx = q.x - l.x, dz = q.z - l.z, L = Math.hypot(dx, dz) || 1, px = (-dz / L) * 0.7, pz = (dx / L) * 0.7;   // (as wide as the horse)
+      return [0, 1, -1].every((sg) => clearShot(m.dimension, { x: l.x + px * sg, y: l.y + 1.2, z: l.z + pz * sg }, { x: q.x + px * sg, y: q.y + 1.2, z: q.z + pz * sg })); };
+    for (let j = R.idx + 1; j < Math.min(R.pts.length, R.idx + 6); j++) { const q = R.pts[j]; if (Math.abs(q.y - l.y) > 1.2 || !wide(q)) break; k = j; }
+    const v0 = m.getVelocity(); R.stuckN = Math.hypot(v0.x, v0.z) < 0.03 ? R.stuckN + 1 : 0;
+    const q = R.pts[k];
+    if (R.idx >= R.pts.length - 1 && Math.hypot(q.x - l.x, q.z - l.z) < 1.8) return want;
+    if (R.stuckN > 8) {                                                                             // (grinding on a corner: a shove off it)
+      let ox = 0, oz = 0; for (const [dx, dz] of [[1, 0], [-1, 0], [0, 1], [0, -1], [1, 1], [1, -1], [-1, 1], [-1, -1]]) if (solidAt(m.dimension, { x: l.x + dx * 0.9, y: l.y + 1.2, z: l.z + dz * 0.9 })) { ox -= dx; oz -= dz; }
+      const L = Math.hypot(ox, oz); if (L) try { m.applyImpulse({ x: (ox / L) * 0.25, y: 0, z: (oz / L) * 0.25 }); } catch {}
+    }
+    return { ...want, at: { x: q.x, y: q.y, z: q.z }, stop: 0.3, pace: want.pace, route: true };
+  } catch { return want; }
 }
 // your followers ride when you do, and get off when you do
 const leaderRode = new Map(); // player id -> was riding (non-add-on mount) last check

@@ -542,10 +542,10 @@ KS.ragperf = async (o, ox, oz) => {
   for (const c of ow().getEntities({ type: "war:corpse" })) { try { c.remove(); } catch {} }
   const men = []; for (let i = 0; i < 20; i++) men.push(kitSoldier(1, { x: ox - 8 + (i % 5) * 4 + 0.5, y: Y, z: oz - 8 + Math.floor(i / 5) * 4 + 0.5 }, "rifle", "hold"));
   await kitWait(20);
-  globalThis.__rdMs = 0;
+  globalThis.__rdMs = 0; globalThis.__ph = undefined; globalThis.__scTot = 0; globalThis.__scN = 0;
   men.forEach((v, i) => { killHow.set(v.id, { limb: 0, mask: i % 4 === 0 ? 2 : 0, dir: { x: 1, y: 0, z: 0 }, power: i % 3 === 0 ? 0.9 : 0.3 }); killReal(v); });
   let peak = 0; for (let k = 0; k < 100; k++) { await kitWait(1); peak = Math.max(peak, [...RD.values()].filter((q) => q.act).length); }
-  return { worstTickMs: globalThis.__rdMs, peakActive: peak, tracked: RD.size, stillActive: [...RD.values()].filter((q) => q.act).length };
+  return { phases: globalThis.__ph, scTot: globalThis.__scTot, scN: globalThis.__scN, worstTickMs: globalThis.__rdMs, peakActive: peak, tracked: RD.size, stillActive: [...RD.values()].filter((q) => q.act).length };
 };
 // v9.11: a body wears the skin the man wore: his own, or his faction's
 KS.corpseskin = async (o, ox, oz) => {
@@ -762,6 +762,22 @@ KS.hpseen = async (o, ox, oz) => {
   for (const e of [a, b]) try { e.remove(); } catch {}
   return { seen };
 };
+// v9.14: who makes waypoints, and how many, while cavalry ride an order through a walled course
+KS.wpcount = async (o, ox, oz) => {
+  floorAt(ox - 40, oz - 40, ox + 40, oz + 40);
+  kfill(ox - 10, Y, oz - 20, ox - 10, Y + 2, oz + 15, "stone_bricks");                    // (a wall to get round)
+  const counts = {}, orig = makeWaypoint;
+  makeWaypoint = (...a) => { const st = String(new Error().stack).split("\n")[2]?.trim().split(" ")[1] ?? "?"; counts[st] = (counts[st] ?? 0) + 1; return orig(...a); };
+  const n0 = allOf(WAYPOINT).length;
+  const riders = [0, 1, 2, 3].map((i) => kitCav(1, { x: ox - 25.5, y: Y, z: oz - 3 + i * 2 + 0.5 }, i % 2 ? "smg" : "sword", "minecraft:horse"));
+  await kitWait(60);
+  await kitOrder(1, { x: ox + 20, y: Y, z: oz }, "hold");
+  const startX = riders.map((e) => e.location.x);
+  const trace = [];
+  for (let k = 0; k < 6; k++) { await kitWait(100); trace.push(riders.map((e) => { const R = RIDE_RT.get(e.id); const m = e.getComponent("minecraft:riding")?.entityRidingOn, v = m?.getVelocity(); return `${(e.location.x - ox).toFixed(1)},${(e.location.z - oz).toFixed(1)} ${R ? (R.planning ? "plan" : R.pts ? `r${R.idx}/${R.pts.length} p0=${(R.pts[R.idx].x - ox).toFixed(1)},${R.pts[R.idx].y - Y},${(R.pts[R.idx].z - oz).toFixed(1)} p+=${R.pts[R.idx + 1] ? (R.pts[R.idx + 1].x - ox).toFixed(1) + "," + (R.pts[R.idx + 1].z - oz).toFixed(1) : "-"}` : "none") : "-"} v=${v ? Math.hypot(v.x, v.z).toFixed(3) : "?"} my=${m ? (m.location.y - Y).toFixed(2) : "?"}`; }).join(" | ")); }
+  makeWaypoint = orig;
+  return { trace, madeBy: counts, waypointsNow: allOf(WAYPOINT).length - n0, mounted: riders.map((e) => !!e.getComponent("minecraft:riding")?.entityRidingOn), progressX: riders.map((e, i) => Math.round(e.location.x - startX[i])), reached: riders.filter((e) => e.location.x > ox + 14).length };
+};
 // v9.7: a downed man in plain view of the enemy (who hold their fire) next to a wall: does he crawl behind it?
 KS.crawl = async (o, ox, oz) => {
   floorAt(ox - 20, oz - 20, ox + 30, oz + 20);
@@ -902,10 +918,10 @@ KS.big = async (o, ox, oz) => {
   for (let i = 0; i < N; i++) kitSoldier(2, { x: ox + (i % 20) * 2 - 20 + 0.5, y: Y, z: oz + 60 + Math.floor(i / 20) * 2 + 0.5 }, W8[i % 6]);
   await kitWait(20);
   await kitOrder(1, { x: ox, y: Y, z: oz + 60 }); await kitOrder(2, { x: ox, y: Y, z: oz - 60 });
-  globalThis.__dpReport?.(); globalThis.__evReport?.(1); const t0 = tick(), r0 = Date.now(); let slow = 0, last = Date.now(), worst = 0;
+  globalThis.__dpReport?.(); globalThis.__evReport?.(1); globalThis.__rdTot = 0; globalThis.__scTot = 0; globalThis.__scN = 0; const t0 = tick(), r0 = Date.now(); let slow = 0, last = Date.now(), worst = 0;
   await kitLoop(Number(o.ticks ?? 600), () => { const now = Date.now(), dt = now - last; last = now; worst = Math.max(worst, dt); if (dt > 600) slow++; return false; });
   const sec = (Date.now() - r0) / 1000, ticks = tick() - t0;
-  return { ev: globalThis.__evReport?.(tick() - t0), dp: globalThis.__dpReport?.(), n: N, ticks, realSec: +sec.toFixed(1), tps: +(ticks / sec).toFixed(1), worstGapMs: worst, left1: kitSoldiers(1).filter((e) => !isDown(e)).length, left2: kitSoldiers(2).filter((e) => !isDown(e)).length, ...kitShotStats(t0) };
+  return { bodyMsPerTick: +((globalThis.__rdTot + globalThis.__scTot) / Math.max(1, tick() - t0)).toFixed(2), corpses: globalThis.__scN, corpseMsEach: +(globalThis.__scTot / Math.max(1, globalThis.__scN)).toFixed(1), ev: globalThis.__evReport?.(tick() - t0), dp: globalThis.__dpReport?.(), n: N, ticks, realSec: +sec.toFixed(1), tps: +(ticks / sec).toFixed(1), worstGapMs: worst, left1: kitSoldiers(1).filter((e) => !isDown(e)).length, left2: kitSoldiers(2).filter((e) => !isDown(e)).length, ...kitShotStats(t0) };
 };
 function kitShotStats(t0) {
   const a = KSHOTS.filter((x) => x.t >= t0);
