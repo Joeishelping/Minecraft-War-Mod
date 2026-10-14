@@ -1,5 +1,21 @@
 # War Engine changelog
 
+## v9.20.2 (See out of your vehicles)
+
+The seats sat inside solid parts of the vehicle models (the truck cab, the gunboat cabin, the helicopter nose), and
+the troop boat's sail stood right at eye height in front of everyone. Reshaped so you can see ahead and look round:
+- Transport Truck: an open cab (low hood and dashboard, slim pillars, a high roof, no solid windscreen); the men in
+  the back see over the cab, and the bed has canvas hoops instead of a closed canvas.
+- Coast Guard Gunboat: an open wheelhouse (waist-high walls, pillars, a higher roof); the bow gun's shield is low.
+- Helicopter: an open-frame cockpit, waist-high cabin walls with door pillars, a higher roof.
+- Troop Boat: the sail is up above head height, and the driver's seat is now at the front.
+- Plane: the wing no longer passes through the passengers' eye line.
+- Tank: the second player sits up top by the hatch instead of behind the gun barrel.
+
+Measured from each driver's eye (a fan of sight lines 60 degrees left and right, level to 30 degrees up, 4 blocks out):
+the part of the view the vehicle itself blocks went from 44-97% to 10-22% for the truck, gunboat and helicopter drivers
+and from 48% to 12% on the troop boat (what's left is mostly thin pillars and the roof when you look up).
+
 ## v9.20.1 (Boats and trucks follow you)
 
 - "Mount up" from the Command Baton now also sets the men to follow you: in vanilla boats the man at the front rows
