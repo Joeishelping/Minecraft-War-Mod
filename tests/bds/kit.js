@@ -2058,3 +2058,49 @@ KS.brainy2 = async (o, ox, oz) => {
   globalThis.__fakeLeader = undefined; try { ld.remove(); } catch {} for (const e of fs) try { e.remove(); } catch {}
   return res;
 };
+KS.followform = async (o, ox, oz) => {
+  floorAt(ox - 40, oz - 40, ox + 40, oz + 40);
+  const res = {};
+  for (const shape of ["column", "line", "wedge"]) {
+    const fk = getJSON(world, "war:fshape", {}); fk["1|0"] = shape; setJSON(world, "war:fshape", fk);
+    const ld = ow().spawnEntity("minecraft:armor_stand", { x: ox - 20.5, y: Y, z: oz + 0.5 });
+    globalThis.__fakeLeader = (id) => (id === ld.id ? ld : undefined);
+    const fs = [0, 1, 2, 3, 4].map((i) => { const e = kitSoldier(1, { x: ox - 22.5 + i, y: Y, z: oz - 3.5 }, "rifle", "hold"); sdp(e, "war:squad", 0); giveFunction(e, "follow", ld); return e; });
+    await kitWait(60);
+    let gapSum = 0, n = 0, minPair = 99;
+    for (let k = 0; k < 240; k++) {
+      const l = ld.location; ld.teleport({ x: l.x + 0.13, y: Y, z: l.z + (k < 120 ? 0 : 0.06) }); await kitWait(1);
+      if (k > 60 && k % 10 === 0) { const F = FOLLOW.get(ld.id); if (!F) continue; for (const e of fs) { const sp = followSlot(e, sd(e), ld, F); if (sp) { gapSum += Math.hypot(sp.x - e.location.x, sp.z - e.location.z); n++; } } for (const a of fs) for (const b of fs) if (a !== b) minPair = Math.min(minPair, flat(a.location, b.location)); }
+    }
+    res[shape] = { avgGap: +(gapSum / Math.max(1, n)).toFixed(2), minPair: +minPair.toFixed(2), notes: fs.map((e) => notes.get(e.id)?.text ?? "").slice(0, 2) };
+    globalThis.__fakeLeader = undefined; try { ld.remove(); } catch {} for (const e of fs) try { e.remove(); } catch {}
+  }
+  const fk = getJSON(world, "war:fshape", {}); delete fk["1|0"]; setJSON(world, "war:fshape", fk);
+  return res;
+};
+KS.homeorder = async (o, ox, oz) => {
+  floorAt(ox - 40, oz - 40, ox + 40, oz + 40);
+  const fl = ow().spawnEntity(FLAG, { x: ox + 30.5, y: Y, z: oz + 0.5 }); setP(fl, "war:faction", 1); setP(fl, "war:rally", false); sdp(fl, "war:hq", true); claimSlot(fl);
+  const men = [0, 1, 2, 3].map((i) => kitSoldier(1, { x: ox - 25.5 + i, y: Y, z: oz + 0.5 }, "rifle", "hold"));
+  await kitWait(20);
+  const r = { hq: hqFlag(ow(), men[0].location, 1)?.id === fl.id };
+  await giveOrderInner(KIT_PLAYER, { faction: 1, order: ORDERS.findIndex((x) => x[0] === "home"), squad: 0, count: 0, radius: 400, stance: "aggressive", ao: 100, free: true }, men);
+  await kitWait(500);
+  r.distToHq = men.map((e) => Math.round(flat(e.location, fl.location)));
+  // healing at the HQ
+  const h = men[0].getComponent("minecraft:health"); h.setCurrentValue(8); await kitWait(400); r.healedTo = Math.round(h.currentValue);
+  for (const e of men) try { e.remove(); } catch {} try { fl.remove(); } catch {}
+  return r;
+};
+KS.watch = async (o, ox, oz) => {
+  floorAt(ox - 30, oz - 30, ox + 30, oz + 30);
+  kcmd("time set noon");
+  const men = [...Array(8).keys()].map((i) => kitSoldier(1, { x: ox - 4 + i + 0.5, y: Y, z: oz + 0.5 }, "rifle", "hold"));
+  for (const e of men) sdp(e, "war:ordt", -999999);
+  await kitWait(400);
+  const W = DAYWATCH.get(squadKey(men[0], sd(men[0])));
+  const c = { x: men.reduce((a, e) => a + e.location.x, 0) / 8, z: men.reduce((a, e) => a + e.location.z, 0) / 8 };
+  const r = { watchers: W?.ids.length ?? 0, out: (W?.ids ?? []).map((id) => { const e = world.getEntity(id); return e ? `${Math.round(flat(e.location, { x: ox, z: oz }))}:${notes.get(id)?.text}` : "-"; }) };
+  for (const e of men) try { e.remove(); } catch {}
+  return r;
+};

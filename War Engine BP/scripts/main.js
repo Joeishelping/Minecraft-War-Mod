@@ -854,9 +854,9 @@ function think(e) {
     updateName(e);
   }
   if (hp && hpr < 1 && now - lastHurt > 200) {
-    const rf = nearestFlag(e.dimension, e.location, (f) => !!P(f, "war:rally") && isFriendly(d.faction, Number(P(f, "war:faction"))), 8);
+    const rf = nearestFlag(e.dimension, e.location, (f) => (!!P(f, "war:rally") || !!gdp(f, "war:hq")) && isFriendly(d.faction, Number(P(f, "war:faction"))), 8);
     let heal = 0;
-    if (rf) heal = 2;                                              // at a rally point: real healing
+    if (rf) heal = 2;                                              // at a rally point (v9.19: or the HQ): real healing
     else if (now - Number(gdp(e, "war:selfheal") ?? -9999) > 340) { heal = 1; sdp(e, "war:selfheal", now); } // alone: ~1 HP per 17 s
     if (heal) hp.setCurrentValue(Math.min(hp.effectiveMax, hp.currentValue + heal));
   }
@@ -2643,7 +2643,7 @@ async function eggUse(player, div) {
 }
 
 // ================================================================ Command Baton (army only)
-const ORDERS = [["charge", "Charge POS"], ["hold", "Hold here"], ["patrol", "Patrol here"], ["follow", "Follow me"], ["fallback", "Fall back"], ["board", "Board the vehicle I'm looking at"], ["mark", "Mark this spot (where I'm standing)"], ["roam", "Roam the area (any floor, free to hunt)"], ["mount", "Mount up (saddled horses, camels, boats nearby)"], ["dismount", "Dismount"], ["cover", "Cover the spot I'm looking at"], ["waitfire", "Hold fire until I shoot"]];
+const ORDERS = [["charge", "Charge POS"], ["hold", "Hold here"], ["patrol", "Patrol here"], ["follow", "Follow me"], ["fallback", "Fall back"], ["board", "Board the vehicle I'm looking at"], ["mark", "Mark this spot (where I'm standing)"], ["roam", "Roam the area (any floor, free to hunt)"], ["mount", "Mount up (saddled horses, camels, boats nearby)"], ["dismount", "Dismount"], ["cover", "Cover the spot I'm looking at"], ["waitfire", "Hold fire until I shoot"], ["rallyflag", "Set a rally flag where I'm looking"], ["home", "Return to base (the faction's HQ flag)"]];
 const mapFunc = (order, div) => (div === "garrison" ? { hold: "post", patrol: "patrol", roam: "patrol", follow: "follow", charge: "charge" } : { hold: "hold", patrol: "patrol", roam: "patrol", follow: "follow", charge: "charge" })[order];   // (v7.0: roam = a free patrol)
 
 async function batonUse(player) {
@@ -2679,11 +2679,12 @@ async function batonUseInner(player) {
       .slider("Soldiers within (blocks)", 16, 200, { valueStep: 8, defaultValue: def.radius })
       .dropdown("Stance", ["Aggressive (chase what they see)", "Defensive (hold and shoot what comes)", "Hold fire (only shoot back)"], { defaultValueIndex: Math.max(0, ["aggressive", "defensive", "holdfire"].indexOf(def.stance ?? "aggressive")) })
       .slider("Area of operations (blocks)", 40, 200, { valueStep: 10, defaultValue: def.ao ?? 100 })
-      .dropdown("Freedom", ["Use judgment (fight anywhere in the area, help nearby friends)", "Exactly as ordered"], { defaultValueIndex: def.free === false ? 1 : 0 });
+      .dropdown("Freedom", ["Use judgment (fight anywhere in the area, help nearby friends)", "Exactly as ordered"], { defaultValueIndex: def.free === false ? 1 : 0 })
+      .dropdown("Formation (on the march and following you)", FORM_NAMES, { defaultValueIndex: Math.max(0, FORM_KEYS.indexOf(def.shape ?? "auto")) });
     const or = await show(of, player);
     if (!or || or.canceled || !or.formValues) return;
     const v = or.formValues.map(Number);
-    cfg = { faction: fac, coal: coalPick, order: v[0], squad: v[1], count: v[2], radius: v[3], stance: ["aggressive", "defensive", "holdfire"][v[4]] ?? "aggressive", ao: Math.round(v[5] ?? 100), free: v[6] !== 1 };
+    cfg = { faction: fac, coal: coalPick, order: v[0], squad: v[1], count: v[2], radius: v[3], stance: ["aggressive", "defensive", "holdfire"][v[4]] ?? "aggressive", ao: Math.round(v[5] ?? 100), free: v[6] !== 1, shape: FORM_KEYS[v[7]] ?? "auto" };
     if (ORDERS[cfg.order][0] === "mark") { await markSpot(player); return; }
     if (ORDERS[cfg.order][0] === "charge") {
       const tf = new ActionFormData().title("Charge POS: where?").button("Where I'm looking (any distance)").button("Nearest enemy war flag")
@@ -2735,6 +2736,13 @@ function chargePoint(player, cfg) {
   return { x: player.location.x + f.x * cfg.far, y: player.location.y, z: player.location.z + f.z * cfg.far };
 }
 
+// v9.19: the formation a squad keeps (picked with the order; auto: by the ground and whether there's a fight)
+const FORM_KEYS = ["auto", "line", "column", "wedge"], FORM_NAMES = ["Auto (by the ground and the fight)", "Line (abreast)", "Column (two files)", "Wedge"];
+const forcedShape = (f, sq) => { const fk = getJSON(world, "war:fshape", {}); const v = fk[`${f}|${sq}`] ?? fk[`${f}|0`] ?? fk["0|0"]; return v && v !== "auto" ? v : undefined; };
+// the faction's HQ: its headquarters flag, else its nearest war flag
+function hqFlag(dim, at, fac) {
+  return nearestFlag(dim, at, (f) => !!gdp(f, "war:hq") && Number(P(f, "war:faction")) === fac, 100000) ?? nearestFlag(dim, at, (f) => !P(f, "war:rally") && Number(P(f, "war:faction")) === fac, 100000);
+}
 async function giveOrder(player, cfg) {
   try { await giveOrderInner(player, cfg); }
   catch (err) { player.onScreenDisplay.setActionBar(`§cThat order couldn't be given here (${String(err).slice(0, 60)}).`); }
@@ -2742,6 +2750,23 @@ async function giveOrder(player, cfg) {
 async function giveOrderInner(player, cfg, given) {
   let order = ORDERS[cfg.order][0];
   if (order === "mark") { await markSpot(player); return; }
+  // v9.19: a rally flag where you're looking, for the faction you're ordering (no menu)
+  if (order === "rallyflag") {
+    const spot = lookedSpot(player, 64), fac = cfg.faction || playerFaction(player) || 1;
+    if (!spot) { player.onScreenDisplay.setActionBar("§7Look at the ground where the rally flag should go."); return; }
+    const fl = player.dimension.spawnEntity(FLAG, spot); setP(fl, "war:faction", fac); setP(fl, "war:rally", true);
+    if (!claimSlot(fl)) { fl.remove(); player.sendMessage("§cToo many flags/markers in the world."); return; }
+    player.onScreenDisplay.setActionBar(`§aRally flag set for ${factionLabel(fac)}§a: the wounded fall back to it and heal there.`); return;
+  }
+  // v9.19: back to base: the faction's HQ flag, else its nearest war flag (the march, then hold there)
+  if (order === "home") {
+    const fac = cfg.faction || playerFaction(player) || 1;
+    const hq = hqFlag(player.dimension, player.location, fac);
+    if (!hq) { player.onScreenDisplay.setActionBar(`§7${factionLabel(fac)}§7 has no HQ or war flag here. Place one with a Flag (type: Headquarters).`); return; }
+    const l = hq.location;
+    return giveOrderInner(player, { ...cfg, order: ORDERS.findIndex((o) => o[0] === "charge"), target: 5, cx: Math.floor(l.x), cz: Math.floor(l.z), cy: l.y, then: "hold" }, given);
+  }
+  if (cfg.shape) { const fk = getJSON(world, "war:fshape", {}); for (const fac of cfg.coal !== undefined ? (getCoals()[cfg.coal]?.members ?? []) : [cfg.faction || 0]) fk[`${fac}|${cfg.squad || 0}`] = cfg.shape; setJSON(world, "war:fshape", fk); }
   const now = tick();
   const coalMembers = cfg.coal !== undefined ? (getCoals()[cfg.coal]?.members ?? []) : [];
   if (cfg.coal !== undefined && !coalMembers.length) { player.onScreenDisplay.setActionBar("§7That coalition has no factions (or is gone)."); return; }
@@ -3072,13 +3097,14 @@ async function placeFlag(player) {
   if (!spot) { player.onScreenDisplay.setActionBar("§7Look at the ground to place a flag."); return; }
   const f = new ModalFormData().title("Place a flag")
     .dropdown("Faction", factionList(), { defaultValueIndex: Math.max(0, playerFaction(player) - 1) })
-    .dropdown("Type", ["War flag (heart of the battle)", "Rally flag (wounded fall back here)"], { defaultValueIndex: 0 });
+    .dropdown("Type", ["War flag (heart of the battle)", "Rally flag (wounded fall back here)", "Headquarters (reinforcements arrive, men heal and rearm, 'Return to base' goes here)"], { defaultValueIndex: 0 });
   const r = await show(f, player);
   if (!r || r.canceled || !r.formValues) return;
-  const fac = Number(r.formValues[0]) + 1, rally = r.formValues[1] === 1;
+  const fac = Number(r.formValues[0]) + 1, rally = r.formValues[1] === 1, hq = r.formValues[1] === 2;
   const fl = player.dimension.spawnEntity(FLAG, spot);
   setP(fl, "war:faction", fac);
   setP(fl, "war:rally", rally);
+  if (hq) sdp(fl, "war:hq", true);
   if (!claimSlot(fl)) { fl.remove(); player.sendMessage("§cToo many flags/markers in the world."); return; }
   if (!rally) warFlagPlaced(fac);
   chronLog(`${player.name} raised a ${rally ? "rally" : "war"} flag for ${factionLabel(fac, true)} ${placeName(player.dimension, spot)}.`);
@@ -12337,6 +12363,7 @@ function chooseShape(m, dim, at, members) {
   const now = tick();
   if (m.shapeT && now - m.shapeT < 100) return m.shapeNow;                   // (no flapping: a shape holds ~5 s)
   let shape = "line";
+  { const e0 = members?.[0]; const fs = e0 ? forcedShape(sd(e0).faction, sd(e0).squad || 0) : undefined; if (fs) { m.shapeT = now; m.shapeNow = fs; return fs; } }   // (v9.19: the one you picked)
   try {
     const e0 = members?.[0], S = e0 ? squads.get(squadKey(e0, sd(e0))) : undefined;
     const contact = !!S?.known?.size || (S?.contactT ?? -1) >= 0 && now - (S?.t ?? 0) < 200 && S.known?.size;
@@ -13014,12 +13041,13 @@ async function reinfMenu(p) {
     .slider("Every (minutes)", 1, 10, { valueStep: 1, defaultValue: 3 })
     .slider("Waves (0 = until removed)", 0, 20, { valueStep: 1, defaultValue: 5 })
     .dropdown("Each wave marches on", [look ? "Where I was looking when I opened this" : "(look at a spot first)", "The nearest enemy at the time", "Nowhere: they hold at the point"], { defaultValueIndex: look ? 0 : 1 })
-    .dropdown("Skin", ["Same as that faction's men (the one most of them wear)", "Faction uniform", ...skinChoices().map((k) => k.name)], { defaultValueIndex: 0 });
+    .dropdown("Skin", ["Same as that faction's men (the one most of them wear)", "Faction uniform", ...skinChoices().map((k) => k.name)], { defaultValueIndex: 0 })
+    .dropdown("They arrive", ["Where I'm standing", "At the faction's HQ flag (wherever it is when each wave comes)"], { defaultValueIndex: 0 });
   const fr = await show(mf, p);
   if (!fr || fr.canceled || !fr.formValues) return;
   const v = fr.formValues.map(Number);
   const skins0 = skinChoices(), skinPick = v[6] === 0 ? "same" : v[6] === 1 ? 0 : skins0[v[6] - 2]?.slot ?? 0;
-  const R = { skin: skinPick, id: Date.now(), dim: p.dimension.id, at: { x: p.location.x, y: p.location.y, z: p.location.z }, f: v[0] + 1, n: v[1], mix: REINF_MIX[v[2]][0], every: v[3], waves: v[4], to: v[5] === 0 && look ? { x: look.x, y: look.y, z: look.z } : undefined, mode: ["spot", "enemy", "hold"][v[5]], done: 0, next: Date.now() + 5000, owner: p.id, squad: 9 };
+  const R = { atHq: v[7] === 1, skin: skinPick, id: Date.now(), dim: p.dimension.id, at: { x: p.location.x, y: p.location.y, z: p.location.z }, f: v[0] + 1, n: v[1], mix: REINF_MIX[v[2]][0], every: v[3], waves: v[4], to: v[5] === 0 && look ? { x: look.x, y: look.y, z: look.z } : undefined, mode: ["spot", "enemy", "hold"][v[5]], done: 0, next: Date.now() + 5000, owner: p.id, squad: 9 };
   list.push(R); setReinf(list);
   p.onScreenDisplay.setActionBar(`§aReinforcement point set: first wave in a few seconds.`);
 }
@@ -13030,6 +13058,7 @@ system.runInterval(() => {
     const R = list[i];
     try {
       if (Date.now() < R.next) continue;
+      if (R.atHq) { try { const hq = hqFlag(world.getDimension(R.dim), R.at, R.f); if (hq) { R.at = { x: hq.location.x, y: hq.location.y, z: hq.location.z }; R.dim = hq.dimension.id; } } catch {} }   // (v9.19: at the HQ, wherever it is now)
       const dim = world.getDimension(R.dim);
       if (!dim.getBlock(R.at)) continue;                                        // (not loaded: it waits)
       const p = findPlayer(R.owner) ?? PLAYERS_LIST.find((q) => q.isValid && q.dimension.id === R.dim);
@@ -13293,3 +13322,120 @@ system.runInterval(() => {
     } catch {}
   }
 }, 4);
+// ---- v9.19: "Follow me" squads keep a formation behind you (column, line or wedge: picked with the order, or auto),
+// turned to the way you're walking; in a fight they fight as before
+const FOLLOW = new Map();   // player id -> { ids, head, last, t }
+function followFormOf(p, now) {
+  let F = FOLLOW.get(p.id);
+  if (F && now - F.t < 10) return F;
+  F ??= {}; F.t = now;
+  const ids = [];
+  for (const o of p.dimension.getEntities({ type: SOLDIER, location: p.location, maxDistance: 48 })) { try { const d = sd(o); if (d.func === "follow" && d.leader === p.id && d.div !== "guard" && !downed.has(o.id) && !d.surr) ids.push(o.id); } catch {} }
+  F.ids = ids.sort();
+  const l = p.location;
+  if (F.last) { const vx = l.x - F.last.x, vz = l.z - F.last.z, sp = Math.hypot(vx, vz); if (sp > 0.3 && sp < 20) { const hx = (F.head?.x ?? 0) * 0.5 + (vx / sp) * 0.5, hz = (F.head?.z ?? 1) * 0.5 + (vz / sp) * 0.5, L = Math.hypot(hx, hz) || 1; F.head = { x: hx / L, z: hz / L }; } }
+  if (!F.head) { const f = fwdFromYaw(p.getRotation().y); F.head = { x: f.x, z: f.z }; }
+  F.last = { x: l.x, y: l.y, z: l.z };
+  FOLLOW.set(p.id, F);
+  return F;
+}
+function followSlot(e, d, p, F) {
+  const i = Math.max(0, F.ids.indexOf(e.id)), n = Math.max(1, F.ids.length);
+  let shape = forcedShape(d.faction, d.squad || 0);
+  if (!shape) shape = isIndoors(p) ? "column" : n >= 4 ? "wedge" : "column";
+  const hx = F.head.x, hz = F.head.z, rx = -hz, rz = hx, sp = spacingSetting();
+  let back, side;
+  if (shape === "line") { back = 2.5; side = (i - (n - 1) / 2) * 1.6 * sp; }
+  else if (shape === "wedge") { const k = Math.floor(i / 2) + 1; back = 1.2 + k * 1.5 * sp; side = (i % 2 ? 1 : -1) * k * 1.3 * sp; }
+  else { back = 2 + Math.floor(i / 2) * 1.7 * sp; side = (i % 2 ? 0.8 : -0.8); }
+  const l = p.location, x = l.x - hx * back + rx * side, z = l.z - hz * back + rz * side;
+  const w = walkableNear(e.dimension, x, z, l.y);
+  if (!w || Math.abs(w.y - l.y) > 2.5) return undefined;
+  return { x: w.x, y: w.y, z: w.z, shape };
+}
+WarAPI.registerBehavior({
+  name: "followForm", when: "first", priority: 95,
+  decide(e, d, now) {
+    if (d.func !== "follow" || d.div === "guard" || !d.leader) return undefined;
+    const p = findPlayer(d.leader);
+    if (!p || p.dimension.id !== e.dimension.id || isRiding(p) || isRiding(e) || dist(p.location, e.location) > 30) return undefined;
+    if (perc.get(e.id)?.threat || squads.get(squadKey(e, d))?.known?.size || downed.has(e.id)) return undefined;   // (a fight: as before)
+    const F = followFormOf(p, now), sp = followSlot(e, d, p, F);
+    if (!sp) return undefined;
+    const gap = Math.hypot(sp.x - e.location.x, sp.z - e.location.z);
+    FOLLOW_ON.set(e.id, now);
+    if (gap < 7 && Math.abs(sp.y - e.location.y) < 1.2) return { g: "g_none", t: "t_mid", urgent: false, note: `in ${sp.shape}` };   // (the driver below keeps him there)
+    const slot = myMarker(e, { x: sp.x + F.head.x * 3, y: sp.y, z: sp.z + F.head.z * 3 }, "war:mymk", 1.0);   // (a little ahead: the game's following stops short)
+    return slot ? { g: "g_wp", slot, t: "t_mid", s: speedGroup(e, true), urgent: true, note: `falling in (${sp.shape})` } : undefined;
+  },
+});
+system.runInterval(() => { const now = tick(); for (const [k, F] of [...FOLLOW]) if (now - F.t > 600) FOLLOW.delete(k); for (const [k, t] of [...FOLLOW_ON]) if (now - t > 600) FOLLOW_ON.delete(k); }, 200);
+// the follow driver: each tick a man near his place is carried onto it at your pace (like the guard detail), facing
+// the way you're going; a wall, a drop or a step too high and his own walking takes over
+const FOLLOW_ON = new Map();   // id -> tick he was last on the formation
+system.runInterval(() => {
+  if (!FOLLOW.size) return;
+  const now = tick();
+  for (const [pid, F] of FOLLOW) {
+    const p = findPlayer(pid);
+    if (!p?.isValid || now - F.t > 100 || !F.ids?.length) continue;
+    try {
+      const pl = p.location, last = F.drvLast; F.drvLast = { x: pl.x, z: pl.z };
+      const pace = last ? Math.min(0.6, Math.hypot(pl.x - last.x, pl.z - last.z)) : 0;
+      const maxStep = Math.min(0.42, Math.max(0.18, pace * 1.3));
+      for (const id of F.ids) {
+        if (now - (FOLLOW_ON.get(id) ?? -999) > 60) continue;
+        const e = world.getEntity(id);
+        if (!e?.isValid || downed.has(id) || isRiding(e) || climbing.has(id) || gliders.has(id) || personal.has(id) || staggered(id) || perc.get(id)?.threat) continue;
+        const d = sd(e), sp = followSlot(e, d, p, F); if (!sp) continue;
+        const l = e.location, dx = sp.x - l.x, dz = sp.z - l.z, L = Math.hypot(dx, dz);
+        if (L > 7 || Math.abs(sp.y - l.y) > 1.2 || L < 0.1) continue;
+        const stp = Math.min(L, maxStep), nx = l.x + (dx / L) * stp, nz = l.z + (dz / L) * stp;
+        if (Math.hypot(nx - pl.x, nz - pl.z) < 0.9) continue;                          // (never into you)
+        let ny; for (const yy of [l.y, Math.floor(l.y + 0.01) + 1, Math.floor(l.y + 0.01) + 0.5, l.y - 0.5]) { if (yy > l.y + 1.1) continue; if (glideFree(e.dimension, nx, yy, nz) && floorUnder(e.dimension, nx, yy, nz)) { ny = yy; break; } }
+        if (ny === undefined || dangerNear(e.dimension, { x: nx, y: ny, z: nz })) continue;
+        const look = pace > 0.04 || L > 1 ? { x: nx + F.head.x * 6, z: nz + F.head.z * 6 } : { x: nx + F.head.x * 6, z: nz + F.head.z * 6 };
+        e.teleport({ x: nx, y: ny, z: nz }, { rotation: faceRot(e, { x: nx, y: ny, z: nz }, look, 10) });
+      }
+    } catch {}
+  }
+}, 1);
+// ---- v9.19: the watch, day and night. A squad at rest keeps men on watch (a quarter by day, a third at night), each at
+// his own post 6 blocks out from the others, facing out; the watch changes every two minutes
+const DAYWATCH = new Map();   // squad key -> { ids: [], t }
+system.runInterval(() => {
+  const now = tick();
+  for (const [k, S] of squads) {
+    try {
+      if (!S.ours?.length || S.known?.size) { DAYWATCH.delete(k); continue; }
+      const men = S.ours.filter((o) => o.isValid && !downed.has(o.id) && !pows.has(o.id) && !isRiding(o) && ["hold", "post", "stand"].includes(sd(o).func) && !SLEEP.has(o.id));
+      if (men.length < 3) { DAYWATCH.delete(k); continue; }
+      let W = DAYWATCH.get(k);
+      if (!W || now - W.t > 2400 || W.ids.some((id) => !men.some((o) => o.id === id))) {
+        const n = Math.max(1, Math.round(men.length / (NIGHT ? 3 : 4))), off = new Set(W?.ids ?? []);
+        const pool = men.filter((o) => !off.has(o.id) && !OFFICER_IDS.has(o.id)), pick = (pool.length >= n ? pool : men).slice(0, n);
+        const cx = men.reduce((a, o) => a + o.location.x, 0) / men.length, cz = men.reduce((a, o) => a + o.location.z, 0) / men.length, cy = men[0].location.y;
+        W = { ids: pick.map((o) => o.id), t: now, c: { x: cx, y: cy, z: cz } }; DAYWATCH.set(k, W);   // (the camp's middle, fixed for this watch)
+        for (const o of pick) note(o, "taking the watch");
+      }
+    } catch {}
+  }
+  for (const k of [...DAYWATCH.keys()]) if (!squads.has(k)) DAYWATCH.delete(k);
+}, 100);
+WarAPI.registerBehavior({
+  name: "onWatch", when: "first", priority: 55,
+  decide(e, d, now) {
+    if (!["hold", "post", "stand"].includes(d.func) || downed.has(e.id) || personal.has(e.id) || SLEEP.has(e.id) || perc.get(e.id)?.threat) return undefined;
+    const k = squadKey(e, d), W = DAYWATCH.get(k); if (!W) return undefined;
+    const i = W.ids.indexOf(e.id); if (i < 0) return undefined;
+    const c = W.c; if (!c) return undefined;
+    const base = (Number(gdp(e, "war:nseed") ?? 0) % 360) * Math.PI / 180, a = base + (i / W.ids.length) * Math.PI * 2;
+    const want = walkableNear(e.dimension, c.x + Math.cos(a) * 6, c.z + Math.sin(a) * 6, c.y);
+    if (!want || Math.abs(want.y - c.y) > 2) return undefined;
+    const gap = flat(want, e.location);
+    if (gap > 4) { const slot = myMarker(e, want, "war:mymk", 0.8); return slot ? { g: "g_wp", slot, t: "t_mid", urgent: false, note: "going on watch" } : undefined; }
+    if (gap > 0.8) { const L = gap || 1; push(e, { x: ((want.x - e.location.x) / L) * 0.22, y: 0, z: ((want.z - e.location.z) / L) * 0.22 }, 2); return { g: "g_none", t: "t_mid", urgent: false, note: "going on watch" }; }   // (the last steps: the game's following stops 3 short)
+    if (now % 20 === 0) turnTo(e, { x: e.location.x + Math.cos(a) * 8, z: e.location.z + Math.sin(a) * 8 }, 8);
+    return { g: "g_none", t: "t_long", urgent: false, note: "on watch" };
+  },
+});
