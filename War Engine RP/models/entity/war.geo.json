@@ -12279,6 +12279,318 @@
           ]
         }
       ]
+    },
+    {
+      "description": {
+        "identifier": "geometry.war_ranks",
+        "texture_width": 16,
+        "texture_height": 16,
+        "visible_bounds_width": 2,
+        "visible_bounds_height": 3,
+        "visible_bounds_offset": [
+          0,
+          1.5,
+          0
+        ]
+      },
+      "bones": [
+        {
+          "name": "root",
+          "pivot": [
+            0,
+            0,
+            0
+          ]
+        },
+        {
+          "name": "waist",
+          "parent": "root",
+          "pivot": [
+            0,
+            12,
+            0
+          ]
+        },
+        {
+          "name": "body",
+          "parent": "waist",
+          "pivot": [
+            0,
+            24,
+            0
+          ]
+        },
+        {
+          "name": "leftArm",
+          "parent": "body",
+          "pivot": [
+            5,
+            22,
+            0
+          ]
+        },
+        {
+          "name": "leftStripe1",
+          "parent": "leftArm",
+          "pivot": [
+            5,
+            22,
+            0
+          ],
+          "cubes": [
+            {
+              "origin": [
+                4,
+                17.2,
+                -2
+              ],
+              "size": [
+                4,
+                0.5,
+                4
+              ],
+              "uv": [
+                0,
+                8
+              ],
+              "inflate": 0.33
+            }
+          ]
+        },
+        {
+          "name": "leftStripe2",
+          "parent": "leftArm",
+          "pivot": [
+            5,
+            22,
+            0
+          ],
+          "cubes": [
+            {
+              "origin": [
+                4,
+                16.4,
+                -2
+              ],
+              "size": [
+                4,
+                0.5,
+                4
+              ],
+              "uv": [
+                0,
+                8
+              ],
+              "inflate": 0.33
+            }
+          ]
+        },
+        {
+          "name": "leftStripe3",
+          "parent": "leftArm",
+          "pivot": [
+            5,
+            22,
+            0
+          ],
+          "cubes": [
+            {
+              "origin": [
+                4,
+                15.6,
+                -2
+              ],
+              "size": [
+                4,
+                0.5,
+                4
+              ],
+              "uv": [
+                0,
+                8
+              ],
+              "inflate": 0.33
+            }
+          ]
+        },
+        {
+          "name": "rightArm",
+          "parent": "body",
+          "pivot": [
+            -5,
+            22,
+            0
+          ]
+        },
+        {
+          "name": "rightStripe1",
+          "parent": "rightArm",
+          "pivot": [
+            -5,
+            22,
+            0
+          ],
+          "cubes": [
+            {
+              "origin": [
+                -8,
+                17.2,
+                -2
+              ],
+              "size": [
+                4,
+                0.5,
+                4
+              ],
+              "uv": [
+                0,
+                8
+              ],
+              "inflate": 0.33
+            }
+          ]
+        },
+        {
+          "name": "rightStripe2",
+          "parent": "rightArm",
+          "pivot": [
+            -5,
+            22,
+            0
+          ],
+          "cubes": [
+            {
+              "origin": [
+                -8,
+                16.4,
+                -2
+              ],
+              "size": [
+                4,
+                0.5,
+                4
+              ],
+              "uv": [
+                0,
+                8
+              ],
+              "inflate": 0.33
+            }
+          ]
+        },
+        {
+          "name": "rightStripe3",
+          "parent": "rightArm",
+          "pivot": [
+            -5,
+            22,
+            0
+          ],
+          "cubes": [
+            {
+              "origin": [
+                -8,
+                15.6,
+                -2
+              ],
+              "size": [
+                4,
+                0.5,
+                4
+              ],
+              "uv": [
+                0,
+                8
+              ],
+              "inflate": 0.33
+            }
+          ]
+        },
+        {
+          "name": "medal1",
+          "parent": "body",
+          "pivot": [
+            0,
+            24,
+            0
+          ],
+          "cubes": [
+            {
+              "origin": [
+                1.0,
+                20.2,
+                -2.55
+              ],
+              "size": [
+                1,
+                1,
+                0.4
+              ],
+              "uv": [
+                0,
+                0
+              ],
+              "inflate": 0.05
+            }
+          ]
+        },
+        {
+          "name": "medal2",
+          "parent": "body",
+          "pivot": [
+            0,
+            24,
+            0
+          ],
+          "cubes": [
+            {
+              "origin": [
+                2.05,
+                20.2,
+                -2.55
+              ],
+              "size": [
+                1,
+                1,
+                0.4
+              ],
+              "uv": [
+                4,
+                0
+              ],
+              "inflate": 0.05
+            }
+          ]
+        },
+        {
+          "name": "medal3",
+          "parent": "body",
+          "pivot": [
+            0,
+            24,
+            0
+          ],
+          "cubes": [
+            {
+              "origin": [
+                3.1,
+                20.2,
+                -2.55
+              ],
+              "size": [
+                1,
+                1,
+                0.4
+              ],
+              "uv": [
+                8,
+                0
+              ],
+              "inflate": 0.05
+            }
+          ]
+        }
+      ]
     }
   ]
 }

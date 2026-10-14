@@ -224,7 +224,8 @@
         "s62": "textures/war_skins/skin_62",
         "s63": "textures/war_skins/skin_63",
         "s64": "textures/war_skins/skin_64",
-        "insignia_officer": "textures/entity/war_band/insignia_officer"
+        "insignia_officer": "textures/entity/war_band/insignia_officer",
+        "ranks": "textures/entity/war_band/ranks"
       },
       "geometry": {
         "default": "geometry.humanoid.custom",
@@ -257,7 +258,8 @@
         "g_m1903s": "geometry.m1903s",
         "g_kar98s": "geometry.kar98s",
         "band": "geometry.war_band",
-        "insignia": "geometry.war_insignia"
+        "insignia": "geometry.war_insignia",
+        "ranks": "geometry.war_ranks"
       },
       "render_controllers": [
         "controller.render.war_soldier",
@@ -266,6 +268,9 @@
         },
         {
           "controller.render.war_officer": "q.property('war:officer') && !q.property('war:cav') && !q.property('war:down')"
+        },
+        {
+          "controller.render.war_ranks": "(q.property('war:vet') > 0 || q.property('war:medals') > 0) && !q.property('war:cav') && !q.property('war:down')"
         },
         {
           "controller.render.war_gun_m1903": "q.property('war:gun') == 1 && !q.property('war:cav')"

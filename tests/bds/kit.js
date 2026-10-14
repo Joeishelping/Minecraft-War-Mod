@@ -1506,3 +1506,27 @@ KS.ridekill = async (o, ox, oz) => {
   }
   return { tr: tr.join(" ") };
 };
+// v9.18: names and ranks in the faction's language, buddies, experience, medals, grudges
+KS.identity = async (o, ox, oz) => {
+  floorAt(ox - 30, oz - 30, ox + 30, oz + 30);
+  const keep = getJSON(world, "war:vlang", {});
+  setJSON(world, "war:vlang", { ...keep, 1: "german", 2: "korean" });
+  setRelPair(1, 2, "1", true);
+  const a = [0, 1, 2, 3].map((i) => kitSoldier(1, { x: ox - 3 + i * 2 + 0.5, y: Y, z: oz - 12.5 }, "rifle", "hold"));
+  const b = [0, 1, 2].map((i) => kitSoldier(2, { x: ox - 2 + i * 2 + 0.5, y: Y, z: oz + 12.5 }, "smg", "hold"));
+  for (const e of a) try { e.addEffect("resistance", 4000, { amplifier: 255, showParticles: false }); } catch {}
+  await kitWait(40);
+  for (const e of [...a, ...b]) updateName(e);
+  const names = [...a, ...b].map((e) => strip(e.nameTag).split("\n")[0]);
+  await kitWait(260);
+  const buddies = a.map((e) => { const x = gdp(e, "war:buddy"); return x ? a.findIndex((q) => q.id === x) : -1; });
+  let left = b.filter((e) => e.isValid).length, t = 0;
+  for (; t < 60 && left; t++) { await kitWait(20); left = b.filter((e) => e.isValid && !downed.has(e.id)).length; for (const e of b) if (e.isValid && downed.has(e.id)) killReal(e); }
+  await kitWait(80);
+  const after = a.map((e) => ({ name: soldierName(e), xp: xpOf(e), vet: e.getProperty("war:vet"), medals: e.getProperty("war:medals"), trait: traitOf(e) }));
+  // the other language: switch faction 1 to Haitian Creole and look again
+  setJSON(world, "war:vlang", { ...keep, 1: "haitian", 2: "korean" });
+  const haitian = a.map((e) => soldierName(e));
+  setJSON(world, "war:vlang", keep);
+  return { names, buddies, enemiesLeft: left, after, haitian };
+};

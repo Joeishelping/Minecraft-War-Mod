@@ -319,7 +319,7 @@ function mainhand(player) {
 // ================================================================ entity properties
 // Values set on the same tick an entity spawns can be dropped by the game, so every
 // property is mirrored in a dynamic property and re-applied until it sticks.
-const PROPS = ["war:faction", "war:skin", "war:ranged", "war:cav", "war:medic", "war:rally", "war:gun", "war:firing", "war:aiming", "war:down", "war:nest", "war:pose", "war:role", "war:officer"];
+const PROPS = ["war:faction", "war:skin", "war:ranged", "war:cav", "war:medic", "war:rally", "war:gun", "war:firing", "war:aiming", "war:down", "war:nest", "war:pose", "war:role", "war:officer", "war:vet", "war:medals"];
 const propMemo = new Map(); // "id|key" -> value read from the entity (only this add-on changes them, through setP)
 function P(e, key) {
   const v = gdp(e, `p_${key}`);
@@ -416,7 +416,7 @@ function updateName(e) {
   if (e.typeId === HOUND) txt = "War Hound";
   else {
     const d = sd(e);
-    txt = (d.custom || DIV[d.div]?.name || "Soldier") + (d.squad ? ` §7- ${squadName(f, d.squad)}` : "");
+    txt = (d.custom || (e.typeId === SOLDIER ? `${soldierName(e)}${d.div && d.div !== "foot" ? ` §8${DIV[d.div]?.name ?? ""}§r` : ""}` : DIV[d.div]?.name || "Soldier")) + (d.squad ? ` §7- ${squadName(f, d.squad)}` : "");   // (v9.18: his name and rank)
     if (downed.has(e.id)) txt += " §4(DOWNED - right-click)";
     else if (pows.has(e.id)) txt += " §6(prisoner)";
     else if (d.surr) txt += " §7(surrendered)";
@@ -825,7 +825,7 @@ function think(e) {
   }
   let retreat = d.retreat;
   const canRetreat = !riding && (d.div !== "garrison" || d.func === "patrol");
-  if (!retreat && canRetreat && (hpr < 0.3 || (hpr < 0.6 && foes >= friends * 2 + 3))) {
+  if (!retreat && canRetreat && (hpr < retreatHp(e) || (hpr < 0.6 && foes >= friends * 2 + 3))) {
     retreat = true;
     sdp(e, "war:retreat", true);
     if (gdp(e, "war:ordergoal") !== undefined) { setGoal(e, Number(gdp(e, "war:ordergoal"))); sdp(e, "war:ordergoal", undefined); }
@@ -4025,6 +4025,7 @@ function hitscan(e, spec, from, dir, range, weapon) {
   if (RD.size) try { rdShot(dim, from, u, end); } catch {}                // (v9.14: rounds kick the bodies they pass through)
   if (hit) {
     const dmg = HIT_DMG[weapon] ?? 5;
+    try { SHOT_BY.set(hit.entity.id, { id: e.id, t: tick() }); } catch {}
     try { const he = hit.entity; if (he.typeId === SOLDIER) lastHit.set(he.id, { t: tick(), head: from.y + u.y * hit.distance - he.location.y > 1.42, weapon, dd: hit.distance, dir: u }); } catch {}   // (v9.7: where it hit him)
     // v9.13: a player is hit like any mob would hit him: his armor counts and the game's short pause between hits holds, so a
     // squad's fire can't empty a full set of netherite in a second. (Soldiers on soldiers stay as they were: armor counts there
@@ -4318,7 +4319,7 @@ function gunTick(e, now) {
   if (turnTo(e, t.location, 20) > 25) { st.next = now + 2; return; } // still turning toward him
   const aim = aimAt(e, t);
   if (!aim) { st.next = now + 6; st.target = undefined; return; } // the shot would hit the terrain: don't waste it
-  const shaky = ((suppB.get(e.id) ?? 0) > 8 ? 1.8 : 1) * woundK(e);  // pinned down / badly wounded: shaky aim
+  const shaky = ((suppB.get(e.id) ?? 0) > 8 ? 1.8 : 1) * woundK(e) * vetAim(e);  // pinned down / badly wounded: shaky aim (v9.18: veterans steadier)
   const fired = st.wild > 0 ? fireGun(e, { ...spec, spread: spec.spread * 3 * shaky }, t, aim) : fireGun(e, shaky === 1 ? spec : { ...spec, spread: spec.spread * shaky }, t, aim);
   if (!fired) { st.next = now + 4; aimMemo.delete(`${e.id}>${t.id}`); return; }   // (v6.9.2: no open line this instant: hold fire)
   if (st.wild > 0) st.wild--;
@@ -4535,6 +4536,7 @@ function threatScore(e, d, o, dd, now) {
   // v9.16: he sticks with the man he's on. Re-picking from scratch every look swung every gun between enemies about
   // twice a second (the fire-spreading and squad-target bonuses chasing each other); now he changes only for something
   // clearly more urgent, and hardly at all in his first 4 s on a man
+  if (GRUDGE.get(e.id)?.id === o.id) s += 90;                    // (v9.18: the man who killed his buddy)
   const ps = perc.get(e.id);
   if (ps?.threat?.id === o.id) { s += 65; if (now - (ps.threatT ?? -999) < 80) s += 60; }
   return s;
@@ -6202,6 +6204,7 @@ function stressOf(e, d, now) {
     if (isHostile(d.faction, c.f)) foes++; else if (isFriendly(d.faction, c.f)) friends++;
   }
   st -= moraleOf(e, d, now);                                                                 // (v9.7: just won: steadier; just mauled: jumpier)
+  st -= nerveOf(e); if ((GRIEF.get(e.id) ?? 0) > now) st += 3;                              // (v9.18: veterans and the brave hold; a man who just lost his buddy shakes)
   if (foes >= (friends + 1) * 2) st += 2;                                                    // badly outnumbered here
   else if (foes > friends + 1) st += 1;                                                      // his side is losing here
   return st;
@@ -6332,7 +6335,7 @@ system.runInterval(() => {
       oc.x /= ours.length; oc.y /= ours.length; oc.z /= ours.length; S.ourC = oc;
       if (!known.length) {
         if (S.contactT >= 0) {
-          radio(ours[0], "area clear, carrying on", true); learnEnd(S, ours.length, now); callout(ours[Math.floor(Math.random() * ours.length)], "Clear!");   // v5.4: no regroup halt (it waited on the downed)
+          radio(ours[0], "area clear, carrying on", true); learnEnd(S, ours.length, now); try { afterBattle(S, ours, now); } catch {} callout(ours[Math.floor(Math.random() * ours.length)], "Clear!");   // v5.4: no regroup halt (it waited on the downed)
           // v9.7: how it went: hardly a loss -> braver for a minute; half the squad gone -> jumpy for a minute
           const n0 = S.startN ?? ours.length, lost = n0 - ours.length;
           if (n0 >= 3) { if (lost <= n0 * 0.2) { squadMorale.set(k, { m: 1, until: now + 1200 }); v9stat("moraleUp"); radio(ours[0], "they're beaten, good work", true); } else if (lost >= n0 * 0.5) { squadMorale.set(k, { m: -1, until: now + 1200 }); v9stat("moraleDown"); } }
@@ -7129,7 +7132,7 @@ function callout(e, text, opt = {}) {
     while (heardLine.length && now - heardLine[0].t > 6000) heardLine.shift();
     if (heardLine.length > 300) heardLine.splice(0, heardLine.length - 300);
     const pitch = 0.92 + ((e.id.charCodeAt(e.id.length - 1) * 7) % 17) / 100 - (downed.has(e.id) ? 0.05 : 0);   // his own voice (weaker when he's down)
-    playLine(e.dimension, headLoc(e), lang, key, pitch, { label: `${factionLabel(f)}§7 ${squadName(f, sd(e).squad)}`, forceSubs: opt.subs });
+    playLine(e.dimension, headLoc(e), lang, key, pitch, { label: `${factionLabel(f)}§7 ${e.typeId === SOLDIER ? soldierName(e) : squadName(f, sd(e).squad)}`, forceSubs: opt.subs });
     if (!opt.force) afterLine(e, key, now);                                  // (a test line gets no answer)
     return true;
   } catch { return false; }
@@ -7277,6 +7280,7 @@ system.runInterval(() => {
 }, 100);
 function goDown(e, killer) {
   const now = tick();
+  try { logTo(WOUNDS, e.id, now); const k = killer?.typeId === SOLDIER ? killer : lastAttacker(e, now); if (k?.typeId === SOLDIER && k.id !== e.id) giveXp(k, 2); } catch {}   // (v9.18)
   try {                                                          // (v6.5) the man who dropped him calls it
     let ke = killer?.isValid ? killer : undefined;
     if (!ke) { const k = hurtBy.get(e.id); if (k && now - k.t < 40) ke = world.getEntity(k.id); }
@@ -7404,7 +7408,7 @@ function medicMove(e, d, now) {
       if (isDowned(best)) {
         mt.reachT ??= now;
         note(e, "treating a downed soldier");
-        if (now - mt.reachT >= 20) { revive(best, 8); mt.reachT = undefined; note(e, "revived a soldier"); callout(e, "You're okay!", { event: true }); const rb = best; system.runTimeout(() => callout(rb, "Thanks!", { event: true }), 30); }
+        if (now - mt.reachT >= 20) { revive(best, 8); creditSave(e); mt.reachT = undefined; note(e, "revived a soldier"); callout(e, "You're okay!", { event: true }); const rb = best; system.runTimeout(() => callout(rb, "Thanks!", { event: true }), 30); }
       }
       turnTo(e, best.location, 30);
       return { g: "g_none", t: "t_off", urgent: false };
@@ -7437,7 +7441,7 @@ const radioSaid = new Map(), radioCmdrT = new Map();
 function radio(e, text, force = false) {
   try {
     const lvl = Number(setting("radio", 1));
-    if (lvl <= 0 || (lvl === 1 && !IMPORTANT.test(text))) return;
+    if (lvl <= 0 || (lvl === 1 && !IMPORTANT.test(text) && force !== "story")) return;   // (v9.18: names, promotions, medals: always)
     const d = sd(e), cmdr = findPlayer(gdp(e, "war:cmdr"));
     if (!cmdr) return;
     const k = squadKey(e, d), now = tick();
@@ -10475,7 +10479,8 @@ system.runInterval(() => {
       if (dc.surr || dc.div === "medic" || dc.div === "guard" || dc.retreat || isRiding(c.e) || shaken.has(c.id) || held.has(c.id) || pows.has(c.id)) continue;
       if (closeEnemy(c.e, dc, 6)) continue;                                   // fighting for his own life right now
       if (Math.abs(c.y - v.location.y) > 4) continue;
-      if (c.dd < wd) { wd = c.dd; who = c.e; }
+      const eff = c.dd - (gdp(c.e, "war:buddy") === id ? 10 : 0);            // (v9.18: his buddy comes for him first)
+      if (eff < wd) { wd = eff; who = c.e; }
     }
     if (!who) continue;
     // (v9.2: nobody runs out into fire. Enemies who can see the wounded man and are shooting: smoke first if he has
@@ -10536,7 +10541,7 @@ function casevacMove(e, d, now) {
   note(e, "first aid");
   turnTo(e, v.location, 30);
   if (now - D.aidT >= 100) {
-    revive(v, 4); dragEnd(vid); v9stat("firstAidRevive");
+    revive(v, 4); creditSave(e); dragEnd(vid); v9stat("firstAidRevive");
     callout(e, "You're okay!", { event: true }); system.runTimeout(() => { try { if (v.isValid) callout(v, "Thanks!", { event: true }); } catch {} }, 30);
     radio(e, "wounded man patched up, back in the fight");
     return undefined;
@@ -10664,6 +10669,9 @@ function ambushHold(e, d, t, now) {
     if (ours.some((o) => Math.hypot(q.x - o.location.x, q.z - o.location.z) < AMB.close)) { ambushSprung(S, now, "too close"); return false; }
     if (!q.heard && enemyAware(q, ours, now)) { ambushSprung(S, now, "they've seen us"); return false; }
   }
+  // v9.18: a hothead in the squad, now and then, can't wait (decided once per ambush; most ambushes go as planned)
+  if (S.amb.hot === undefined) { const h = ours.find((o) => traitOf(o) === "hothead"); S.amb.hot = h && Math.random() < 0.3 ? { id: h.id, at: now + 15 + Math.floor(Math.random() * 30) } : null; }
+  if (S.amb.hot && now >= S.amb.hot.at) { const h = world.getEntity(S.amb.hot.id); if (h?.isValid) radio(h, `${soldierName(h)} fired too early!`, "story"); ambushSprung(S, now, "someone fired too early"); return false; }
   const guns = ours.filter((o) => GUNS.includes(sd(o).weapon));
   const ready = guns.filter((o) => gunState.get(o.id)?.target?.isValid).length;
   if (now - S.amb.t0 >= 20 && ready >= Math.max(2, Math.ceil(guns.length * 0.75))) { ambushSprung(S, now, "everyone's set"); return false; }
@@ -11616,7 +11624,8 @@ system.runInterval(() => {
       } catch {}
     }
   }
-  for (const e of allOf(SOLDIER)) { try { const want = officers.has(e.id); if (!!P(e, "war:officer") !== want) setP(e, "war:officer", want); } catch {} }
+  const was = OFFICER_IDS; OFFICER_IDS = officers;
+  for (const e of allOf(SOLDIER)) { try { const want = officers.has(e.id); if (!!P(e, "war:officer") !== want) setP(e, "war:officer", want); if (was.has(e.id) !== want) updateName(e); } catch {} }
 }, 100);
 
 // ================================================================ v9.15: night battles: illumination flares
@@ -11746,3 +11755,160 @@ system.runInterval(() => {
     } catch {}
   }
 }, 4);
+
+// ================================================================ v9.18: who they are
+// Every soldier has a surname and a rank in his faction's language (War Table > Settings > Callout language): change
+// the language and the names change with it. Rank comes from experience (and the man running the squad is at least a
+// sergeant); stripes on the arm show it. Each man also has a temperament, a buddy in his squad, a grudge when his buddy
+// is killed, and medals for what he did in a battle.
+// ranks: [private, senior private, corporal, sergeant, lieutenant]
+const CULTURE = {
+  en_us: { ranks: ["Pvt.", "PFC", "Cpl.", "Sgt.", "Lt."], names: ["Miller", "Johnson", "Smith", "Brown", "Davis", "Wilson", "Anderson", "Taylor", "Thomas", "Moore", "Jackson", "White", "Harris", "Martin", "Thompson", "Clark", "Lewis", "Walker", "Hall", "Young", "Allen", "King", "Wright", "Scott", "Baker", "Nelson", "Carter", "Mitchell", "Turner", "Parker", "Collins", "Murphy", "Kowalski", "O'Brien", "Russo", "Garcia", "Sullivan", "Novak", "Hayes", "Reed"] },
+  aave: { ranks: ["Pvt.", "PFC", "Cpl.", "Sgt.", "Lt."], names: ["Washington", "Jefferson", "Jackson", "Williams", "Johnson", "Banks", "Freeman", "Brooks", "Booker", "Coleman", "Simmons", "Robinson", "Mosley", "Hayes", "Bell", "Dixon", "Gaines", "Jenkins", "Pryor", "Rhodes", "Carter", "Wallace", "Payne", "Harris", "Moore", "Thomas", "Dawson", "Tate", "Bryant", "Haynes"] },
+  en_gb: { ranks: ["Pte.", "L/Cpl.", "Cpl.", "Sgt.", "Lt."], names: ["Smith", "Jones", "Taylor", "Brown", "Davies", "Evans", "Wilson", "Thomas", "Roberts", "Johnson", "Walker", "Wright", "Hughes", "Edwards", "Green", "Hall", "Wood", "Harris", "Clarke", "Jackson", "Turner", "Hill", "Cooper", "Ward", "Morris", "Baker", "Watson", "Atkinson", "Fletcher", "Pemberton", "Ashworth", "MacLeod", "Campbell", "Murray", "Lloyd", "Price"] },
+  german: { ranks: ["Schuetze", "Gefreiter", "Unteroffizier", "Feldwebel", "Leutnant"], names: ["Mueller", "Schmidt", "Schneider", "Fischer", "Weber", "Meyer", "Wagner", "Becker", "Schulz", "Hoffmann", "Koch", "Richter", "Bauer", "Klein", "Wolf", "Schroeder", "Neumann", "Schwarz", "Zimmermann", "Braun", "Krueger", "Hartmann", "Lange", "Werner", "Krause", "Lehmann", "Koehler", "Vogel", "Jaeger", "Brandt", "Haas", "Keller", "Frank", "Berger"] },
+  russian: { ranks: ["Ryadovoy", "Efreitor", "Ml. Serzhant", "Serzhant", "Leytenant"], names: ["Ivanov", "Smirnov", "Kuznetsov", "Popov", "Vasiliev", "Petrov", "Sokolov", "Mikhailov", "Novikov", "Fyodorov", "Morozov", "Volkov", "Alekseev", "Lebedev", "Semyonov", "Yegorov", "Pavlov", "Kozlov", "Stepanov", "Nikolaev", "Orlov", "Andreev", "Makarov", "Zaitsev", "Belov", "Gusev", "Titov", "Kiselyov", "Romanov", "Vinogradov", "Bogdanov", "Medvedev"] },
+  korean: { ranks: ["Ibyeong", "Ilbyeong", "Sangbyeong", "Hasa", "Sowi"], names: ["Kim", "Lee", "Park", "Choi", "Jung", "Kang", "Cho", "Yoon", "Jang", "Lim", "Han", "Oh", "Seo", "Shin", "Kwon", "Hwang", "Ahn", "Song", "Yoo", "Hong", "Jeon", "Ko", "Moon", "Yang", "Son", "Bae", "Baek", "Heo", "Nam", "Noh"] },
+  greek: { ranks: ["Stratiotis", "Ypodekaneas", "Dekaneas", "Lochias", "Anthypolochagos"], names: ["Papadopoulos", "Pappas", "Georgiou", "Nikolaidis", "Dimitriou", "Karagiannis", "Vlachos", "Oikonomou", "Makris", "Antoniou", "Ioannou", "Konstantinidis", "Christodoulou", "Alexiou", "Theodorou", "Angelopoulos", "Kostopoulos", "Stavrou", "Lambrou", "Michailidis", "Galanis", "Petridis", "Andreou", "Spanos", "Kyriakou", "Zervas", "Raptis", "Doukas"] },
+  mongolian: { ranks: ["Baildagch", "Akhlakh baildagch", "Ded turuuch", "Turuuch", "Deslegch"], names: ["Batbayar", "Ganbold", "Erdenebat", "Bataa", "Sukhbaatar", "Tumurbaatar", "Altangerel", "Enkhbold", "Gantulga", "Munkhbat", "Bayarsaikhan", "Odbayar", "Narangerel", "Temuulen", "Khurelbaatar", "Purevdorj", "Dorj", "Ochir", "Tsogtbayar", "Battulga", "Ganzorig", "Otgonbayar", "Chuluun", "Boldbaatar", "Tserendorj", "Jargal"] },
+  dutch: { ranks: ["Soldaat", "Soldaat 1e kl.", "Korporaal", "Sergeant", "Luitenant"], names: ["de Jong", "Jansen", "de Vries", "van den Berg", "van Dijk", "Bakker", "Janssen", "Visser", "Smit", "Meijer", "de Boer", "Mulder", "de Groot", "Bos", "Vos", "Peters", "Hendriks", "van Leeuwen", "Dekker", "Brouwer", "de Wit", "Dijkstra", "Smits", "de Graaf", "van der Meer", "Kok", "Jacobs", "de Haan", "Vermeulen", "van den Heuvel"] },
+  hebrew: { ranks: ["Turai", "Rav-turai", "Samal", "Samal rishon", "Segen"], names: ["Cohen", "Levi", "Mizrahi", "Peretz", "Biton", "Friedman", "Katz", "Goldberg", "Shapiro", "Rosenberg", "Weiss", "Klein", "Ben-David", "Avraham", "Dahan", "Azoulay", "Malka", "Shalom", "Ashkenazi", "Rubin", "Segal", "Kaplan", "Stern", "Adler", "Gold", "Bernstein", "Weinberg", "Halevi", "Carmeli", "Barak"] },
+  igbo: { ranks: ["Pte.", "L/Cpl.", "Cpl.", "Sgt.", "Lt."], names: ["Okafor", "Okeke", "Okonkwo", "Eze", "Nwosu", "Obi", "Chukwu", "Nwankwo", "Okoro", "Uzor", "Onyeka", "Ibe", "Agu", "Nnamdi", "Ezeh", "Okoye", "Nwachukwu", "Anyanwu", "Obiora", "Udeh", "Achebe", "Iwu", "Nwafor", "Onwuka", "Ekwueme", "Ogbonna", "Ozor", "Chibuike", "Emeka", "Nzeribe"] },
+  haitian: { ranks: ["Solda", "Solda 1e", "Kaporal", "Sejan", "Lyetnan"], names: ["Jean-Baptiste", "Pierre", "Joseph", "Louis", "Charles", "Saint-Fleur", "Toussaint", "Desir", "Dorval", "Etienne", "Francois", "Lafleur", "Michel", "Celestin", "Augustin", "Philippe", "Belizaire", "Dessalines", "Christophe", "Petion", "Laguerre", "Exantus", "Fils-Aime", "Jeune", "Noel", "Estime", "Paul", "Jacques", "Bien-Aime", "Clervil"] },
+  spanish: { ranks: ["Raso", "Cabo", "Sargento", "Sargento Mayor", "Teniente"], names: ["Rodriguez", "Perez", "Martinez", "Garcia", "Santana", "Reyes", "Ramirez", "Diaz", "Hernandez", "Gomez", "Jimenez", "Pena", "Feliz", "Mejia", "Rosario", "De la Cruz", "Castillo", "Guzman", "Batista", "Tavarez", "Polanco", "Almonte", "Abreu", "Vasquez", "Ortiz", "Familia", "Encarnacion", "Lantigua", "Paulino", "Cabrera"] },
+  italian: { ranks: ["Soldato", "Caporale", "Caporalmaggiore", "Sergente", "Tenente"], names: ["Rossi", "Russo", "Ferrari", "Esposito", "Bianchi", "Romano", "Colombo", "Ricci", "Marino", "Greco", "Bruno", "Gallo", "Conti", "De Luca", "Mancini", "Costa", "Giordano", "Rizzo", "Lombardi", "Moretti", "Barbieri", "Fontana", "Santoro", "Mariani"] },
+  hindi: { ranks: ["Sipahi", "Lance Naik", "Naik", "Havildar", "Lieutenant"], names: ["Sharma", "Singh", "Kumar", "Verma", "Gupta", "Yadav", "Patel", "Mishra", "Chauhan", "Rathore", "Thakur", "Pandey", "Joshi", "Rawat", "Negi", "Bisht", "Malik", "Saini", "Tiwari", "Dubey", "Shekhawat", "Bhati"] },
+  arabic_sy: { ranks: ["Jundi", "Jundi awwal", "Areef", "Raqib", "Mulazim"], names: ["Haddad", "Khoury", "Nasser", "Haddad", "Saleh", "Hamdan", "Mansour", "Darwish", "Najjar", "Halabi", "Hamoud", "Kassab", "Shami", "Atassi", "Jaber", "Khalil", "Ibrahim", "Youssef", "Abboud", "Sabbagh"] },
+  chinese: { ranks: ["Liebing", "Shangdengbing", "Xiashi", "Zhongshi", "Shaowei"], names: ["Wang", "Li", "Zhang", "Liu", "Chen", "Yang", "Huang", "Zhao", "Wu", "Zhou", "Xu", "Sun", "Ma", "Zhu", "Hu", "Guo", "He", "Lin", "Gao", "Luo", "Zheng", "Liang"] },
+  maya: { ranks: ["Soldado", "Cabo", "Sargento 2o", "Sargento 1o", "Teniente"], names: ["Pech", "Chan", "Canul", "May", "Cocom", "Tun", "Uc", "Ek", "Poot", "Chi", "Dzul", "Balam", "Cauich", "Puc", "Kuk", "Couoh", "Yam", "Noh", "Itza", "Mukul"] },
+};
+const cultureOf = (f) => CULTURE[voiceOf(f)] ?? CULTURE.en_us;      // ("None (silent)" names like US English)
+const RANK_XP = [0, 4, 10, 20];                                        // xp for pvt / senior pvt / cpl / sgt (veteran)
+function idSeed(e) { let s = gdp(e, "war:nseed"); if (s === undefined) { s = Math.floor(Math.random() * 1000000); sdp(e, "war:nseed", s); } return Number(s); }
+const xpOf = (e) => Number(gdp(e, "war:xp") ?? 0);
+function vetTier(e) { const x = xpOf(e); return x >= RANK_XP[3] ? 3 : x >= RANK_XP[2] ? 2 : x >= RANK_XP[1] ? 1 : 0; }
+let OFFICER_IDS = new Set();
+function rankTier(e) { const v = vetTier(e); return OFFICER_IDS.has(e.id) ? (v >= 3 ? 4 : 3) : v; }
+function surname(e) { const c = cultureOf(Number(P(e, "war:faction") ?? 0)); return c.names[idSeed(e) % c.names.length]; }
+function soldierName(e) { try { const c = cultureOf(Number(P(e, "war:faction") ?? 0)); return `${c.ranks[rankTier(e)]} ${c.names[idSeed(e) % c.names.length]}`; } catch { return "Soldier"; } }
+const TRAITS = { brave: "Brave", cautious: "Cautious", hothead: "Hothead", steady: "Steady" };
+function traitOf(e) {
+  let t = gdp(e, "war:trait");
+  if (t === undefined) { const r = Math.random(); t = r < 0.18 ? "brave" : r < 0.4 ? "cautious" : r < 0.47 ? "hothead" : "steady"; sdp(e, "war:trait", t); }
+  return String(t);
+}
+// how steady he is under stress (subtracted from his stress): veterans and the brave hold; the cautious less so
+const nerveOf = (e) => vetTier(e) * 0.7 + ({ brave: 1.5, hothead: 1, cautious: -1 }[traitOf(e)] ?? 0);
+// how badly hurt before he pulls back on his own
+const retreatHp = (e) => ({ brave: 0.2, hothead: 0.15, cautious: 0.42 }[traitOf(e)] ?? 0.3);
+// veterans shoot straighter
+const vetAim = (e) => [1, 0.92, 0.84, 0.76][vetTier(e)];
+function showRank(e) { try { setP(e, "war:vet", vetTier(e)); updateName(e); } catch {} }
+// ---- credit: who hit whom (our own rounds carry no attacker, so they're noted here)
+const SHOT_BY = new Map();   // victim id -> { id, t }
+const KILLS = new Map(), SAVES = new Map(), WOUNDS = new Map();   // id -> [ticks] (for medals: what he did in this battle)
+const logTo = (m, id, now) => { const a = m.get(id) ?? []; a.push(now); m.set(id, a.filter((t) => now - t < 12000)); };
+function lastAttacker(v, now) {
+  const s = SHOT_BY.get(v.id), h = hurtBy.get(v.id);
+  const best = s && (!h || s.t >= h.t) ? s : h;
+  return best && now - best.t < 200 ? world.getEntity(best.id) : undefined;
+}
+function giveXp(e, n) {
+  if (!e?.isValid || e.typeId !== SOLDIER) return;
+  const before = vetTier(e);
+  sdp(e, "war:xp", xpOf(e) + n);
+  if (vetTier(e) !== before) { showRank(e); radio(e, `${soldierName(e)} has been promoted`, "story"); }
+}
+function creditSave(e) { if (e?.typeId === SOLDIER) { logTo(SAVES, e.id, tick()); giveXp(e, 1); } }
+const GRUDGE = new Map();    // id -> { id (the enemy), until }
+const GRIEF = new Map();     // id -> tick his grief eases (stress)
+world.afterEvents.entityDie.subscribe((ev) => {
+  try {
+    const v = ev.deadEntity; if (v?.typeId !== SOLDIER) return;
+    const now = tick(), k = ev.damageSource?.damagingEntity?.typeId === SOLDIER ? ev.damageSource.damagingEntity : lastAttacker(v, now);
+    if (k?.typeId === SOLDIER && k.id !== v.id && isHostile(Number(P(k, "war:faction") ?? 0), Number(P(v, "war:faction") ?? 0))) { logTo(KILLS, k.id, now); giveXp(k, 3); }
+    // his buddy: rage (a grudge against the man who did it) or grief
+    const bid = gdp(v, "war:buddy"), b = bid ? world.getEntity(String(bid)) : undefined;
+    if (b?.isValid && !downed.has(b.id) && dist(b.location, v.location) < 40) {
+      const t = traitOf(b);
+      if (k?.isValid && (t === "brave" || t === "hothead" || Math.random() < 0.55)) { GRUDGE.set(b.id, { id: k.id, until: now + 2400 }); radio(b, `${soldierName(b)}: they got ${surname(v)}! I'm going after him`, "story"); v9stat("grudge"); }
+      else { GRIEF.set(b.id, now + 600); radio(b, `${soldierName(b)} saw his buddy ${surname(v)} go down`, "story"); v9stat("grief"); }
+      sdp(b, "war:buddy", undefined);
+    }
+  } catch {}
+});
+system.runInterval(() => { const now = tick(); for (const [k, g] of [...GRUDGE]) if (now > g.until || !world.getEntity(g.id)) GRUDGE.delete(k); for (const [k, t] of [...GRIEF]) if (now > t) GRIEF.delete(k); for (const m of [KILLS, SAVES, WOUNDS, SHOT_BY]) if (m.size > 3000) m.clear(); }, 200);
+// ---- buddies: pairs in each squad, kept close in mind (he goes for his buddy first when he's hit)
+system.runInterval(() => {
+  for (const S of squads.values()) {
+    try {
+      if (!S.ours?.length) continue;
+      const live = S.ours.filter((o) => o.isValid && !downed.has(o.id));
+      const ids = new Set(live.map((o) => o.id));
+      const free = live.filter((o) => { const b = gdp(o, "war:buddy"); return !b || !ids.has(String(b)) || gdp(world.getEntity(String(b)), "war:buddy") !== o.id; });
+      while (free.length >= 2) {
+        const a = free.shift(); let bi = 0, bd = 1e9;
+        free.forEach((o, i) => { const dd = dist(o.location, a.location); if (dd < bd) { bd = dd; bi = i; } });
+        const b = free.splice(bi, 1)[0];
+        sdp(a, "war:buddy", b.id); sdp(b, "war:buddy", a.id);
+      }
+    } catch {}
+  }
+}, 200);
+// ---- after a battle: experience for everyone who came through it, and medals for what they did
+// medals (bits): 1 Valor (3+ enemies in one fight), 2 Lifesaver (got a wounded man back on his feet or out of the fire),
+// 4 Wound (went down and lived)
+function afterBattle(S, ours, now) {
+  const since = S.contactT >= 0 ? S.contactT : now - 2400;
+  const cnt = (m, id) => (m.get(id) ?? []).filter((t) => t >= since).length;
+  for (const e of ours) {
+    try {
+      if (!e.isValid) continue;
+      giveXp(e, 1);
+      let m = Number(P(e, "war:medals") ?? 0), got = [];
+      if (cnt(KILLS, e.id) >= 3 && !(m & 1)) { m |= 1; got.push("the Valor medal"); }
+      if (cnt(SAVES, e.id) >= 1 && !(m & 2)) { m |= 2; got.push("the Lifesaver medal"); }
+      if (cnt(WOUNDS, e.id) >= 1 && !(m & 4)) { m |= 4; got.push("the Wound medal"); }
+      if (got.length) { setP(e, "war:medals", m); radio(e, `${soldierName(e)} earned ${got.join(" and ")}`, "story"); v9stat("medal", got.length); }
+    } catch {}
+  }
+}
+// ---- the unit card: crouch and look at a soldier
+system.runInterval(() => {
+  for (const p of PLAYERS_LIST) {
+    try {
+      if (!p.isValid || !p.isSneaking) continue;
+      const hit = p.getEntitiesFromViewDirection({ maxDistance: 48 }).find((h) => h.entity.typeId === SOLDIER);
+      if (!hit) continue;
+      const e = hit.entity, d = sd(e), h = e.getComponent("minecraft:health");
+      const wpn = GUNS.includes(d.weapon) ? (WEAPONS.find((w) => w[0] === d.weapon)?.[1] ?? d.weapon) : d.weapon === "spear" ? "Spear" : d.ranged ? "Crossbow" : "Sword";
+      const med = Number(P(e, "war:medals") ?? 0), meds = [med & 1 ? "§6Valor" : "", med & 2 ? "§aLifesaver" : "", med & 4 ? "§5Wound" : ""].filter(Boolean).join(" ");
+      const bud = gdp(e, "war:buddy"), be = bud ? world.getEntity(String(bud)) : undefined;
+      const fc = COLORS[(Number(d.faction) || 1) - 1]?.[1] ?? "§7";
+      const doing = notes.get(e.id)?.text ?? (downed.has(e.id) ? "wounded" : "standing by");
+      p.onScreenDisplay.setActionBar(`${fc}${soldierName(e)}§r §7${DIV[d.div]?.name ?? "Soldier"} · ${wpn} · §c${Math.ceil(h?.currentValue ?? 0)}/${Math.round(h?.effectiveMax ?? 0)}§7 · ${TRAITS[traitOf(e)]} · ${xpOf(e)} xp${be?.isValid ? ` · buddy ${surname(be)}` : ""}${meds ? ` · ${meds}` : ""}\n§8${doing}`);
+    } catch {}
+  }
+}, 8);
+// ---- hotheads: once in a while (rarely) one charges on his own, against orders
+const HOT_CD = new Map();
+let hotLastT = -99999;
+system.runInterval(() => {
+  const now = tick();
+  if (now - hotLastT < 3600) return;                                        // (at most one every 3 minutes, all factions)
+  for (const S of squads.values()) {
+    try {
+      if (!S.ours?.length || !S.known?.size || S.contactT < 0 || now - S.contactT < 200) continue;
+      for (const e of S.ours) {
+        if (!e.isValid || downed.has(e.id) || traitOf(e) !== "hothead" || now < (HOT_CD.get(e.id) ?? 0) || personal.has(e.id) || isRiding(e)) continue;
+        const d = sd(e); if (d.func === "post" || d.retreat || d.surr) continue;
+        const t = perc.get(e.id)?.threat; if (!t?.isValid || dist(t.location, e.location) > 40) continue;
+        if (Math.random() > 0.04) continue;
+        HOT_CD.set(e.id, now + 24000); hotLastT = now;
+        planPersonalTo(e, "engage", { x: t.location.x, y: t.location.y, z: t.location.z }, now);
+        callout(e, "Charge!", { event: true }); radio(e, `${soldierName(e)} is charging on his own!`, "story"); note(e, "charging on his own"); v9stat("hotheadCharge");
+        return;
+      }
+    } catch {}
+  }
+}, 40);

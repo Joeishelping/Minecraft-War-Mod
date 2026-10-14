@@ -1321,6 +1321,31 @@
           "*": "!q.property('war:hide')"
         }
       ]
+    },
+    "controller.render.war_ranks": {
+      "geometry": "Geometry.ranks",
+      "materials": [
+        {
+          "*": "Material.default"
+        }
+      ],
+      "textures": [
+        "Texture.ranks"
+      ],
+      "part_visibility": [
+        {
+          "*": false,
+          "leftStripe1": "!q.property('war:hide') && q.property('war:vet') >= 1",
+          "leftStripe2": "!q.property('war:hide') && q.property('war:vet') >= 2",
+          "leftStripe3": "!q.property('war:hide') && q.property('war:vet') >= 3",
+          "rightStripe1": "!q.property('war:hide') && q.property('war:vet') >= 1",
+          "rightStripe2": "!q.property('war:hide') && q.property('war:vet') >= 2",
+          "rightStripe3": "!q.property('war:hide') && q.property('war:vet') >= 3",
+          "medal1": "!q.property('war:hide') && math.mod(math.floor(q.property('war:medals') / 1), 2) == 1",
+          "medal2": "!q.property('war:hide') && math.mod(math.floor(q.property('war:medals') / 2), 2) == 1",
+          "medal3": "!q.property('war:hide') && math.mod(math.floor(q.property('war:medals') / 4), 2) == 1"
+        }
+      ]
     }
   }
 }
