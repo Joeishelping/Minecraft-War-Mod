@@ -67,6 +67,9 @@
     },
     "war_first_aid": {
       "textures": "textures/items/war_first_aid"
+    },
+    "war_guide": {
+      "textures": "textures/items/war_guide"
     }
   }
 }

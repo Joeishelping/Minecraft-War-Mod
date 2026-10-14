@@ -264,94 +264,94 @@
       "render_controllers": [
         "controller.render.war_soldier",
         {
-          "controller.render.war_band": "q.property('war:role') > 0 && !q.property('war:cav') && !q.property('war:down')"
+          "controller.render.war_band": "q.property('war:role') > 0 && !q.property('war:down')"
         },
         {
-          "controller.render.war_officer": "q.property('war:officer') && !q.property('war:cav') && !q.property('war:down')"
+          "controller.render.war_officer": "q.property('war:officer') && !q.property('war:down')"
         },
         {
-          "controller.render.war_ranks": "(q.property('war:vet') > 0 || q.property('war:medals') > 0) && !q.property('war:cav') && !q.property('war:down')"
+          "controller.render.war_ranks": "(q.property('war:vet') > 0 || q.property('war:medals') > 0) && !q.property('war:down')"
         },
         {
-          "controller.render.war_gun_m1903": "q.property('war:gun') == 1 && !q.property('war:cav')"
+          "controller.render.war_gun_m1903": "q.property('war:gun') == 1"
         },
         {
-          "controller.render.war_gun_garand": "q.property('war:gun') == 2 && !q.property('war:cav')"
+          "controller.render.war_gun_garand": "q.property('war:gun') == 2"
         },
         {
-          "controller.render.war_gun_thompson": "q.property('war:gun') == 3 && !q.property('war:cav')"
+          "controller.render.war_gun_thompson": "q.property('war:gun') == 3"
         },
         {
-          "controller.render.war_gun_bar": "q.property('war:gun') == 4 && !q.property('war:cav')"
+          "controller.render.war_gun_bar": "q.property('war:gun') == 4"
         },
         {
-          "controller.render.war_gun_model1912": "q.property('war:gun') == 5 && !q.property('war:cav')"
+          "controller.render.war_gun_model1912": "q.property('war:gun') == 5"
         },
         {
-          "controller.render.war_gun_bazooka": "q.property('war:gun') == 6 && !q.property('war:cav')"
+          "controller.render.war_gun_bazooka": "q.property('war:gun') == 6"
         },
         {
-          "controller.render.war_gun_m1911": "q.property('war:gun') == 7 && !q.property('war:cav')"
+          "controller.render.war_gun_m1911": "q.property('war:gun') == 7"
         },
         {
-          "controller.render.war_gun_kar98": "q.property('war:gun') == 8 && !q.property('war:cav')"
+          "controller.render.war_gun_kar98": "q.property('war:gun') == 8"
         },
         {
-          "controller.render.war_gun_g43": "q.property('war:gun') == 9 && !q.property('war:cav')"
+          "controller.render.war_gun_g43": "q.property('war:gun') == 9"
         },
         {
-          "controller.render.war_gun_mp40": "q.property('war:gun') == 10 && !q.property('war:cav')"
+          "controller.render.war_gun_mp40": "q.property('war:gun') == 10"
         },
         {
-          "controller.render.war_gun_mg42": "q.property('war:gun') == 11 && !q.property('war:cav')"
+          "controller.render.war_gun_mg42": "q.property('war:gun') == 11"
         },
         {
-          "controller.render.war_gun_pzb39": "q.property('war:gun') == 12 && !q.property('war:cav')"
+          "controller.render.war_gun_pzb39": "q.property('war:gun') == 12"
         },
         {
-          "controller.render.war_gun_p08": "q.property('war:gun') == 13 && !q.property('war:cav')"
+          "controller.render.war_gun_p08": "q.property('war:gun') == 13"
         },
         {
-          "controller.render.war_gun_mosin": "q.property('war:gun') == 14 && !q.property('war:cav')"
+          "controller.render.war_gun_mosin": "q.property('war:gun') == 14"
         },
         {
-          "controller.render.war_gun_svt38": "q.property('war:gun') == 15 && !q.property('war:cav')"
+          "controller.render.war_gun_svt38": "q.property('war:gun') == 15"
         },
         {
-          "controller.render.war_gun_ppsh41d": "q.property('war:gun') == 16 && !q.property('war:cav')"
+          "controller.render.war_gun_ppsh41d": "q.property('war:gun') == 16"
         },
         {
-          "controller.render.war_gun_dp28": "q.property('war:gun') == 17 && !q.property('war:cav')"
+          "controller.render.war_gun_dp28": "q.property('war:gun') == 17"
         },
         {
-          "controller.render.war_gun_tt33": "q.property('war:gun') == 18 && !q.property('war:cav')"
+          "controller.render.war_gun_tt33": "q.property('war:gun') == 18"
         },
         {
-          "controller.render.war_gun_type99": "q.property('war:gun') == 19 && !q.property('war:cav')"
+          "controller.render.war_gun_type99": "q.property('war:gun') == 19"
         },
         {
-          "controller.render.war_gun_type100": "q.property('war:gun') == 20 && !q.property('war:cav')"
+          "controller.render.war_gun_type100": "q.property('war:gun') == 20"
         },
         {
-          "controller.render.war_gun_type96": "q.property('war:gun') == 21 && !q.property('war:cav')"
+          "controller.render.war_gun_type96": "q.property('war:gun') == 21"
         },
         {
-          "controller.render.war_gun_nagant": "q.property('war:gun') == 22 && !q.property('war:cav')"
+          "controller.render.war_gun_nagant": "q.property('war:gun') == 22"
         },
         {
-          "controller.render.war_gun_mab38": "q.property('war:gun') == 23 && !q.property('war:cav')"
+          "controller.render.war_gun_mab38": "q.property('war:gun') == 23"
         },
         {
-          "controller.render.war_gun_lewis": "q.property('war:gun') == 24 && !q.property('war:cav')"
+          "controller.render.war_gun_lewis": "q.property('war:gun') == 24"
         },
         {
-          "controller.render.war_gun_mas35": "q.property('war:gun') == 25 && !q.property('war:cav')"
+          "controller.render.war_gun_mas35": "q.property('war:gun') == 25"
         },
         {
-          "controller.render.war_gun_m1903s": "q.property('war:gun') == 26 && !q.property('war:cav')"
+          "controller.render.war_gun_m1903s": "q.property('war:gun') == 26"
         },
         {
-          "controller.render.war_gun_kar98s": "q.property('war:gun') == 27 && !q.property('war:cav')"
+          "controller.render.war_gun_kar98s": "q.property('war:gun') == 27"
         }
       ],
       "scripts": {
@@ -368,185 +368,185 @@
             "attack_rotations": "q.property('war:gun') == 0"
           },
           {
-            "move": "!q.property('war:cav') && !q.is_riding && q.property('war:gun') == 0"
+            "move": "!q.is_riding && q.property('war:gun') == 0"
           },
           {
-            "move_legs": "!q.property('war:cav') && !q.is_riding && q.property('war:gun') > 0"
+            "move_legs": "!q.is_riding && q.property('war:gun') > 0"
           },
           {
-            "bob": "!q.property('war:cav') && q.property('war:gun') == 0"
+            "bob": "q.property('war:gun') == 0"
           },
           {
-            "gh_m1903": "q.property('war:gun') == 1 && !q.property('war:cav') && !q.property('war:aiming')"
+            "gh_m1903": "q.property('war:gun') == 1 && !q.property('war:aiming')"
           },
           {
-            "ga_m1903": "q.property('war:gun') == 1 && !q.property('war:cav') && q.property('war:aiming')"
+            "ga_m1903": "q.property('war:gun') == 1 && q.property('war:aiming')"
           },
           {
-            "gh_garand": "q.property('war:gun') == 2 && !q.property('war:cav') && !q.property('war:aiming')"
+            "gh_garand": "q.property('war:gun') == 2 && !q.property('war:aiming')"
           },
           {
-            "ga_garand": "q.property('war:gun') == 2 && !q.property('war:cav') && q.property('war:aiming')"
+            "ga_garand": "q.property('war:gun') == 2 && q.property('war:aiming')"
           },
           {
-            "gh_thompson": "q.property('war:gun') == 3 && !q.property('war:cav') && !q.property('war:aiming')"
+            "gh_thompson": "q.property('war:gun') == 3 && !q.property('war:aiming')"
           },
           {
-            "ga_thompson": "q.property('war:gun') == 3 && !q.property('war:cav') && q.property('war:aiming')"
+            "ga_thompson": "q.property('war:gun') == 3 && q.property('war:aiming')"
           },
           {
-            "gh_bar": "q.property('war:gun') == 4 && !q.property('war:cav') && !q.property('war:aiming')"
+            "gh_bar": "q.property('war:gun') == 4 && !q.property('war:aiming')"
           },
           {
-            "ga_bar": "q.property('war:gun') == 4 && !q.property('war:cav') && q.property('war:aiming')"
+            "ga_bar": "q.property('war:gun') == 4 && q.property('war:aiming')"
           },
           {
-            "gh_model1912": "q.property('war:gun') == 5 && !q.property('war:cav') && !q.property('war:aiming')"
+            "gh_model1912": "q.property('war:gun') == 5 && !q.property('war:aiming')"
           },
           {
-            "ga_model1912": "q.property('war:gun') == 5 && !q.property('war:cav') && q.property('war:aiming')"
+            "ga_model1912": "q.property('war:gun') == 5 && q.property('war:aiming')"
           },
           {
-            "gh_bazooka": "q.property('war:gun') == 6 && !q.property('war:cav') && !q.property('war:aiming')"
+            "gh_bazooka": "q.property('war:gun') == 6 && !q.property('war:aiming')"
           },
           {
-            "ga_bazooka": "q.property('war:gun') == 6 && !q.property('war:cav') && q.property('war:aiming')"
+            "ga_bazooka": "q.property('war:gun') == 6 && q.property('war:aiming')"
           },
           {
-            "gh_m1911": "q.property('war:gun') == 7 && !q.property('war:cav') && !q.property('war:aiming')"
+            "gh_m1911": "q.property('war:gun') == 7 && !q.property('war:aiming')"
           },
           {
-            "ga_m1911": "q.property('war:gun') == 7 && !q.property('war:cav') && q.property('war:aiming')"
+            "ga_m1911": "q.property('war:gun') == 7 && q.property('war:aiming')"
           },
           {
-            "gh_kar98": "q.property('war:gun') == 8 && !q.property('war:cav') && !q.property('war:aiming')"
+            "gh_kar98": "q.property('war:gun') == 8 && !q.property('war:aiming')"
           },
           {
-            "ga_kar98": "q.property('war:gun') == 8 && !q.property('war:cav') && q.property('war:aiming')"
+            "ga_kar98": "q.property('war:gun') == 8 && q.property('war:aiming')"
           },
           {
-            "gh_g43": "q.property('war:gun') == 9 && !q.property('war:cav') && !q.property('war:aiming')"
+            "gh_g43": "q.property('war:gun') == 9 && !q.property('war:aiming')"
           },
           {
-            "ga_g43": "q.property('war:gun') == 9 && !q.property('war:cav') && q.property('war:aiming')"
+            "ga_g43": "q.property('war:gun') == 9 && q.property('war:aiming')"
           },
           {
-            "gh_mp40": "q.property('war:gun') == 10 && !q.property('war:cav') && !q.property('war:aiming')"
+            "gh_mp40": "q.property('war:gun') == 10 && !q.property('war:aiming')"
           },
           {
-            "ga_mp40": "q.property('war:gun') == 10 && !q.property('war:cav') && q.property('war:aiming')"
+            "ga_mp40": "q.property('war:gun') == 10 && q.property('war:aiming')"
           },
           {
-            "gh_mg42": "q.property('war:gun') == 11 && !q.property('war:cav') && !q.property('war:aiming')"
+            "gh_mg42": "q.property('war:gun') == 11 && !q.property('war:aiming')"
           },
           {
-            "ga_mg42": "q.property('war:gun') == 11 && !q.property('war:cav') && q.property('war:aiming')"
+            "ga_mg42": "q.property('war:gun') == 11 && q.property('war:aiming')"
           },
           {
-            "gh_pzb39": "q.property('war:gun') == 12 && !q.property('war:cav') && !q.property('war:aiming')"
+            "gh_pzb39": "q.property('war:gun') == 12 && !q.property('war:aiming')"
           },
           {
-            "ga_pzb39": "q.property('war:gun') == 12 && !q.property('war:cav') && q.property('war:aiming')"
+            "ga_pzb39": "q.property('war:gun') == 12 && q.property('war:aiming')"
           },
           {
-            "gh_p08": "q.property('war:gun') == 13 && !q.property('war:cav') && !q.property('war:aiming')"
+            "gh_p08": "q.property('war:gun') == 13 && !q.property('war:aiming')"
           },
           {
-            "ga_p08": "q.property('war:gun') == 13 && !q.property('war:cav') && q.property('war:aiming')"
+            "ga_p08": "q.property('war:gun') == 13 && q.property('war:aiming')"
           },
           {
-            "gh_mosin": "q.property('war:gun') == 14 && !q.property('war:cav') && !q.property('war:aiming')"
+            "gh_mosin": "q.property('war:gun') == 14 && !q.property('war:aiming')"
           },
           {
-            "ga_mosin": "q.property('war:gun') == 14 && !q.property('war:cav') && q.property('war:aiming')"
+            "ga_mosin": "q.property('war:gun') == 14 && q.property('war:aiming')"
           },
           {
-            "gh_svt38": "q.property('war:gun') == 15 && !q.property('war:cav') && !q.property('war:aiming')"
+            "gh_svt38": "q.property('war:gun') == 15 && !q.property('war:aiming')"
           },
           {
-            "ga_svt38": "q.property('war:gun') == 15 && !q.property('war:cav') && q.property('war:aiming')"
+            "ga_svt38": "q.property('war:gun') == 15 && q.property('war:aiming')"
           },
           {
-            "gh_ppsh41d": "q.property('war:gun') == 16 && !q.property('war:cav') && !q.property('war:aiming')"
+            "gh_ppsh41d": "q.property('war:gun') == 16 && !q.property('war:aiming')"
           },
           {
-            "ga_ppsh41d": "q.property('war:gun') == 16 && !q.property('war:cav') && q.property('war:aiming')"
+            "ga_ppsh41d": "q.property('war:gun') == 16 && q.property('war:aiming')"
           },
           {
-            "gh_dp28": "q.property('war:gun') == 17 && !q.property('war:cav') && !q.property('war:aiming')"
+            "gh_dp28": "q.property('war:gun') == 17 && !q.property('war:aiming')"
           },
           {
-            "ga_dp28": "q.property('war:gun') == 17 && !q.property('war:cav') && q.property('war:aiming')"
+            "ga_dp28": "q.property('war:gun') == 17 && q.property('war:aiming')"
           },
           {
-            "gh_tt33": "q.property('war:gun') == 18 && !q.property('war:cav') && !q.property('war:aiming')"
+            "gh_tt33": "q.property('war:gun') == 18 && !q.property('war:aiming')"
           },
           {
-            "ga_tt33": "q.property('war:gun') == 18 && !q.property('war:cav') && q.property('war:aiming')"
+            "ga_tt33": "q.property('war:gun') == 18 && q.property('war:aiming')"
           },
           {
-            "gh_type99": "q.property('war:gun') == 19 && !q.property('war:cav') && !q.property('war:aiming')"
+            "gh_type99": "q.property('war:gun') == 19 && !q.property('war:aiming')"
           },
           {
-            "ga_type99": "q.property('war:gun') == 19 && !q.property('war:cav') && q.property('war:aiming')"
+            "ga_type99": "q.property('war:gun') == 19 && q.property('war:aiming')"
           },
           {
-            "gh_type100": "q.property('war:gun') == 20 && !q.property('war:cav') && !q.property('war:aiming')"
+            "gh_type100": "q.property('war:gun') == 20 && !q.property('war:aiming')"
           },
           {
-            "ga_type100": "q.property('war:gun') == 20 && !q.property('war:cav') && q.property('war:aiming')"
+            "ga_type100": "q.property('war:gun') == 20 && q.property('war:aiming')"
           },
           {
-            "gh_type96": "q.property('war:gun') == 21 && !q.property('war:cav') && !q.property('war:aiming')"
+            "gh_type96": "q.property('war:gun') == 21 && !q.property('war:aiming')"
           },
           {
-            "ga_type96": "q.property('war:gun') == 21 && !q.property('war:cav') && q.property('war:aiming')"
+            "ga_type96": "q.property('war:gun') == 21 && q.property('war:aiming')"
           },
           {
-            "gh_nagant": "q.property('war:gun') == 22 && !q.property('war:cav') && !q.property('war:aiming')"
+            "gh_nagant": "q.property('war:gun') == 22 && !q.property('war:aiming')"
           },
           {
-            "ga_nagant": "q.property('war:gun') == 22 && !q.property('war:cav') && q.property('war:aiming')"
+            "ga_nagant": "q.property('war:gun') == 22 && q.property('war:aiming')"
           },
           {
-            "gh_mab38": "q.property('war:gun') == 23 && !q.property('war:cav') && !q.property('war:aiming')"
+            "gh_mab38": "q.property('war:gun') == 23 && !q.property('war:aiming')"
           },
           {
-            "ga_mab38": "q.property('war:gun') == 23 && !q.property('war:cav') && q.property('war:aiming')"
+            "ga_mab38": "q.property('war:gun') == 23 && q.property('war:aiming')"
           },
           {
-            "gh_lewis": "q.property('war:gun') == 24 && !q.property('war:cav') && !q.property('war:aiming')"
+            "gh_lewis": "q.property('war:gun') == 24 && !q.property('war:aiming')"
           },
           {
-            "ga_lewis": "q.property('war:gun') == 24 && !q.property('war:cav') && q.property('war:aiming')"
+            "ga_lewis": "q.property('war:gun') == 24 && q.property('war:aiming')"
           },
           {
-            "gh_mas35": "q.property('war:gun') == 25 && !q.property('war:cav') && !q.property('war:aiming')"
+            "gh_mas35": "q.property('war:gun') == 25 && !q.property('war:aiming')"
           },
           {
-            "ga_mas35": "q.property('war:gun') == 25 && !q.property('war:cav') && q.property('war:aiming')"
+            "ga_mas35": "q.property('war:gun') == 25 && q.property('war:aiming')"
           },
           {
-            "gh_m1903s": "q.property('war:gun') == 26 && !q.property('war:cav') && !q.property('war:aiming')"
+            "gh_m1903s": "q.property('war:gun') == 26 && !q.property('war:aiming')"
           },
           {
-            "ga_m1903s": "q.property('war:gun') == 26 && !q.property('war:cav') && q.property('war:aiming')"
+            "ga_m1903s": "q.property('war:gun') == 26 && q.property('war:aiming')"
           },
           {
-            "gh_kar98s": "q.property('war:gun') == 27 && !q.property('war:cav') && !q.property('war:aiming')"
+            "gh_kar98s": "q.property('war:gun') == 27 && !q.property('war:aiming')"
           },
           {
-            "ga_kar98s": "q.property('war:gun') == 27 && !q.property('war:cav') && q.property('war:aiming')"
+            "ga_kar98s": "q.property('war:gun') == 27 && q.property('war:aiming')"
           },
           "gun_fire",
           {
             "downed": "q.property('war:down')"
           },
           {
-            "riding_arms": "q.is_riding && !q.property('war:cav') && !q.property('war:nest')"
+            "riding_arms": "q.is_riding && !q.property('war:nest')"
           },
           {
-            "riding_legs": "q.is_riding && !q.property('war:cav') && !q.property('war:nest')"
+            "riding_legs": "q.is_riding && !q.property('war:nest')"
           },
           {
             "on_mg": "q.property('war:nest')"
@@ -561,10 +561,10 @@
             "bow_and_arrow": "q.property('war:ranged') && q.property('war:gun') == 0 && q.has_target"
           },
           {
-            "kneel": "q.property('war:pose') == 1 && !q.property('war:down') && !q.is_riding && !q.property('war:cav')"
+            "kneel": "q.property('war:pose') == 1 && !q.property('war:down') && !q.is_riding"
           },
           {
-            "prone": "q.property('war:pose') == 2 && !q.property('war:down') && !q.is_riding && !q.property('war:cav')"
+            "prone": "q.property('war:pose') == 2 && !q.property('war:down') && !q.is_riding"
           },
           {
             "sit": "q.property('war:sit') && !q.is_riding && !q.property('war:down')"
@@ -573,7 +573,7 @@
             "crawl": "q.property('war:down') && q.property('war:crawl')"
           },
           {
-            "shield_up": "q.property('war:block') && !q.property('war:down') && !q.property('war:cav')"
+            "shield_up": "q.property('war:block') && !q.property('war:down')"
           },
           {
             "flinch": "q.property('war:react') == 1 && !q.property('war:down')"

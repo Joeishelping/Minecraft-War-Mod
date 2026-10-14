@@ -1,0 +1,26 @@
+# War Engine: checks on every push and pull request.
+# 1) every JSON file parses and every script loads as a module (tools/build_mcaddon.py stops on either)
+# 2) the battle simulator's ten acceptance checks pass (tests/harness/accept.mjs, two seeds)
+name: War Engine checks
+on:
+  push:
+  pull_request:
+permissions:
+  contents: read
+jobs:
+  checks:
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          lfs: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+      - name: Build (JSON + module syntax checks)
+        run: python3 tools/build_mcaddon.py dist/check.mcaddon
+      - name: Simulator acceptance checks
+        env:
+          WAR_STRICT: "1"
+        run: node tests/harness/accept.mjs 2 "War Engine BP/scripts"

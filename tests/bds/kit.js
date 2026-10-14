@@ -1549,7 +1549,7 @@ KS.human = async (o, ox, oz) => {
   // grenade thrown back (forced chance)
   setRelPair(1, 2, "1", true);
   const thrower = kitSoldier(2, { x: ox + 0.5, y: Y, z: oz + 14.5 }, "rifle", "hold"), vet = kitSoldier(1, { x: ox + 0.5, y: Y, z: oz + 0.5 }, "rifle", "hold");
-  sdp(vet, "war:xp", 30); sdp(vet, "war:trait", "brave");
+  Object.assign(idRec(vet), { x: 30, t: "brave" }); idSave(vet, idRec(vet));
   await kitWait(10);
   const G = { dim: ow(), at: { x: ox + 1.5, y: Y, z: oz + 0.5 }, boom: tick() + 40, by: thrower }; liveNades.push(G);
   const keep = Math.random; Math.random = () => 0.01; await kitWait(20); Math.random = keep;
@@ -1561,7 +1561,7 @@ KS.human = async (o, ox, oz) => {
 KS.rout = async (o, ox, oz) => {
   floorAt(ox - 40, oz - 40, ox + 40, oz + 40);
   setRelPair(1, 2, "1", true);
-  const a = [...Array(6).keys()].map((i) => { const e = kitSoldier(1, { x: ox - 6 + i * 2 + 0.5, y: Y, z: oz - 10.5 }, "rifle", "hold"); sdp(e, "war:trait", "steady"); return e; });
+  const a = [...Array(6).keys()].map((i) => { const e = kitSoldier(1, { x: ox - 6 + i * 2 + 0.5, y: Y, z: oz - 10.5 }, "rifle", "hold"); Object.assign(idRec(e), { t: "steady" }); return e; });
   const b = [...Array(12).keys()].map((i) => kitSoldier(2, { x: ox - 12 + i * 2 + 0.5, y: Y, z: oz + 14.5 }, i % 2 ? "smg" : "rifle", "hold"));
   for (const e of b) try { e.addEffect("resistance", 4000, { amplifier: 3, showParticles: false }); } catch {}
   let shakenMax = 0;
@@ -1678,7 +1678,7 @@ KS.bsave = async (o, ox, oz) => {
   floorAt(ox - 20, oz - 20, ox + 20, oz + 20);
   setRelPair(1, 2, "0", false);
   const men = [0, 1, 2, 3].map((i) => kitSoldier(1 + (i % 2), { x: ox - 3 + i * 2 + 0.5, y: Y, z: oz + 0.5 }, i % 2 ? "smg" : "sword", "hold"));
-  sdp(men[0], "war:xp", 25); sdp(men[1], "war:trait", "hothead"); setP(men[2], "war:medals", 5);
+  Object.assign(idRec(men[0]), { x: 25 }); idSave(men[0], idRec(men[0])); Object.assign(idRec(men[1]), { t: "hothead" }); idSave(men[1], idRec(men[1])); setP(men[2], "war:medals", 5);
   await kitWait(20);
   const before = men.map((e) => `${soldierName(e)}|${traitOf(e)}|${sd(e).weapon}|${Math.round(e.location.x - ox)}|${e.getProperty("war:medals")}`);
   const n = battleSave(KIT_PLAYER, 5);
@@ -1770,7 +1770,7 @@ KS.names2 = async (o, ox, oz) => {
   const keep = getJSON(world, "war:vlang", {});
   setJSON(world, "war:vlang", { ...keep, 1: "us_mix", 2: "greek" });
   const men = [...Array(12).keys()].map((i) => kitSoldier(1, { x: ox - 6 + i + 0.5, y: Y, z: oz + 0.5 }, "rifle", "hold"));
-  for (const e of men) sdp(e, "war:nseed", 5000);         // all the same name to start: the squad check must sort it out
+  for (const e of men) { Object.assign(idRec(e), { s: 5000 }); idSave(e, idRec(e)); NAME_KEY.delete(e.id); }         // all the same name to start: the squad check must sort it out
   const gr = [0, 1].map((i) => kitSoldier(2, { x: ox + i * 2 + 0.5, y: Y, z: oz + 8.5 }, "rifle", "hold"));
   await kitWait(260);
   const names = men.map((e) => surname(e));
@@ -2160,4 +2160,18 @@ KS.wallbody = async (o, ox, oz) => {
   }
   kfill(ox - 3, Y, oz + 2, ox + 3, Y + 3, oz + 2, "air");
   return res;
+};
+// v9.19: the one-record identity: an old soldier (separate keys) is moved over on first read, nothing lost
+KS.idrec = async (o, ox, oz) => {
+  floorAt(ox - 10, oz - 10, ox + 10, oz + 10);
+  const e = kitSoldier(1, { x: ox + 0.5, y: Y, z: oz + 0.5 }, "rifle", "hold");
+  await kitWait(5);
+  ID_CACHE.delete(e.id); sdp(e, "war:id", undefined);
+  for (const [k, v] of [["war:nseed", 123456], ["war:xp", 14], ["war:trait", "brave"], ["war:nick", "Lucky"], ["war:nk_save", 2]]) sdp(e, k, v);
+  const r = { name: soldierName(e), xp: xpOf(e), trait: traitOf(e), rec: String(gdp(e, "war:id")), oldLeft: ["war:nseed", "war:xp", "war:trait", "war:nick", "war:nk_save"].filter((k) => gdp(e, k) !== undefined) };
+  creditSave(e); r.afterSave = idRec(e).c;
+  // settings code round trip
+  const code = settingsCode(); sdp(world, "war:set_vfreq", 2); const n = loadSettingsCode(code); r.codeLen = code.length; r.loaded = n; r.vfreqBack = setting("vfreq", 1);
+  try { e.remove(); } catch {}
+  return r;
 };

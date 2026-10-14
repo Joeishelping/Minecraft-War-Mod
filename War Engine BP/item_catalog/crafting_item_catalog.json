@@ -31,7 +31,8 @@
               "war:gunboat_item",
               "war:heli_item",
               "war:signal_flag",
-              "war:first_aid"
+              "war:first_aid",
+              "war:guide"
             ]
           }
         ]

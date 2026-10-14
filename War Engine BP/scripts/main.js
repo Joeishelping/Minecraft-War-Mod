@@ -4,9 +4,20 @@ import { ActionFormData, ModalFormData, FormCancelationReason } from "@minecraft
 import { SKINS } from "./skins.js";
 import { WarAPI } from "./api.js";
 import { CULTURE, MIXES } from "./names.js";
+import { GUIDE } from "./guide.js";
+import { VOICE_KEYS, VOICE_NAMES, CALL_KEY, BASE_LINES, MORE_LINES, VOICE_HAS, EN_LINES, IDLE_ASK, STORIES, IDLE_LINES, LINE_INFO } from "./voices.js";
 // v6.2: errors are never silent any more in the core loops: counted per system, written to the content log (with the
 // first lines of the stack) at most once a minute per system, and shown in chat when "Show soldier decisions" is on.
+// v9.19: an entity's health component, fetched once and kept (asking the game for it was ~40 calls a tick in a big battle)
+const HP_COMP = new Map();
+function hpOf(e) {
+  if (!e) return undefined;
+  let c = HP_COMP.get(e.id);
+  if (c) { try { c.currentValue; return c; } catch { HP_COMP.delete(e.id); } }
+  try { c = e.getComponent("minecraft:health"); if (c) { HP_COMP.set(e.id, c); if (HP_COMP.size > 3000) HP_COMP.clear(); } return c; } catch { return undefined; }
+}
 const ERRS = new Map(); // system -> { n, t }
+const ERR_LOG = [];     // v9.19: the last 20 (time, system, message)
 function oops(sys, err) {
   try {
     const now = tick(), r = ERRS.get(sys) ?? { n: 0, t: -99999 };
@@ -15,6 +26,7 @@ function oops(sys, err) {
       r.t = now;
       const msg = `War Engine: ${sys} error (x${r.n}): ${String(err?.stack ?? err).split("\n").slice(0, 3).join(" | ")}`;
       console.warn(msg);
+      ERR_LOG.push({ t: Date.now(), sys, msg: String(err?.message ?? err).slice(0, 160) }); if (ERR_LOG.length > 20) ERR_LOG.shift();   // (v9.19: War Table > Settings > Recent problems)
       try { if (world.getDynamicProperty("war:set_readout")) world.sendMessage(`§c${msg.slice(0, 180)}`); } catch {}
       r.n = 0;
     }
@@ -634,11 +646,11 @@ function setupSoldier(e, s, player, { heal = true } = {}) {
 
 function replaceSoldier(e) {
   const s = { ...snapshot(e), owner: gdp(e, "war:owner") };
-  const hp = e.getComponent("minecraft:health");
+  const hp = hpOf(e);
   const cur = hp ? hp.currentValue : undefined;
   const n = e.dimension.spawnEntity(SOLDIER, e.location, { spawnEvent: "war:init" });
   setupSoldier(n, { ...s, func: "__none" }, undefined);
-  try { if (cur !== undefined) n.getComponent("minecraft:health").setCurrentValue(cur); } catch {}
+  try { if (cur !== undefined) hpOf(n).setCurrentValue(cur); } catch {}
   e.remove();
   return n;
 }
@@ -818,7 +830,7 @@ function think(e) {
     return;
   }
   const riding = isRiding(e);
-  const hp = e.getComponent("minecraft:health");
+  const hp = hpOf(e);
   const hpr = hp ? hp.currentValue / hp.effectiveMax : 1;
   const lastHurt = Number(gdp(e, "war:hurt") ?? -9999);
   const alert = (alertUntil.get(e.id) ?? -9999) > now;
@@ -999,7 +1011,7 @@ function medic(e, d, now) {
   for (const o of e.dimension.getEntities({ location: e.location, maxDistance: 8 })) {
     if (o.id === e.id || (o.typeId !== SOLDIER && o.typeId !== "minecraft:player" && o.typeId !== HOUND)) continue;
     if (!isFriendly(d.faction, factionOf(o))) continue;
-    const h = o.getComponent("minecraft:health");
+    const h = hpOf(o);
     if (!h) continue;
     const r = h.currentValue / h.effectiveMax;
     if (r < bestR) { bestR = r; best = o; }
@@ -1016,7 +1028,7 @@ function medic(e, d, now) {
   } catch {}
   system.runTimeout(() => {
     if (!tgt.isValid) return;
-    const h = tgt.getComponent("minecraft:health");
+    const h = hpOf(tgt);
     if (h) h.setCurrentValue(Math.min(h.effectiveMax, h.currentValue + 4));
     try { tgt.dimension.spawnParticle("minecraft:heart_particle", { x: tgt.location.x, y: tgt.location.y + 2, z: tgt.location.z }); } catch {}
   }, 12);
@@ -1383,7 +1395,7 @@ function freshSeen(e) {
   poseOf.delete(e.id);
   // v9.19: an off-duty moment or a sleep cut short by the reload: on his feet with his rifle again
   try { if (P(e, "war:idle") || P(e, "war:sleep")) { setP(e, "war:idle", 0); setP(e, "war:sleep", false); if (!pows.has(e.id) && !gdp(e, "war:surr") && !downed.has(e.id)) equip(e, weaponItem(e)); } } catch {}
-  try { if (gdp(e, "war:div") === "guard") { const h = e.getComponent("minecraft:health"); if (h && h.effectiveMax < 40) e.triggerEvent("war:hp_60"); } } catch {}
+  try { if (gdp(e, "war:div") === "guard") { const h = hpOf(e); if (h && h.effectiveMax < 40) e.triggerEvent("war:hp_60"); } } catch {}
   try { setP(e, "war:role", roleFor(e)); } catch {}
 }
 // "hot": fighting, moving, near a player, just ordered or hurt; worked out at most every second per soldier
@@ -1442,7 +1454,7 @@ const LIMB_ANY = () => 1 + Math.floor(Math.random() * 5), LIMB_ARMLEG = () => 2 
 // same blow: a man on 12 hit for 7 went down, and overkill one-shots were far too common. His health just before the
 // hit is noted here and used instead.
 const PRE_HP = new Map();
-function preHp(o) { try { if (o?.typeId !== SOLDIER) return; const h = o.getComponent("minecraft:health"); if (!h) return; PRE_HP.set(o.id, h.currentValue); if (PRE_HP.size === 1) system.run(() => PRE_HP.clear()); } catch {} }
+function preHp(o) { try { if (o?.typeId !== SOLDIER) return; const h = hpOf(o); if (!h) return; PRE_HP.set(o.id, h.currentValue); if (PRE_HP.size === 1) system.run(() => PRE_HP.clear()); } catch {} }
 // (and it's the same for the game's own damage: a TNT blast, a sword. Whether this game version takes the blow off before
 // asking is learned from our own hits, where his health before is known; it was so on every version tested)
 let PRE_SUB = true;
@@ -1456,7 +1468,7 @@ function oneShot(v, ev, cause) {
   // into a man already hurt, buckshot at close range) kills outright; one that only just takes him down leaves him
   // wounded. A blast kills outright and throws him away from it the closer he was, and very close tears him apart.
   const now = tick(), lh = lastHit.get(v.id), fresh = !!lh && now - lh.t <= 1;
-  const hp = hpBefore(v, v.getComponent("minecraft:health"), ev.damage), over = ev.damage - hp;
+  const hp = hpBefore(v, hpOf(v), ev.damage), over = ev.damage - hp;
   const src = ev.damageSource?.damagingEntity;
   const away = (from) => { const dx = v.location.x - from.x, dz = v.location.z - from.z, L = Math.hypot(dx, dz) || 1; return { x: dx / L, y: 0, z: dz / L }; };
   let how;
@@ -1856,13 +1868,13 @@ world.beforeEvents.entityHurt.subscribe((ev) => {
     }
     if (v?.typeId === SOLDIER && !downed.has(v.id)) {
       const cause = String(ev.damageSource.cause ?? "");
-      const h = v.getComponent("minecraft:health");
+      const h = hpOf(v);
       const noDown = ["houndmaster"].includes(String(gdp(v, "war:div") ?? ""));   // (v6.9.3: dog handlers just die; v9.14: riders go down, thrown from the saddle)
       if (h && ev.damage >= hpBefore(v, h, ev.damage) && cause !== "void" && !dying.has(v.id) && !noDown && !oneShot(v, ev, cause)) {   // (v9.7: some hits kill outright)
         ev.cancel = true;                                            // falls wounded instead of dying
         let killer; try { killer = ev.damageSource?.damagingEntity; } catch {}
         const bd = hitDir(v, killer);
-        system.run(() => { try { if (v.isValid) { const hh = v.getComponent("minecraft:health"); if (hh) hh.setCurrentValue(1); bleed(v, bd, false); goDown(v, killer); } } catch {} });
+        system.run(() => { try { if (v.isValid) { const hh = hpOf(v); if (hh) hh.setCurrentValue(1); bleed(v, bd, false); goDown(v, killer); } } catch {} });
         return;
       }
     }
@@ -2546,6 +2558,7 @@ function tool(player, typeId, target) {
     case "war:war_horn": return run(() => blowHorn(player));
     case "war:signal_flag": return run(async () => giveSignal(player, SIG_SEL.get(player.id) ?? 0));
     case "war:first_aid": return run(() => firstAid(player, target));
+    case "war:guide": return run(() => guideBook(player));
   }
 }
 system.beforeEvents.startup.subscribe((ev) => {
@@ -3204,11 +3217,13 @@ async function warTable(player, pre) {
   } else if (r.selection === 7) {
     await warArchive(player);
   } else if (r.selection === 5) {
-    const which = await show(new ActionFormData().title("Settings").button("General").button("Gun loadouts (per faction)").button("Realism (battle tuning)").button("Faction skins").button("Callout language (per faction)").button("« Back").button("§bQuick presets§r\nRealistic / Arcade / Cinematic").button("Performance"), player);
+    const which = await show(new ActionFormData().title("Settings").button("General").button("Gun loadouts (per faction)").button("Realism (battle tuning)").button("Faction people (languages and skins)").button("Callout language (per faction)").button("« Back").button("§bQuick presets§r\nRealistic / Arcade / Cinematic").button("Performance").button("Export / import settings").button("Recent problems (script errors)"), player);
     if (!which || which.canceled || which.selection === undefined) return;
     if (which.selection === 5) return warTable(player);
     if (which.selection === 6) { await presetMenu(player); return warTable(player, 5); }   // (v9.22)
     if (which.selection === 7) { await perfMenu(player); return warTable(player, 5); }
+    if (which.selection === 8) { await settingsShare(player); return warTable(player, 5); }   // (v9.19)
+    if (which.selection === 9) { await problemsMenu(player); return warTable(player, 5); }    // (v9.19)
     if (which.selection === 4) { await voiceMenu(player); return warTable(player, 5); }   // (v6.5)
     if (which.selection === 1) { await loadoutMenu(player); return warTable(player, 5); }
     if (which.selection === 3) { await factionSkinMenu(player); return warTable(player, 5); }
@@ -4092,7 +4107,7 @@ function hittable(o, shooter) {
     if (o.typeId === SOLDIER && (downed.has(o.id) || pows.has(o.id))) return false;     // (a round never finishes off the wounded)
     if (SAFE.has(o.id) && !isMob(shooter)) return false;                               // (v9.1: nor lands on anyone in a neutral zone)
     if (o.typeId === "minecraft:player") return playerFair(o);
-    return !!o.getComponent("minecraft:health");
+    return !!hpOf(o);
   } catch { return false; }
 }
 const onNestW = (e) => (ridingNest(e) ? "mg" : ARM.get(e.id)?.arm === "pistol" ? "pistol" : undefined);   // (v9.2: the sidearm hits like a pistol)
@@ -4641,7 +4656,7 @@ const hpMemo = new Map(); // id -> { t, r }  (health share, re-read at most ever
 function hpRatio(o) {
   const c = hpMemo.get(o.id), now = tick();
   if (c && now - c.t < 10) return c.r;
-  let r = 1; try { const h = o.getComponent("minecraft:health"); if (h) r = h.currentValue / h.effectiveMax; } catch {}
+  let r = 1; try { const h = hpOf(o); if (h) r = h.currentValue / h.effectiveMax; } catch {}
   hpMemo.set(o.id, { t: now, r }); if (hpMemo.size > 4000) hpMemo.clear();
   return r;
 }
@@ -4908,7 +4923,7 @@ function updateLock(e, d, s, now) {
   if (q && now - q.t < 40 && q.t > (L.seenT ?? 0)) { L.seenT = q.t; L.at = { x: q.x, y: q.y, z: q.z }; }   // a mate still sees him
   const ent = L.ent;
   const gone = !ent?.isValid || downed.has(L.id) || pows.has(L.id) || (ent.typeId === SOLDIER && gdp(ent, "war:surr")) || !isHostile(d.faction, factionOf(ent))
-    || (ent.typeId === "minecraft:player" && (ent.getComponent("minecraft:health")?.currentValue ?? 1) <= 0);   // (v6.3: a killed player stays a valid entity)
+    || (ent.typeId === "minecraft:player" && (hpOf(ent)?.currentValue ?? 1) <= 0);   // (v6.3: a killed player stays a valid entity)
   if (gone || now - L.seenT > LOCK_LOST || Number(gdp(e, "war:ordt") ?? -1) > L.t || dist(L.at, e.location) > 110) { combatLock.delete(e.id); return undefined; }
   return L;
 }
@@ -5681,7 +5696,7 @@ function safeDrop(e, info) {
   if (!info || info.bad) return false;
   if (info.water) return true;
   if (info.h <= 3) return true;
-  const hp = e.getComponent("minecraft:health");
+  const hp = hpOf(e);
   const cur = hp ? hp.currentValue : 16;
   return info.h - 3 < cur * 0.33;
 }
@@ -6342,7 +6357,7 @@ function stressOf(e, d, now) {
   let st = 0;
   if (recentDeaths.some((x) => x.dim === e.dimension.id && x.f === d.faction && now - x.t < 200 && Math.hypot(x.x - e.location.x, x.z - e.location.z) < 6)) st += 3; // a comrade fell beside him
   if ((recentHits.get(e.id) ?? []).filter((t) => now - t < 100).length >= 3) st += 2;       // being hit repeatedly
-  const hp = e.getComponent("minecraft:health");
+  const hp = hpOf(e);
   if (hp && hp.currentValue / hp.effectiveMax < 0.35) st += 2;
   let foes = 0, friends = 0;
   for (const c of nearSnap(e.dimension.id, e.location, 24)) {
@@ -6409,7 +6424,7 @@ const squads = new Map();   // unit key -> { known: Map(id->{ent,x,y,z,t}), plan
 const brain = new Map();    // soldier id -> { act, decT, spot, slot }
 const suppB = new Map();    // soldier id -> suppression points (from fire landing on/near him)
 const squadKey = (e, d) => d.squad ? `${d.faction}:${d.squad}` : `${d.faction}:c${Math.floor(e.location.x / 48)},${Math.floor(e.location.z / 48)}`;
-const bPower = (o) => { try { const h = o.getComponent("minecraft:health"); const od = o.typeId === SOLDIER ? sd(o) : null;
+const bPower = (o) => { try { const h = hpOf(o); const od = o.typeId === SOLDIER ? sd(o) : null;
   return (h ? h.currentValue / h.effectiveMax : 1) * (o.typeId === "minecraft:player" ? 1.5 : od && GUNS.includes(od.weapon) ? (od.weapon === "mg" ? 1.4 : 1) : 0.6); } catch { return 1; } };
 function openGroundB(dim, a, b) {
   const L = Math.hypot(b.x - a.x, b.z - a.z), n = Math.max(4, Math.ceil(L / 2));
@@ -6881,7 +6896,7 @@ function brainMove(e, d, now, melee, anchor, leash) {
     B.supp = !shot && (S.suppressors.has(e.id) || d.weapon === "mg" || returning || bCover) ? suppressPoint(e, d, S, now) : undefined;   // v5.4: only a fresh sighting, in range, with a line to it
     if (B.supp) opts.push(["suppress", BW.supp + (S.plan === "fix" ? 0.4 : 0)]);
     if (!shot) opts.push(["peek", BW.peek]);
-    const hp = e.getComponent("minecraft:health");
+    const hp = hpOf(e);
     if (hp && hp.currentValue < 5 && exposure >= 2) opts.push(["fallback", BW.fall]);
     if (!moving) opts.push(["hold", 0.5 + (t ? 0 : 0.3)]);
     const tac = BW.tac !== false;
@@ -7200,61 +7215,14 @@ world.afterEvents.entityHurt.subscribe((ev) => {
 // ---- v6.5: battle chatter, spoken. Each faction's soldiers shout in its language (War Table -> Settings -> Callout
 // language); what you read on screen stays English. Recorded lines live in the resource pack (sounds/war_voice/<lang>/),
 // one sound event per line: war.voice.<lang>.<line>. A language with no recordings yet just stays silent.
-const VOICE_KEYS = ["none", "en_us", "us_mix", "en_gb", "greek", "korean", "spanish", "hebrew", "dutch", "german", "mongolian", "russian", "italian", "hindi", "igbo", "haitian", "arabic_sy", "chinese", "maya", "aave"];
-const VOICE_NAMES = ["None (silent)", "US English", "American (US English + AAVE, mixed)", "British English", "Greek", "Korean", "Spanish", "Hebrew", "Dutch", "German", "Mongolian", "Russian", "Italian", "Hindi", "Igbo", "Haitian Creole", "Syrian Arabic (mixed)", "Chinese (Mandarin)", "Yucatec Maya", "AAVE"];
 function voiceOf(f) { const v = getJSON(world, "war:vlang", {})[f]; return VOICE_KEYS.includes(v) ? v : "en_us"; }
 // the English line (as the code calls it) -> the recorded line. Lines with no recording (Reloading, Grenade, On the gun) are silent
-const CALL_KEY = { "Enemy spotted!": "spotted", "Contact!": "contact", "Flanking!": "flanking", "Charge!": "charge", "Go, go, go!": "gogogo",
-  "Moving up!": "moving_up", "Suppressing!": "suppressing", "I'm hit!": "hit", "Man down!": "man_down", "You're okay!": "okay", "Fall back!": "fall_back",
-  "Cover me!": "cover_me", "Target down!": "target_down", "Clear!": "clear", "Hold position!": "hold", "Follow me!": "follow",
-  "Medic!": "medic", "Thanks!": "thanks", "Reloading!": "reloading", "Grenade!": "grenade", "Don't shoot!": "surrender", "Taking fire!": "under_fire",
-  // v9.5: replies and situation lines (US English so far; other languages stay silent on these until recorded)
-  "Copy that!": "copy", "On it!": "on_it", "Nice shot!": "nice_shot", "Hang on, I got you!": "got_you", "Smoke out!": "smoke_out",
-  "Breaching!": "breaching", "Wait for it...": "wait_for_it", "Open fire!": "open_fire", "Animal!": "animal", "Hands up!": "hands_up", "Mount up!": "mount_up" };
 // lines each language has recordings for (the rest stay silent until recorded and added here)
-const BASE_LINES = ["spotted", "contact", "flanking", "charge", "gogogo", "moving_up", "suppressing", "hit", "man_down", "okay", "fall_back", "cover_me", "target_down", "clear", "hold", "follow"];
-const MORE_LINES = ["under_fire", "idle_quiet", "idle_sharp", "idle_smoke", "idle_done", "idle_legs", "medic", "thanks", "surrender", "reloading", "grenade"];
-const VOICE_HAS = Object.fromEntries(["en_us", "greek", "korean", "mongolian", "hebrew", "spanish", "german", "aave"].map((l) => [l, [...BASE_LINES, ...MORE_LINES]]));   // (v6.7: recorded so far)
-// v9.5: replies, situation lines, idle back-and-forth and campfire stories (recorded in US English)
-const EN_LINES = ["copy", "on_it", "nice_shot", "got_you", "smoke_out", "breaching", "wait_for_it", "open_fire", "animal", "hands_up", "mount_up",
-  "q_food", "a_food", "q_quiet", "a_quiet", "q_letter", "a_letter", "story_1", "story_2", "camp_laugh", "camp_again"];
-VOICE_HAS.en_us.push(...EN_LINES);
-const IDLE_ASK = { q_food: "a_food", q_quiet: "a_quiet", q_letter: "a_letter" };   // (an idle question gets its answer from a mate)
-const STORIES = ["story_1", "story_2"];
-const IDLE_LINES = ["idle_quiet", "idle_sharp", "idle_smoke", "idle_done", "idle_legs", "q_food", "q_quiet", "q_letter"];
 const voiceHas = (lang, key) => key === "story" || (VOICE_HAS[lang] ?? BASE_LINES).includes(key);   // (v9.2: the campfire story: sounds/war_voice/<lang>/story.ogg, silent until it's there)
 const CALL_ALL = BASE_LINES;
 const lastCall = new Map(); // soldier id / squad line -> tick
 let callSec = -1, callsThisSec = 0;
 // v6.8: every line, what it says (English, for subtitles and the test menu) and when it's used
-const LINE_INFO = {
-  spotted: ["Enemy spotted!", "first sees an enemy"], contact: ["Contact!", "his squad first makes contact"],
-  flanking: ["Flanking!", "the squad sends men round the side"], charge: ["Charge!", "the squad assaults"],
-  gogogo: ["Go, go, go!", "the assault goes in"], moving_up: ["Moving up!", "moving forward under fire, reinforcing, a medic on his way"],
-  suppressing: ["Suppressing!", "pinning the enemy down, covering a mate who reloads"], hit: ["I'm hit!", "wounded"],
-  man_down: ["Man down!", "a squad mate falls nearby"], okay: ["You're okay!", "a medic revives someone"],
-  fall_back: ["Fall back!", "shaken, or the squad pulls back"], cover_me: ["Cover me!", "bounding forward while mates cover"],
-  target_down: ["Target down!", "the man he shot goes down"], clear: ["Clear!", "the fight is over"],
-  hold: ["Hold position!", "the march arrives"], follow: ["Follow me!", "a march starts"],
-  under_fire: ["Taking heavy fire!", "shot at, pinned down"], idle_quiet: ["Sector's locked down...", "idle"],
-  idle_sharp: ["Head on a swivel, stay frosty.", "idle"], idle_smoke: ["Anyone got a dart?", "idle (tired)"],
-  story: ["(tells a story)", "at a campfire, now and then"],
-  idle_done: ["So done with this deployment...", "idle (tired)"], idle_legs: ["My legs are shot...", "idle (tired)"],
-  medic: ["Medic! I'm hit!", "down, and no medic coming"], thanks: ["Good looking out, brother.", "just revived"],
-  surrender: ["Don't shoot!", "surrendering"], reloading: ["Dry, cover me while I swap!", "reloading in a fight"],
-  grenade: ["Frag out! Get down!", "throwing a grenade / molotov, or one lands near him"],
-  copy: ["Copy that!", "answering \"Hold position!\" / \"Follow me!\""], on_it: ["On it!", "answering \"Cover me!\""],
-  nice_shot: ["Nice shot!", "a mate's man goes down"], got_you: ["Hang on, I got you!", "a mate is hit near him"],
-  smoke_out: ["Smoke out!", "throwing smoke"], breaching: ["Breaching! Breaching!", "the stack goes through the door"],
-  wait_for_it: ["Wait for it...", "an ambush is set (whispered)"], open_fire: ["Now! Open fire!", "the ambush is sprung"],
-  animal: ["Animal! Put it down!", "a man-eater (World Animals) comes at them"], hands_up: ["Hands where I can see 'em!", "an enemy surrenders near him"],
-  mount_up: ["Mount up!", "the Mount up order"],
-  q_food: ["What's the first thing you're eating when we get home?", "idle"], a_food: ["My mom's cooking. Nothing else even comes close.", "idle (answer)"],
-  q_quiet: ["It's too quiet out here.", "idle"], a_quiet: ["Don't jinx it, man.", "idle (answer)"],
-  q_letter: ["You write home yet?", "idle"], a_letter: ["Every night. Never send 'em, though.", "idle (answer)"],
-  story_1: ["(the night-watch pig story)", "at a campfire"], story_2: ["(grandpa's boots story)", "at a campfire"],
-  camp_laugh: ["No way. No way that happened!", "after a story"], camp_again: ["You tell that one every single time.", "after a story"],
-};
 const heardLine = []; // recent lines: { key, dim, x, z, t } (nobody repeats a line someone near just said)
 const LINE_WIN = (key) => (IDLE_LINES.includes(key) ? 6000 : key === "medic" ? 240 : key === "hit" || key === "man_down" || key === "target_down" ? 60 : 100);   // (v6.9.1: 5 s for battle lines, was 8)
 const callGap = () => [120, 60, 30][Math.max(0, Math.min(2, Number(setting("vfreq", 1))))];   // per man: Low / Normal / High
@@ -7479,7 +7447,7 @@ function revive(e, hpTo = 6) {
   setP(e, "war:down", false);
   sdp(e, "war:downed", undefined);
   try { e.removeEffect("slowness"); e.removeEffect("weakness"); } catch {}
-  const h = e.getComponent("minecraft:health");
+  const h = hpOf(e);
   if (h) h.setCurrentValue(Math.min(h.effectiveMax, hpTo));
   try { e.dimension.spawnParticle("minecraft:heart_particle", { x: e.location.x, y: e.location.y + 2, z: e.location.z }); } catch {}
   nickCount(e, "lucky");
@@ -7511,7 +7479,7 @@ system.runInterval(() => {
       const at = downPos.get(id) ?? e.location; if (!downPos.has(id)) downPos.set(id, { ...at });
       if (dist(at, e.location) > 0.6) e.teleport(at);
       e.clearVelocity?.();
-      const hh = e.getComponent("minecraft:health"); if (hh && hh.currentValue !== 1) hh.setCurrentValue(1);
+      const hh = hpOf(e); if (hh && hh.currentValue !== 1) hh.setCurrentValue(1);
       if (!P(e, "war:down")) setP(e, "war:down", true);
     } catch {}
     try { if (now % 20 === 0) e.dimension.spawnParticle("minecraft:basic_smoke_particle", { x: e.location.x, y: e.location.y + 0.3, z: e.location.z }); } catch {}
@@ -7526,18 +7494,18 @@ world.afterEvents.playerInteractWithEntity.subscribe((ev) => {
 
 // ---- health bar in the name tag (green -> yellow -> red); wounds slow and shake a soldier
 function healthBar(e) {
-  const h = e.getComponent("minecraft:health");
+  const h = hpOf(e);
   if (!h) return "";
   const r = Math.max(0, h.currentValue / h.effectiveMax), n = Math.round(r * 6);
   const col = r > 0.6 ? "§a" : r > 0.3 ? "§e" : "§c";
   return `${col}${"■".repeat(n)}§8${"■".repeat(6 - n)}`;
 }
-const woundK = (e) => { const h = e.getComponent("minecraft:health"); if (!h) return 1; const r = h.currentValue / h.effectiveMax; return r < 0.5 ? 1 + (0.5 - r) * 2 : 1; }; // up to 2x worse aim
+const woundK = (e) => { const h = hpOf(e); if (!h) return 1; const r = h.currentValue / h.effectiveMax; return r < 0.5 ? 1 + (0.5 - r) * 2 : 1; }; // up to 2x worse aim
 const lastHp = new Map();
 system.runInterval(() => {
   for (const e of allOf(SOLDIER)) {
     try {
-      const h = e.getComponent("minecraft:health"); if (!h) continue;
+      const h = hpOf(e); if (!h) continue;
       const v = Math.round(h.currentValue);
       if (lastHp.get(e.id) !== v) { lastHp.set(e.id, v); updateName(e); }
       // badly wounded: slower
@@ -7558,7 +7526,7 @@ function medicMove(e, d, now) {
     if (now < (medicBan.get(`${e.id}>${o.id}`) ?? 0)) continue;          // (v6.9: one he couldn't get to; tried again later)
     try {
       if (!isFriendly(d.faction, Number(P(o, "war:faction")))) continue;
-      const h = o.getComponent("minecraft:health"); if (!h) continue;
+      const h = hpOf(o); if (!h) continue;
       const need = isDowned(o) ? 10 : 1 - h.currentValue / h.effectiveMax;
       if (need < 0.25) continue;
       const sc = need * 10 - dist(o.location, e.location) * 0.1;
@@ -7786,7 +7754,7 @@ const pows = new Map(); // id -> { captor, mode: "follow"|"jail", at, slot }
 function makePow(e, captor) {
   downed.delete(e.id); downPos.delete(e.id); sdp(e, "war:downed", undefined); setP(e, "war:down", false);
   try { e.removeEffect("slowness"); e.removeEffect("weakness"); } catch {}
-  const h = e.getComponent("minecraft:health"); if (h) h.setCurrentValue(Math.max(h.currentValue, 6));
+  const h = hpOf(e); if (h) h.setCurrentValue(Math.max(h.currentValue, 6));
   pows.set(e.id, { captor: captor.id, mode: "follow" });
   sdp(e, "war:pow", JSON.stringify({ captor: captor.id, mode: "follow" }));
   equip(e, "air"); setP(e, "war:gun", 0);
@@ -9509,7 +9477,7 @@ system.runInterval(() => {
         if (isHostile(d.faction, of)) { foes++; const dd = dist(o.location, e.location); if (dd < nd) { nd = dd; nearest = o; } }
       }
       if (friends || !nearest) continue;
-      const hp = e.getComponent("minecraft:health"), hpr = hp ? hp.currentValue / hp.effectiveMax : 1;
+      const hp = hpOf(e), hpr = hp ? hp.currentValue / hp.effectiveMax : 1;
       if (!(foes >= 5 || (foes >= 3 && hpr < 0.5) || (foes >= 2 && hpr < 0.25))) continue;
       if (Math.random() > 0.35 + (1 - boldOf(e))) continue;                  // not everyone gives up at the first look
       isoSurrender(e, factionOf(nearest));
@@ -12020,34 +11988,59 @@ function nameCulture(e) {
   return c;
 }
 const RANK_XP = [0, 4, 10, 20];                                        // xp for pvt / senior pvt / cpl / sgt (veteran)
-function idSeed(e) { let s = gdp(e, "war:nseed"); if (s === undefined) { s = Math.floor(Math.random() * 1000000); sdp(e, "war:nseed", s); } return Number(s); }
-const xpOf = (e) => Number(gdp(e, "war:xp") ?? 0);
+// v9.19: who he is, in one small saved record ("war:id"): name seed, experience, temperament, nickname, surname shift,
+// and the counts that earn a nickname. Men saved before are moved over the first time they're read.
+const ID_CACHE = new Map();
+const ID_OLD = ["war:nseed", "war:xp", "war:trait", "war:nick", "war:noff", "war:nk_kill", "war:nk_save", "war:nk_lucky"];
+function idRec(e) {
+  let r = ID_CACHE.get(e.id); if (r) return r;
+  try { const raw = gdp(e, "war:id"); if (raw) r = JSON.parse(String(raw)); } catch {}
+  if (!r) {
+    r = {};
+    const o = Object.fromEntries(ID_OLD.map((k) => [k, gdp(e, k)]));
+    if (o["war:nseed"] !== undefined) r.s = Number(o["war:nseed"]);
+    if (o["war:xp"] !== undefined) r.x = Number(o["war:xp"]);
+    if (o["war:trait"] !== undefined) r.t = String(o["war:trait"]);
+    if (o["war:nick"]) r.n = String(o["war:nick"]);
+    if (o["war:noff"]) r.o = Number(o["war:noff"]);
+    for (const k of ["kill", "save", "lucky"]) if (o[`war:nk_${k}`]) (r.c ??= {})[k] = Number(o[`war:nk_${k}`]);
+    if (r.s === undefined) r.s = Math.floor(Math.random() * 1000000);
+    idSave(e, r);
+    for (const k of ID_OLD) if (o[k] !== undefined) try { sdp(e, k, undefined); } catch {}
+  }
+  ID_CACHE.set(e.id, r);
+  return r;
+}
+function idSave(e, r) { ID_CACHE.set(e.id, r); try { sdp(e, "war:id", JSON.stringify(r)); } catch {} }
+system.runInterval(() => { for (const id of [...ID_CACHE.keys()]) if (!world.getEntity(id)) ID_CACHE.delete(id); }, 2400);
+function idSeed(e) { return Number(idRec(e).s ?? 0); }
+const xpOf = (e) => Number(idRec(e).x ?? 0);
 function vetTier(e) { const x = xpOf(e); return x >= RANK_XP[3] ? 3 : x >= RANK_XP[2] ? 2 : x >= RANK_XP[1] ? 1 : 0; }
 let OFFICER_IDS = new Set();
 const NAME_KEY = new Map();   // id -> the language and rank his name tag was made with
 function rankTier(e) { const v = vetTier(e); return OFFICER_IDS.has(e.id) ? (v >= 3 ? 4 : 3) : v; }
-function surname(e) { const c = nameCulture(e); return c.names[(idSeed(e) + Number(gdp(e, "war:noff") ?? 0)) % c.names.length]; }
+function surname(e) { const c = nameCulture(e); return c.names[(idSeed(e) + Number(idRec(e).o ?? 0)) % c.names.length]; }
 function firstName(e) { const c = nameCulture(e), f = c.first ?? []; return f.length ? f[Math.floor(idSeed(e) / 997) % f.length] : ""; }
-function nickOf(e) { try { return String(gdp(e, "war:nick") ?? ""); } catch { return ""; } }
+function nickOf(e) { try { return String(idRec(e).n ?? ""); } catch { return ""; } }
 function soldierName(e) { try { const c = cultureOfMan(e), nk = nickOf(e); return `${c.ranks[rankTier(e)]} ${nk ? `"${nk}" ` : ""}${surname(e)}`; } catch { return "Soldier"; } }
 function fullName(e) { try { const c = cultureOfMan(e), nk = nickOf(e), fn = firstName(e); return `${c.ranks[rankTier(e)]} ${fn ? `${fn} ` : ""}${nk ? `"${nk}" ` : ""}${surname(e)}`; } catch { return "Soldier"; } }
 // v9.19: nicknames, earned: the first one he earns sticks
 function nickCount(e, k) {
   try {
     if (!e?.isValid || e.typeId !== SOLDIER || nickOf(e)) return;
-    const key = `war:nk_${k}`, n = Number(gdp(e, key) ?? 0) + 1; sdp(e, key, n);
+    const R = idRec(e), n = Number(R.c?.[k] ?? 0) + 1; (R.c ??= {})[k] = n; idSave(e, R);
     const w = sd(e).weapon;
     const nick = k === "save" && n >= 3 ? "Doc" : k === "lucky" && n >= 3 ? "Lucky" : k === "kill" && n >= 8 ? (w === "sniper" ? "Hawkeye" : w === "mg" ? "Buzzsaw" : w === "shotgun" ? "Boom" : !GUNS.includes(w) ? "Butcher" : traitOf(e) === "hothead" ? "Mad Dog" : "Deadeye") : "";
     if (!nick) return;
-    sdp(e, "war:nick", nick); NAME_KEY.delete(e.id); updateName(e);
+    R.n = nick; idSave(e, R); NAME_KEY.delete(e.id); updateName(e);
     radio(e, `${surname(e)}'s squad calls him "${nick}" now`, "story");
   } catch {}
 }
 const TRAITS = { brave: "Brave", cautious: "Cautious", hothead: "Hothead", steady: "Steady" };
 function traitOf(e) {
-  let t = gdp(e, "war:trait");
-  if (t === undefined) { const r = Math.random(); t = r < 0.18 ? "brave" : r < 0.4 ? "cautious" : r < 0.47 ? "hothead" : "steady"; sdp(e, "war:trait", t); }
-  return String(t);
+  const R = idRec(e);
+  if (R.t === undefined) { const r = Math.random(); R.t = r < 0.18 ? "brave" : r < 0.4 ? "cautious" : r < 0.47 ? "hothead" : "steady"; idSave(e, R); }
+  return String(R.t);
 }
 // how steady he is under stress (subtracted from his stress): veterans and the brave hold; the cautious less so
 const nerveOf = (e) => vetTier(e) * 0.7 + ({ brave: 1.5, hothead: 1, cautious: -1 }[traitOf(e)] ?? 0);
@@ -12068,7 +12061,7 @@ function lastAttacker(v, now) {
 function giveXp(e, n) {
   if (!e?.isValid || e.typeId !== SOLDIER) return;
   const before = vetTier(e);
-  sdp(e, "war:xp", xpOf(e) + n);
+  { const R = idRec(e); R.x = xpOf(e) + n; idSave(e, R); }
   if (vetTier(e) !== before) { showRank(e); radio(e, `${soldierName(e)} has been promoted`, "story"); }
 }
 function creditSave(e) { if (e?.typeId === SOLDIER) { logTo(SAVES, e.id, tick()); giveXp(e, 1); nickCount(e, "save"); } }
@@ -12111,7 +12104,7 @@ system.runInterval(() => {
         if (!o.isValid) continue;
         let nm = surname(o);
         if (seen.has(nm)) {
-          for (let k = 1; k < 60 && seen.has(nm); k++) { sdp(o, "war:noff", k * 7); nm = surname(o); }   // (only his surname changes: his group, voice and skin stay)
+          for (let k = 1; k < 60 && seen.has(nm); k++) { const R = idRec(o); R.o = k * 7; idSave(o, R); nm = surname(o); }   // (only his surname changes: his group, voice and skin stay)
           NAME_KEY.delete(o.id); updateName(o); syncSkin(o);
         }
         seen.add(nm);
@@ -12159,7 +12152,7 @@ system.runInterval(() => {
       if (!p.isValid || !p.isSneaking) continue;
       const hit = p.getEntitiesFromViewDirection({ maxDistance: 48 }).find((h) => h.entity.typeId === SOLDIER);
       if (!hit) continue;
-      const e = hit.entity, d = sd(e), h = e.getComponent("minecraft:health");
+      const e = hit.entity, d = sd(e), h = hpOf(e);
       const wpn = GUNS.includes(d.weapon) ? (WEAPONS.find((w) => w[0] === d.weapon)?.[1] ?? d.weapon) : d.weapon === "spear" ? "Spear" : d.ranged ? "Crossbow" : "Sword";
       const med = Number(P(e, "war:medals") ?? 0), meds = [med & 1 ? "§6Valor" : "", med & 2 ? "§aLifesaver" : "", med & 4 ? "§5Wound" : ""].filter(Boolean).join(" ");
       const bud = gdp(e, "war:buddy"), be = bud ? world.getEntity(String(bud)) : undefined;
@@ -12223,7 +12216,7 @@ system.runInterval(() => {
   for (const e of allOf(SOLDIER)) {
     try {
       if (!LIMP.has(e.id) && !P(e, "war:limp") && now - Number(gdp(e, "war:hurt") ?? -99999) > 2400) continue;   // (never hurt lately: nothing to check)
-      const h = e.getComponent("minecraft:health"), r = h ? h.currentValue / h.effectiveMax : 1;
+      const h = hpOf(e), r = h ? h.currentValue / h.effectiveMax : 1;
       if (LIMP.has(e.id) && (r > 0.95 || now > LIMP.get(e.id))) LIMP.delete(e.id);   // (a leg wound: ~30 s, or till he's mended)
       const want = !downed.has(e.id) && !isRiding(e) && (LIMP.has(e.id) || r < 0.35);
       if (!!P(e, "war:limp") !== want) setP(e, "war:limp", want);
@@ -12287,7 +12280,7 @@ system.runInterval(() => {
       if (!S.known?.size) { S.routT = undefined; S.rallied = undefined; S.routFor = undefined; S.whiteFor = undefined; }
       // the white flag: a few men left, hurt, heavily outnumbered and nobody coming
       if (S.known?.size && setting("isosurr", true) && S.whiteFor !== S.contactT && ours.length && ours.length <= 3 && S.known.size >= ours.length * 3) {
-        const hr = ours.reduce((t, o) => { const h = o.getComponent("minecraft:health"); return t + (h ? h.currentValue / h.effectiveMax : 1); }, 0) / ours.length;
+        const hr = ours.reduce((t, o) => { const h = hpOf(o); return t + (h ? h.currentValue / h.effectiveMax : 1); }, 0) / ours.length;
         if (hr < 0.55 && !ours.some((o) => traitOf(o) === "brave" && vetTier(o) >= 2) && Math.random() < 0.3) {
           S.whiteFor = S.contactT;
           let near; for (const q of S.known.values()) if (q.ent?.isValid) { near = q.ent; break; }
@@ -12477,7 +12470,7 @@ system.runInterval(() => {
       const back = S.ours.filter((o) => o.isValid && !downed.has(o.id) && (sd(o).retreat || shaken.has(o.id)));
       if (back.length < 2 || now - (S.rgT ?? -9999) < 600) continue;
       const cands = S.ours.filter((o) => o.isValid && !downed.has(o.id) && GUNS.includes(sd(o).weapon) && !shaken.has(o.id) && !REARGUARD.has(o.id))
-        .map((o) => { const h = o.getComponent("minecraft:health"); return { o, sc: (h ? h.currentValue / h.effectiveMax : 1) + vetTier(o) * 0.3 + (traitOf(o) === "brave" ? 0.5 : traitOf(o) === "cautious" ? -0.5 : 0) }; })
+        .map((o) => { const h = hpOf(o); return { o, sc: (h ? h.currentValue / h.effectiveMax : 1) + vetTier(o) * 0.3 + (traitOf(o) === "brave" ? 0.5 : traitOf(o) === "cautious" ? -0.5 : 0) }; })
         .filter((c) => c.sc > 0.6).sort((a, b) => b.sc - a.sc).slice(0, back.length >= 4 ? 2 : 1);
       if (!cands.length) continue;
       S.rgT = now;
@@ -12808,7 +12801,7 @@ system.runInterval(() => {
       for (const o of S.ours) {
         if (!o.isValid || downed.has(o.id) || DESERT.has(o.id)) continue;
         const d = sd(o); if (d.surr || d.div === "guard" || d.div === "medic" || OFFICER_IDS.has(o.id) || traitOf(o) === "brave" || vetTier(o) >= 2) continue;
-        const h = o.getComponent("minecraft:health"), low = h && h.currentValue / h.effectiveMax < 0.5;
+        const h = hpOf(o), low = h && h.currentValue / h.effectiveMax < 0.5;
         const bad = (beaten ? 1 : 0) + (low ? 1 : 0) + ((GRIEF.get(o.id) ?? 0) > now - 6000 ? 1 : 0) + (OUT_OF.has(o.id) ? 1 : 0);
         if (bad < 2 || Math.random() > 0.04) continue;
         const c = S.ourC ?? o.location, ang = Math.random() * Math.PI * 2;
@@ -12932,7 +12925,7 @@ function useOne(p) {
 async function firstAid(p, target) {
   const e = target?.isValid ? target : lookedAt(p, SOLDIER);
   if (e && (e === target || dist(e.location, p.location) < 6)) {
-    const h = e.getComponent("minecraft:health"); if (!h) return;
+    const h = hpOf(e); if (!h) return;
     if (downed.has(e.id)) revive(e, Math.ceil(h.effectiveMax * 0.6)); else h.setCurrentValue(h.effectiveMax);
     LIMP.delete(e.id); ARM_HIT.delete(e.id);
     try { e.dimension.spawnParticle("minecraft:heart_particle", { x: e.location.x, y: e.location.y + 2, z: e.location.z }); e.dimension.playSound("armor.equip_leather", e.location); } catch {}
@@ -13142,7 +13135,7 @@ const BSLOTS = 5, BCHUNK = 30000;
 function battleSave(p, slot) {
   const men = p.dimension.getEntities({ type: SOLDIER, location: p.location, maxDistance: 200 }).filter((e) => !downed.has(e.id));
   const rows = men.map((e) => {
-    const d = sd(e), h = e.getComponent("minecraft:health"), l = e.location;
+    const d = sd(e), h = hpOf(e), l = e.location;
     return [Math.round(l.x * 10) / 10, Math.round(l.y * 10) / 10, Math.round(l.z * 10) / 10, d.faction, d.squad, d.div, d.weapon, String(gdp(e, "war:armor") ?? "none"), Number(P(e, "war:skin") ?? 0),
       d.func, String(gdp(e, "war:stance") ?? "aggressive"), h ? Math.round(h.currentValue) : 20, xpOf(e), traitOf(e), idSeed(e), Number(P(e, "war:medals") ?? 0), d.custom ?? "", String(gdp(e, "war:mount") ?? "")];
   });
@@ -13167,11 +13160,11 @@ function battleLoad(p, slot, clear) {
       if (!dim.getBlock({ x, y, z })) continue;                                 // (not loaded: skipped)
       const e0 = dim.spawnEntity(SOLDIER, { x, y, z }, { spawnEvent: "war:init" });
       const e = setupSoldier(e0, { faction: f, squad, weapon, ranged: isRangedW(weapon), div, radius: 8, func: "__none", owner: p.id, armor, skin: skin || undefined, custom: custom || undefined, mount: mount || undefined }, p) ?? e0;
-      sdp(e, "war:xp", xp); sdp(e, "war:trait", trait); sdp(e, "war:nseed", seed); if (medals) setP(e, "war:medals", medals); setP(e, "war:vet", vetTier(e));
+      { const R = idRec(e); R.x = Number(xp ?? 0); R.t = trait; if (seed !== undefined) R.s = Number(seed); idSave(e, R); } if (medals) setP(e, "war:medals", medals); setP(e, "war:vet", vetTier(e));
       sdp(e, "war:stance", stance);
       const f2 = ANCHORED.includes(func) || ["follow", "escort", "squad"].includes(func) ? func : "hold";
       giveFunction(e, f2, p, ANCHORED.includes(f2) ? makeWaypoint(dim, { x, y, z }) : undefined);
-      system.runTimeout(() => { try { const h = e.getComponent("minecraft:health"); if (h) h.setCurrentValue(Math.max(1, Math.min(h.effectiveMax, hp))); updateName(e); } catch {} }, 5);
+      system.runTimeout(() => { try { const h = hpOf(e); if (h) h.setCurrentValue(Math.max(1, Math.min(h.effectiveMax, hp))); updateName(e); } catch {} }, 5);
       n++;
     } catch {}
   }
@@ -13263,7 +13256,7 @@ system.runInterval(() => {
       if (downed.has(e.id) || personal.has(e.id) || SLEEP.has(e.id) || IDLE.has(e.id) || perc.get(e.id)?.threat || squads.get(squadKey(e, d))?.known?.size) continue;
       const an = marker(Number(gdp(e, "war:goal") ?? 0)); if (!an) continue;
       const side = BEAT.get(e.id) ?? 1; BEAT.set(e.id, -side);
-      const yaw = (Number(gdp(e, "war:nseed") ?? 0) % 4) * 90 + 45, f = fwdFromYaw(yaw), k = Math.min(6, Math.max(3, (d.radius ?? 8) / 2)) * side;   // (his own line, the same each time)
+      const yaw = (idSeed(e) % 4) * 90 + 45, f = fwdFromYaw(yaw), k = Math.min(6, Math.max(3, (d.radius ?? 8) / 2)) * side;   // (his own line, the same each time)
       const to = walkableNear(e.dimension, an.location.x + f.x * k, an.location.z + f.z * k, an.location.y);
       if (to && Math.abs(to.y - an.location.y) < 2) { planPersonalTo(e, "patrol", to, now); note(e, "walking his beat"); }
     } catch {}
@@ -13447,7 +13440,7 @@ WarAPI.registerBehavior({
     const k = squadKey(e, d), W = DAYWATCH.get(k); if (!W) return undefined;
     const i = W.ids.indexOf(e.id); if (i < 0) return undefined;
     const c = W.c; if (!c) return undefined;
-    const base = (Number(gdp(e, "war:nseed") ?? 0) % 360) * Math.PI / 180, a = base + (i / W.ids.length) * Math.PI * 2;
+    const base = (idSeed(e) % 360) * Math.PI / 180, a = base + (i / W.ids.length) * Math.PI * 2;
     const want = walkableNear(e.dimension, c.x + Math.cos(a) * 6, c.z + Math.sin(a) * 6, c.y);
     if (!want || Math.abs(want.y - c.y) > 2) return undefined;
     const gap = flat(want, e.location);
@@ -13650,3 +13643,50 @@ world.afterEvents.entityHurt.subscribe((ev) => {
     a.playSound("war.hitmark", { volume: downed.has(v.id) ? 0.9 : 0.6, pitch: downed.has(v.id) ? 0.8 : 1.15 });
   } catch {}
 });
+
+// ---- v9.19: settings to share: every War Engine setting, faction language/skin/people and formations, as one code you
+// can copy into another world (or keep). Paste a code back to load it.
+const SHARE_KEYS = ["war:vlang", "war:fskins", "war:fgroups", "war:fshape"];
+function settingsCode() {
+  const o = { v: 1, set: {}, json: {} };
+  for (const id of world.getDynamicPropertyIds()) if (id.startsWith("war:set_")) o.set[id.slice(8)] = world.getDynamicProperty(id);
+  for (const k of SHARE_KEYS) o.json[k] = getJSON(world, k, undefined);
+  const raw = JSON.stringify(o);
+  let b64 = ""; try { b64 = btoa(unescape(encodeURIComponent(raw))); } catch { b64 = raw; }
+  return "WE1:" + b64;
+}
+function loadSettingsCode(code) {
+  const c = String(code).trim(); if (!c.startsWith("WE1:")) throw new Error("not a War Engine settings code");
+  let raw = c.slice(4); try { raw = decodeURIComponent(escape(atob(raw))); } catch {}
+  const o = JSON.parse(raw); let n = 0;
+  for (const id of world.getDynamicPropertyIds()) if (id.startsWith("war:set_") && !(id.slice(8) in (o.set ?? {}))) sdp(world, id, undefined);   // (not in the code: back to the default)
+  for (const [k, v] of Object.entries(o.set ?? {})) { if (/^[a-z_0-9]+$/.test(k) && ["string", "number", "boolean"].includes(typeof v)) { sdp(world, `war:set_${k}`, v); n++; } }
+  for (const k of SHARE_KEYS) if (o.json?.[k] !== undefined) { setJSON(world, k, o.json[k]); n++; }
+  return n;
+}
+async function settingsShare(p) {
+  const r = await show(new ActionFormData().title("Export / import settings").body("Export gives you a code with every War Engine setting, each faction's languages and skins, and squad formations. Copy it (select the text and copy). Import: paste a code to load it here.").button("Export (show my code)").button("Import (paste a code)"), p);
+  if (!r || r.canceled || r.selection === undefined) return;
+  if (r.selection === 0) { const code = settingsCode(); await show(new ModalFormData().title("Your settings code").textField("Copy this:", "", { defaultValue: code }), p); console.warn(`War Engine settings code: ${code}`); return; }
+  const f = await show(new ModalFormData().title("Import settings").textField("Paste a code (starts with WE1:)", "WE1:..."), p);
+  if (!f || f.canceled || !f.formValues) return;
+  try { const n = loadSettingsCode(f.formValues[0]); for (const e of allOf(SOLDIER)) { try { syncSkin(e); NAME_KEY.delete(e.id); } catch {} } p.sendMessage(`§aLoaded ${n} settings.`); }
+  catch (err) { p.sendMessage(`§cThat code didn't load: ${String(err?.message ?? err).slice(0, 80)}`); }
+}
+// ---- v9.19: what went wrong lately (script errors, counted and written to the content log as before)
+async function problemsMenu(p) {
+  const body = ERR_LOG.length ? ERR_LOG.slice().reverse().map((x) => `§7${new Date(x.t).toISOString().slice(11, 19)} §e${x.sys}§r: ${x.msg}`).join("\n\n") : "§aNo script errors since the world loaded.";
+  await show(new ActionFormData().title("Recent problems").body(`${body}\n\n§8These help when reporting a bug. The full details are in the content log.`).button("OK"), p);
+}
+
+// ---- v9.19: the War Engine Guide (an item): what everything does, in a few pages
+async function guideBook(p) {
+  while (true) {
+    const f = new ActionFormData().title("War Engine Guide").body("Pick a chapter.");
+    for (const [t] of GUIDE) f.button(t);
+    const r = await show(f, p); if (!r || r.canceled || r.selection === undefined) return;
+    const [t, body] = GUIDE[r.selection];
+    const r2 = await show(new ActionFormData().title(t).body(body).button("« Chapters").button("Close"), p);
+    if (!r2 || r2.canceled || r2.selection !== 0) return;
+  }
+}
