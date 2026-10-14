@@ -1569,3 +1569,70 @@ KS.rout = async (o, ox, oz) => {
   for (let k = 0; k < 45; k++) { await kitWait(20); shakenMax = Math.max(shakenMax, a.filter((e) => e.isValid && shaken.has(e.id)).length); const q = a.find((e) => e.isValid); const S = q ? squads.get(squadKey(q, sd(q))) : undefined; if (S && k % 3 === 0) tr.push(`${a.filter((e) => e.isValid && !downed.has(e.id)).length}/${S.startN}/${S.ratio?.toFixed?.(2)}/${S.known?.size}/${S.contactT >= 0 ? "c" : "-"}${S.routT ? "R" : ""}`); }
   return { tr: tr.join(" "), shakenMax, surrendered: a.filter((e) => e.isValid && sd(e).surr).length, alive: a.filter((e) => e.isValid).length };
 };
+// v9.20: ammo runs out and is shared; a scout goes ahead and reports when back; a tripwire inside a door
+KS.tactics = async (o, ox, oz) => {
+  floorAt(ox - 50, oz - 50, ox + 50, oz + 50);
+  const r = {};
+  // ammo: a rifleman with 2 rounds left fires, runs dry, a squad mate shares
+  setRelPair(1, 2, "1", true);
+  const a = kitSoldier(1, { x: ox + 0.5, y: Y, z: oz - 10.5 }, "rifle", "hold"), mate = kitSoldier(1, { x: ox + 3.5, y: Y, z: oz - 10.5 }, "rifle", "hold");
+  const tgt = kitSoldier(2, { x: ox + 0.5, y: Y, z: oz + 14.5 }, "rifle", "hold");
+  for (const e of [a, mate, tgt]) try { e.addEffect("resistance", 3000, { amplifier: 255, showParticles: false }); } catch {}
+  RESERVE.set(a.id, 2); RESERVE.set(mate.id, 0);
+  let dry = -1; for (let k = 0; k < 30; k++) { await kitWait(10); if (OUT_OF.has(a.id) && dry < 0) dry = k; }
+  r.ranDry = dry >= 0; r.bayonet = getJSON(a, "war:st", {}).w;
+  RESERVE.set(mate.id, 50); await kitWait(80); r.shared = !OUT_OF.has(a.id); r.reserveAfter = RESERVE.get(a.id);
+  for (const e of [a, mate, tgt]) try { e.remove(); } catch {}
+  // scout: a patrolling squad, enemy 45 blocks ahead behind a wall
+  setRelPair(1, 2, "1", true);
+  const sq = [0, 1, 2, 3, 4].map((i) => kitSoldier(1, { x: ox - 4 + i * 2 + 0.5, y: Y, z: oz - 40.5 }, "rifle", "hold"));
+  const en = [0, 1].map((i) => kitSoldier(2, { x: ox - 1 + i * 2 + 0.5, y: Y, z: oz + 30.5 }, "rifle", "post"));
+  await kitWait(20);
+  await kitOrder(1, { x: ox + 0.5, y: Y, z: oz + 25.5 }, "hold");
+  const S0 = () => squads.get(squadKey(sq[0], sd(sq[0])));
+  const trace = [];
+  for (let k = 0; k < 30; k++) { await kitWait(20); const sc = [...SCOUTS.entries()][0]; trace.push(`${sc ? sc[1].phase[0] + sc[1].intel.size : "-"}/${S0()?.known?.size ?? 0}`); }
+  r.scout = trace.join(" ");
+  for (const e of [...sq, ...en]) try { e.remove(); } catch {}
+  return r;
+};
+KS.trap = async (o, ox, oz) => {
+  floorAt(ox - 20, oz - 20, ox + 20, oz + 20);
+  // a small house: stone walls, roof, an oak door on the south side
+  kcmd(`fill ${ox - 3} ${Y} ${oz - 3} ${ox + 3} ${Y + 3} ${oz + 3} stone_bricks`); kcmd(`fill ${ox - 2} ${Y} ${oz - 2} ${ox + 2} ${Y + 2} ${oz + 2} air`);
+  kcmd(`setblock ${ox} ${Y} ${oz + 3} wooden_door ["direction"=1]`); kcmd(`setblock ${ox} ${Y + 1} ${oz + 3} wooden_door ["direction"=1,"upper_block_bit"=true]`);
+  await kitWait(5);
+  setRelPair(1, 2, "1", true);
+  const d = [0, 1, 2].map((i) => kitSoldier(1, { x: ox - 1 + i + 0.5, y: Y, z: oz - 1.5 }, "rifle", "hold"));
+  await kitWait(220);
+  const S = squads.get(squadKey(d[0], sd(d[0])));
+  const dbg = { wire: wirePerm()?.type?.id ?? String(wirePerm()), squad: !!S, n: S?.ours?.length, known: S?.known?.size, trapT: S?.trapT, indoors: d.map((e) => isIndoors(e)), func: sd(d[0]).func, door: ow().getBlock({ x: ox, y: Y, z: oz + 3 })?.typeId };
+  const set = TRAPS.length, at = TRAPS[0]?.at;
+  let block; try { block = at ? ow().getBlock(at).typeId : undefined; } catch {}
+  // an enemy walks in
+  const en = kitSoldier(2, { x: ox + 0.5, y: Y, z: oz + 6.5 }, "sword", "hold");
+  const keep = Math.random; Math.random = () => 0.99;
+  if (at) en.teleport({ x: at.x + 0.5, y: at.y, z: at.z + 0.5 });
+  await kitWait(10); Math.random = keep;
+  const r = { dbg, trapsSet: set, block, left: TRAPS.length };
+  let after; try { after = at ? ow().getBlock(at).typeId : undefined; } catch {}
+  r.afterBlock = after; r.wallsIntact = ow().getBlock({ x: ox, y: Y + 2, z: oz + 3 })?.typeId;
+  for (const e of [...d, en]) try { e.remove(); } catch {}
+  kcmd(`fill ${ox - 3} ${Y} ${oz - 3} ${ox + 3} ${Y + 3} ${oz + 3} air`);
+  return r;
+};
+KS.ammo = async (o, ox, oz) => {
+  floorAt(ox - 10, oz - 10, ox + 10, oz + 10);
+  setRelPair(1, 2, "0", false);
+  const a = kitSoldier(1, { x: ox + 0.5, y: Y, z: oz + 0.5 }, "smg", "hold"), b = kitSoldier(1, { x: ox + 4.5, y: Y, z: oz + 0.5 }, "smg", "hold");
+  await kitWait(10);
+  const st = { ammo: 0, next: 0 }, spec = GUN_SPEC.smg;
+  RESERVE.set(a.id, 25); const r1 = reloadGun(a, st, spec), loaded1 = st.ammo, left1 = RESERVE.get(a.id);
+  const r2 = reloadGun(a, st, spec), loaded2 = st.ammo;
+  const r3 = reloadGun(a, st, spec), out = OUT_OF.has(a.id);
+  await kitWait(25); const w = getJSON(a, "war:st", {}).w;
+  RESERVE.set(b.id, 100); await kitWait(90);
+  const r = { r1, loaded1, left1, r2, loaded2, r3, out, bayonet: w, sharedTo: RESERVE.get(a.id), mateLeft: RESERVE.get(b.id), outAfter: OUT_OF.has(a.id) };
+  for (const e of [a, b]) try { e.remove(); } catch {}
+  return r;
+};

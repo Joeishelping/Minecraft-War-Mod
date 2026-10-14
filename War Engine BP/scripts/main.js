@@ -3184,7 +3184,8 @@ async function warTable(player, pre) {
       .toggle("Gore: blood, and now and then a limb coming off (bodies and outright kills stay either way)", { defaultValue: setting("gore", true) !== false })
       .dropdown("Content", ["Vanilla (only what the game has: swords, spears, crossbows, vanilla mounts, no add-on vehicles)", "Light (no MG, sniper or bazooka; sensible mounts only)", "Full experience"], { defaultValueIndex: ["vanilla", "light", "full"].indexOf(contentMode()) })
       .toggle("Shields for swordsmen, spearmen and crossbowmen", { defaultValue: setting("shields", true) !== false })
-      .toggle("Night battles: muzzle flashes and illumination flares", { defaultValue: setting("nightfx", true) !== false });
+      .toggle("Night battles: muzzle flashes and illumination flares", { defaultValue: setting("nightfx", true) !== false })
+      .toggle("Limited ammo (soldiers run low in long fights; refill from squad mates, trucks, rally flags or a quiet spell)", { defaultValue: setting("ammo", true) !== false });
     const sr = await show(sf, player);
     if (!sr || sr.canceled || !sr.formValues) return;
     sdp(world, "war:set_capture", sr.formValues[0] === 0 ? "neutral" : "surrender");
@@ -3210,6 +3211,7 @@ async function warTable(player, pre) {
     const cm0 = contentMode(); sdp(world, "war:set_content", ["vanilla", "light", "full"][Number(sr.formValues[19] ?? 2)] ?? "full");
     sdp(world, "war:set_shields", !!sr.formValues[20]);
     sdp(world, "war:set_nightfx", !!sr.formValues[21]);
+    sdp(world, "war:set_ammo", !!sr.formValues[22]);
     if (contentMode() !== cm0) player.sendMessage(`§eContent set to ${contentMode()}: soldiers switch their weapons and mounts over as they're near.`);
     player.sendMessage("§aSettings saved.");
     return warTable(player, 5);
@@ -4252,6 +4254,7 @@ function gunTick(e, now) {
   if (downed.has(e.id)) return;
   const d = sd(e);
   const onNest = ridingNest(e);
+  if (SCOUTS.has(e.id) && now - Number(gdp(e, "war:hurt") ?? -9999) > 60) return;   // (v9.20: a scout doesn't give himself away)
   const arm = ARM.get(e.id);
   const spec = onNest ? NEST_SPEC : GUN_SPEC[arm?.arm === "pistol" ? "pistol" : d.weapon];
   if (pows.has(e.id)) return;
@@ -4261,6 +4264,7 @@ function gunTick(e, now) {
   if (!spec || d.surr || backOff || d.div === "medic" || (!onNest && !P(e, "war:gun"))) { if (P(e, "war:aiming")) setP(e, "war:aiming", false); return; }
   let st = gunState.get(e.id);
   if (!st) { st = { target: undefined, ammo: spec.mag, next: 0, seen: -999, check: 0, step: 0, back: 0 }; gunState.set(e.id, st); }
+  if (st.ammo <= 0) { if (now < st.next) return; if (!reloadGun(e, st, spec)) { st.next = now + 60; return; } }   // (v9.20: an empty gun until there's ammo to load)
   if (now >= st.check) {
     st.check = now + Math.round(5 * aiLoad());
     const ps = perc.get(e.id);
@@ -4302,7 +4306,7 @@ function gunTick(e, now) {
     if (!friendlyInLine(e, d, hl, p, st.supp.ent) && turnTo(e, p, 20) <= 25) {
       if (!fireAtPoint(e, spec, { x: p.x, y: p.y - 1, z: p.z })) { st.next = now + 4; return; }
       st.lastShot = now; st.ammo--;
-      if (st.ammo > 0) st.next = now + Math.max(2, spec.gap); else { st.ammo = spec.mag; st.next = now + spec.reload + Math.floor(Math.random() * 8); }
+      if (st.ammo > 0) st.next = now + Math.max(2, spec.gap); else st.next = now + (reloadGun(e, st, spec) ? spec.reload + Math.floor(Math.random() * 8) : 60);
     } else st.next = now + 4;
     return;
   }
@@ -4336,7 +4340,7 @@ function gunTick(e, now) {
   if (!onNest && Math.random() < (JAM[arm?.arm === "pistol" ? "pistol" : d.weapon] ?? 0)) jamGun(e, d, now);   // (v9.2: rarely, a jam)
   if (st.ammo > 0) st.next = now + Math.max(1, spec.gap);
   else {
-    st.ammo = spec.mag; st.next = now + spec.reload + Math.floor(Math.random() * 8); st.reloadUntil = st.next;
+    st.next = now + (reloadGun(e, st, spec) ? spec.reload + Math.floor(Math.random() * 8) : 60); st.reloadUntil = st.next;
     try { e.dimension.playSound("random.click", e.location, { volume: 0.35, pitch: 0.7 }); } catch {}   // a quiet reload
     if (Math.random() < 0.6 && perc.get(e.id)?.threat) callout(e, "Reloading!");   // (not every reload, and only in a fight)
   }
@@ -4540,7 +4544,8 @@ function threatScore(e, d, o, dd, now) {
   // v9.16: he sticks with the man he's on. Re-picking from scratch every look swung every gun between enemies about
   // twice a second (the fire-spreading and squad-target bonuses chasing each other); now he changes only for something
   // clearly more urgent, and hardly at all in his first 4 s on a man
-  if (GRUDGE.get(e.id)?.id === o.id) s += 90;                    // (v9.18: the man who killed his buddy)
+  if (GRUDGE.get(e.id)?.id === o.id) s += 90;
+  if (OFFICER_IDS.has(o.id)) s += d.weapon === "sniper" ? 35 : 6;  // (v9.20: snipers pick off the men giving the orders)                    // (v9.18: the man who killed his buddy)
   const ps = perc.get(e.id);
   if (ps?.threat?.id === o.id) { s += 65; if (now - (ps.threatT ?? -999) < 80) s += 60; }
   return s;
@@ -5244,7 +5249,7 @@ system.runInterval(() => {
     if (!m.path && m.earlyAt && !m.final) {                     // v5.9: walking off while the route is worked out: each to his own spot too
       const dim0 = world.getDimension(m.dim);
       for (const e of members) if (!driveOn.has(e.id)) formMode.add(e.id);
-      placeFormation(m, dim0, m.earlyAt, members.filter((e) => formMode.has(e.id)), "line");
+      placeFormation(m, dim0, m.earlyAt, members.filter((e) => formMode.has(e.id)), chooseShape(m, dim0, m.earlyAt, members));
       continue;
     }
     if (m.final && m.path && m.pos && !m.stuck) for (const e of all) {                    // v7.2: stragglers of an arrived march: on along the route, then their spot
@@ -5345,7 +5350,7 @@ system.runInterval(() => {
     }
     { const p = m.path[Math.min(m.path.length - 1, lead)], prev = m.path[Math.max(0, Math.min(m.path.length - 1, lead) - 2)];
       m.heading = Math.atan2(p.z - prev.z, p.x - prev.x) || m.heading;
-      if (now % 40 < 10) placeLanes(m, dim, p, m.heading, "line");      // (the lanes are only the squad's banner now: where the front is)
+      if (now % 40 < 10) placeLanes(m, dim, p, m.heading, chooseShape(m, dim, p, members));      // (the lanes are only the squad's banner now: where the front is)
       m.pos = { x: p.x, y: p.y, z: p.z }; }
     changed = true;
   }
@@ -6309,6 +6314,7 @@ system.runInterval(() => {
       for (const e of ours) {
         const s = perc.get(e.id);
         if (!s) continue;
+        if (SCOUTS.has(e.id)) { scoutSaw(e, s, now); continue; }                // (v9.20: a scout out ahead tells them when he's back)
         const ids = new Set([...s.seen.keys()]); if (s.threat?.isValid) ids.add(s.threat.id);
         for (const id of ids) { let o = entMemo.get(id); if (o === undefined) { o = world.getEntity(id) ?? null; entMemo.set(id, o); } if (o?.isValid && !isMob(o)) S.known.set(id, { ent: o, x: o.location.x, y: o.location.y, z: o.location.z, t: now }); }
       }
@@ -6408,6 +6414,7 @@ system.runInterval(() => {
                 callout(ours[0], "Flanking!"); radio(ours[0], `pinning them down, ${nF} flanking`, true);
                 guns.slice(guns.length - nF).forEach((e) => S.flankers.add(e.id));
                 guns.slice(0, guns.length - nF).forEach((e) => S.suppressors.add(e.id));
+                try { startFeint(S, guns.slice(0, guns.length - nF), oc, best, now); } catch {}   // (v9.20)
                 const cmdr = findPlayer(gdp(ours[0], "war:cmdr"));
                 try { cmdr?.onScreenDisplay.setActionBar(`§e${d0.squad ? squadName(d0.faction, d0.squad) : factionLabel(d0.faction, true)}: §fpinning them, ${nF} flanking`); } catch {}
               }
@@ -6432,9 +6439,9 @@ system.runInterval(() => {
         else {
           if (!S.bound) { S.bound = { phase: "suppress", t: now, team: 0 }; v9stat("boundStart"); callout(gunsB[0], "Suppressing!", { event: true }); radio(gunsB[0], "covering fire, then we bound forward", true); }
           const Bd = S.bound;
-          Bd.teams = new Map(gunsB.map((e, i) => [e.id, i % 2]));
-          if (Bd.phase === "suppress" && now - Bd.t >= 40) { Bd.phase = "bound"; Bd.team = 0; Bd.t = now; const m = gunsB.find((e, i) => i % 2 === 0); if (m) callout(m, "Cover me!", { event: true }); }
-          else if (Bd.phase === "bound" && now - Bd.t >= 70) { Bd.team ^= 1; Bd.t = now; v9stat("boundSwap"); const m = gunsB.find((e, i) => i % 2 === Bd.team); if (m) callout(m, "Cover me!", { event: true }); }
+          Bd.teams = new Map(gunsB.map((e) => [e.id, teamOf(e)]));   // (v9.20: fixed fire teams: each man with his buddy)
+          if (Bd.phase === "suppress" && now - Bd.t >= 40) { Bd.phase = "bound"; Bd.team = 0; Bd.t = now; const m = gunsB.find((e) => teamOf(e) === 0); if (m) callout(m, "Cover me!", { event: true }); }
+          else if (Bd.phase === "bound" && now - Bd.t >= 70) { Bd.team ^= 1; Bd.t = now; v9stat("boundSwap"); const m = gunsB.find((e) => teamOf(e) === Bd.team); if (m) callout(m, "Cover me!", { event: true }); }
         }
       } catch (err) { oops("bounding", err); }
       // v9.7: the MG sets up on the flank of the squad (10 blocks to one side, with a line on the nearest enemy), so his
@@ -9172,7 +9179,8 @@ system.runInterval(() => {
 // cover-and-move (half the squad covers while the other half moves, swapping every few seconds, movers weave
 // under fire), shoot-and-scoot (no standing in one exposed spot trading fire for long), and flinching when hit.
 const drill = new Map(); // id -> { fx, fz, since, scoot, scootUntil }
-const teamOf = (e) => (e.id.charCodeAt(e.id.length - 1) + (e.id.charCodeAt(e.id.length - 2) || 0)) & 1;
+// (v9.20: the fire teams: each man with his buddy; the same split everywhere bounding asks for it)
+function teamOf(e) { const b = String(gdp(e, "war:buddy") ?? ""); const k = b && b < e.id ? b : e.id; let h = 0; for (let i = 0; i < k.length; i++) h = (h * 31 + k.charCodeAt(i)) | 0; return Math.abs(h) % 2; }
 function drillMove(e, d, now, melee, anchor, leash) {
   const mv = brainMove(e, d, now, melee, anchor, leash);
   if (!setting("drills", true) || melee || !GUNS.includes(d.weapon) || isRiding(e) || personal.has(e.id)) return mv;
@@ -10352,7 +10360,7 @@ function smokeShot(e, d, spec, st, now) {
   else try { const b = e.dimension.spawnEntity(spec.bullet, from); const pc = b.getComponent("minecraft:projectile"); if (pc) { OURS.add(b.id); pc.owner = e; pc.shoot({ x: dir.x * spec.speed, y: dir.y * spec.speed, z: dir.z * spec.speed }); } } catch {}
   noteShot(e); st.lastShot = now; st.ammo--;
   note(e, "firing into the smoke");
-  if (st.ammo > 0) st.next = now + Math.max(3, spec.gap) + 2; else { st.ammo = spec.mag; st.next = now + spec.reload + Math.floor(Math.random() * 8); }
+  if (st.ammo > 0) st.next = now + Math.max(3, spec.gap) + 2; else st.next = now + (reloadGun(e, st, spec) ? spec.reload + Math.floor(Math.random() * 8) : 60);
   return true;
 }
 // ---- v9.2: the right weapon for the moment. Each gunner has his main gun, a sidearm (pistol) and a blade.
@@ -12041,3 +12049,343 @@ function throwBack(G, e, now) {
     return true;
   } catch { return false; }
 }
+
+// ================================================================ v9.20: tactics
+// ---- ammo: every gunner carries so many rounds besides the ones in his gun. In a long fight he runs low: he asks a
+// squad mate (who throws him some), and refills at a friendly truck or rally flag, or from the packs in a quiet spell.
+// Out of rounds altogether, he fixes his bayonet. (His pistol has its own ammo: unlimited.)
+const AMMO_START = { rifle: 50, semi: 64, smg: 140, mg: 240, shotgun: 30, pistol: 35, sniper: 25, at: 3 };
+const RESERVE = new Map();   // id -> rounds carried
+const OUT_OF = new Map();    // id -> tick he ran dry
+function reserveOf(e) { const w = sd(e).weapon; let r = RESERVE.get(e.id); if (r === undefined) { r = AMMO_START[w] ?? 60; RESERVE.set(e.id, r); } return r; }
+function reloadGun(e, st, spec) {
+  if (setting("ammo", true) === false || ARM.get(e.id)?.arm === "pistol" || spec === NEST_SPEC) { st.ammo = spec.mag; return true; }
+  const r = reserveOf(e);
+  if (r <= 0) {
+    st.ammo = 0;
+    if (!OUT_OF.has(e.id)) { OUT_OF.set(e.id, tick()); note(e, "out of ammo"); radio(e, `${soldierName(e)} is out of ammo`, "story"); v9stat("outOfAmmo"); }
+    return false;
+  }
+  const n = Math.min(spec.mag, r); RESERVE.set(e.id, r - n); st.ammo = n;
+  if (r - n <= spec.mag * 2 && !OUT_OF.has(e.id) && Math.random() < 0.3) note(e, "low on ammo");
+  return true;
+}
+function giveAmmo(e, n) { const w = sd(e).weapon, cap = (AMMO_START[w] ?? 60) * 1.2; RESERVE.set(e.id, Math.min(cap, reserveOf(e) + n)); if (OUT_OF.has(e.id)) { OUT_OF.delete(e.id); note(e, "got ammo"); } }
+system.runInterval(() => {
+  if (setting("ammo", true) === false) { RESERVE.clear(); OUT_OF.clear(); return; }
+  const now = tick();
+  for (const e of allOf(SOLDIER)) {
+    try {
+      const d = sd(e); if (!GUNS.includes(d.weapon) || downed.has(e.id)) continue;
+      const start = AMMO_START[d.weapon] ?? 60, r = reserveOf(e), mag = GUN_SPEC[d.weapon]?.mag ?? 1;
+      if (r >= start) continue;
+      const quiet = now - (gunState.get(e.id)?.lastShot ?? -9999) > 600 && !perc.get(e.id)?.threat;
+      const f = d.faction;
+      const depot = vehicleList.some((v) => v.typeId === "war:truck" && v.dimension.id === e.dimension.id && dist(v.location, e.location) < 8 && isFriendly(f, vehicleFaction(v))) ||
+        !!nearestFlag(e.dimension, e.location, (fl) => isFriendly(f, Number(P(fl, "war:faction"))), 8);
+      if (depot || quiet) { giveAmmo(e, depot ? Math.max(mag, Math.ceil(start / 4)) : Math.ceil(start / 3)); continue; }
+      // low: a squad mate within a stone's throw shares
+      if (r <= mag && now - (OUT_OF.get(e.id) ?? now) >= 0) {
+        for (const c of nearSnap(e.dimension.id, e.location, 10)) {
+          if (c.type !== SOLDIER || c.id === e.id || c.down || c.f !== f || !c.e.isValid || sd(c.e).weapon !== d.weapon) continue;
+          const cr = reserveOf(c.e); if (cr < mag * 4) continue;
+          const n = Math.max(mag, Math.floor(cr / 3)); RESERVE.set(c.id, cr - n); giveAmmo(e, n);
+          note(e, `ammo from ${surname(c.e)}`); v9stat("ammoShared"); break;
+        }
+      }
+    } catch {}
+  }
+  for (const id of [...RESERVE.keys()]) if (!world.getEntity(id)) { RESERVE.delete(id); OUT_OF.delete(id); }
+}, 40);
+// dry: bayonet
+WarAPI.on("think", (e, d, want) => { if (OUT_OF.has(e.id) && GUNS.includes(d.weapon) && !d.surr) { want.w = "w_melee"; want.t = "t_short"; want.r = "r_on"; } });
+
+
+// ---- formations by the ground: a column on a road or through a narrow way, a line once the enemy is about, a wedge
+// across open ground
+function chooseShape(m, dim, at, members) {
+  const now = tick();
+  if (m.shapeT && now - m.shapeT < 100) return m.shapeNow;                   // (no flapping: a shape holds ~5 s)
+  let shape = "line";
+  try {
+    const e0 = members?.[0], S = e0 ? squads.get(squadKey(e0, sd(e0))) : undefined;
+    const contact = !!S?.known?.size || (S?.contactT ?? -1) >= 0 && now - (S?.t ?? 0) < 200 && S.known?.size;
+    const h = m.heading ?? 0, rx = -Math.sin(h), rz = Math.cos(h);
+    let wide = 0; for (const k of [-3, -2, -1, 1, 2, 3]) { const w = walkableNear(dim, at.x + rx * k * 1.5, at.z + rz * k * 1.5, at.y); if (w && Math.abs(w.y - at.y) <= 1) wide++; }
+    let road = false; try { const b = dim.getBlock({ x: Math.floor(at.x), y: Math.floor(at.y) - 1, z: Math.floor(at.z) }); road = !!b && /path|gravel|cobblestone|stone_brick|planks|slab/.test(b.typeId); } catch {}
+    if (contact) shape = wide >= 4 ? "line" : "column";
+    else if (wide <= 2 || road) shape = "column";
+    else if ((members?.length ?? 0) >= 4 && wide >= 5) shape = "wedge";
+  } catch {}
+  m.shapeT = now; m.shapeNow = shape;
+  return shape;
+}
+
+// ---- snipers: a spot back from the squad with a long view; after a few shots (or once shot at) a new one
+const SNIPE = new Map();   // id -> { shots, at, t }
+system.runInterval(() => {
+  const now = tick();
+  for (const e of allOf(SOLDIER)) {
+    try {
+      const d = sd(e); if (d.weapon !== "sniper" || downed.has(e.id) || isRiding(e) || d.func === "post" || d.retreat) continue;
+      const st = gunState.get(e.id), t = perc.get(e.id)?.threat ?? st?.target;
+      let sn = SNIPE.get(e.id); if (!sn) { sn = { shots: 0, last: st?.lastShot ?? -1, t: 0 }; SNIPE.set(e.id, sn); }
+      if (st?.lastShot !== undefined && st.lastShot !== sn.last) { sn.last = st.lastShot; sn.shots++; }
+      const shotAtMe = now - (firedAt.get(e.id)?.t ?? -9999) < 40;
+      if (!t?.isValid || personal.has(e.id) || now - sn.t < 200) continue;
+      if (sn.shots < 3 && !shotAtMe) continue;
+      // displace: a few blocks to the side and back, somewhere that still sees the enemy
+      const l = e.location, dx = l.x - t.location.x, dz = l.z - t.location.z, L = Math.hypot(dx, dz) || 1, px = -dz / L, pz = dx / L;
+      let spot;
+      for (const [side, back] of [[6, 3], [-6, 3], [9, 5], [-9, 5], [4, 7], [-4, 7]]) {
+        const w = walkableNear(e.dimension, l.x + px * side + (dx / L) * back, l.z + pz * side + (dz / L) * back, l.y);
+        if (w && Math.abs(w.y - l.y) < 3 && !dangerNear(e.dimension, w) && clearShot(e.dimension, { x: w.x, y: w.y + 1.6, z: w.z }, chest(t))) { spot = w; break; }
+      }
+      sn.t = now; sn.shots = 0;
+      if (spot) { planPersonalTo(e, "settle", spot, now); note(e, "sniper: changing position"); v9stat("sniperMove"); }
+    } catch {}
+  }
+  for (const id of [...SNIPE.keys()]) if (!world.getEntity(id)) SNIPE.delete(id);
+}, 20);
+
+// ---- clearing rooms: men going through a building they're attacking call each room clear, and one stays at the foot
+// of the stairs watching up them until the squad goes up
+const CLEAR_SAID = new Map();   // squad key -> { t, spots: [] }
+const STAIR_WATCH = new Map();  // id -> { at, face, until }
+system.runInterval(() => {
+  const now = tick();
+  for (const [k, S] of squads) {
+    try {
+      if (!S.ours?.length || S.bplan?.kind !== "attack") continue;
+      const C = CLEAR_SAID.get(k) ?? { t: -999, spots: [] }; CLEAR_SAID.set(k, C);
+      if (now - C.t > 60) for (const e of S.ours) {
+        if (!e.isValid || downed.has(e.id) || perc.get(e.id)?.threat || !isIndoors(e)) continue;
+        if (C.spots.some((p) => dist(p, e.location) < 6)) continue;
+        if (nearSnap(e.dimension.id, e.location, 8).some((c) => !c.down && c.f && isHostile(sd(e).faction, c.f))) continue;
+        C.spots.push({ ...e.location }); if (C.spots.length > 30) C.spots.shift();
+        C.t = now; callout(e, "Clear!", { event: true }); note(e, "room clear"); v9stat("roomClear"); break;
+      }
+      // the stair watcher
+      const fl = S.ours.filter((o) => o.isValid && !downed.has(o.id));
+      if (fl.length < 4 || [...STAIR_WATCH.keys()].some((id) => fl.some((o) => o.id === id))) continue;
+      const y0 = Math.min(...fl.map((o) => o.location.y));
+      if (fl.some((o) => o.location.y > y0 + 2.5)) continue;                  // (someone's already up: no watch needed now)
+      const st = STAIRS.find((q) => q.dimId === fl[0].dimension.id && Math.abs(q.foot.y - y0) < 1.5 && q.top.y > q.foot.y + 2 && fl.some((o) => dist(o.location, q.foot) < 12));
+      if (!st) continue;
+      const w = fl.filter((o) => !OFFICER_IDS.has(o.id) && GUNS.includes(sd(o).weapon)).sort((a, b) => dist(a.location, st.foot) - dist(b.location, st.foot))[0];
+      if (!w) continue;
+      const dx = st.foot.x - st.top.x, dz = st.foot.z - st.top.z, L = Math.hypot(dx, dz) || 1;
+      const at = walkableNear(w.dimension, st.foot.x + (dx / L) * 2, st.foot.z + (dz / L) * 2, st.foot.y) ?? st.foot;
+      STAIR_WATCH.set(w.id, { at, face: st.top, until: now + 600, k });
+      note(w, "watching the stairs"); callout(w, "Covering!", { event: true });
+    } catch {}
+  }
+  for (const [id, sw] of [...STAIR_WATCH]) { const S = squads.get(sw.k); const e = world.getEntity(id); if (!e?.isValid || now > sw.until || downed.has(id) || S?.bplan?.kind !== "attack" || (S?.ours ?? []).some((o) => o.isValid && o.location.y > sw.at.y + 2.5)) STAIR_WATCH.delete(id); }
+}, 20);
+WarAPI.registerBehavior({
+  name: "stair watch", when: "first", priority: 80,
+  decide(e, d, now) {
+    const sw = STAIR_WATCH.get(e.id); if (!sw) return undefined;
+    if (perc.get(e.id)?.threat?.isValid) return undefined;                   // (something to shoot: he shoots it)
+    if (flat(sw.at, e.location) < 1.2) { turnTo(e, sw.face, 20); return { g: "g_none", t: "t_mid", urgent: false, note: "watching the stairs" }; }
+    const slot = myMarker(e, sw.at); if (flat(sw.at, e.location) < 3.2) push(e, { x: (sw.at.x - e.location.x) * 0.2, y: 0.02, z: (sw.at.z - e.location.z) * 0.2 }, 3);
+    return slot ? { g: "g_wp", slot, t: "t_mid", urgent: true, note: "watching the stairs" } : undefined;
+  },
+});
+
+// ---- rearguard: when several of a squad fall back with the enemy in sight, one or two of the steadiest stay a few
+// seconds and keep the enemy's heads down while the rest get away, then go themselves
+const REARGUARD = new Map();   // id -> until
+system.runInterval(() => {
+  const now = tick();
+  for (const S of squads.values()) {
+    try {
+      if (!S.ours?.length || !S.known?.size) continue;
+      const back = S.ours.filter((o) => o.isValid && !downed.has(o.id) && (sd(o).retreat || shaken.has(o.id)));
+      if (back.length < 2 || now - (S.rgT ?? -9999) < 600) continue;
+      const cands = S.ours.filter((o) => o.isValid && !downed.has(o.id) && GUNS.includes(sd(o).weapon) && !shaken.has(o.id) && !REARGUARD.has(o.id))
+        .map((o) => { const h = o.getComponent("minecraft:health"); return { o, sc: (h ? h.currentValue / h.effectiveMax : 1) + vetTier(o) * 0.3 + (traitOf(o) === "brave" ? 0.5 : traitOf(o) === "cautious" ? -0.5 : 0) }; })
+        .filter((c) => c.sc > 0.6).sort((a, b) => b.sc - a.sc).slice(0, back.length >= 4 ? 2 : 1);
+      if (!cands.length) continue;
+      S.rgT = now;
+      for (const { o } of cands) { REARGUARD.set(o.id, now + 200 + Math.floor(Math.random() * 60)); note(o, "rearguard"); }
+      callout(cands[0].o, "I'll cover you!", { event: true }) || callout(cands[0].o, "Covering!", { event: true });
+      radio(cands[0].o, `${soldierName(cands[0].o)} stays behind to cover the withdrawal`, "story"); v9stat("rearguard");
+    } catch {}
+  }
+  for (const [id, t] of [...REARGUARD]) if (now > t || !world.getEntity(id)) REARGUARD.delete(id);
+}, 40);
+WarAPI.registerBehavior({
+  name: "rearguard", when: "first", priority: 85,
+  decide(e, d, now) {
+    if (!REARGUARD.has(e.id) || d.retreat) return undefined;
+    if (now > REARGUARD.get(e.id)) { REARGUARD.delete(e.id); return undefined; }
+    return { g: "g_none", t: "t_mid", urgent: false, note: "rearguard: covering the withdrawal" };
+  },
+});
+
+// ---- scouts: a squad on the move with no contact sends one man ~30 blocks ahead. What he sees, the squad only learns
+// when he's back with them (so killing him matters); seeing the enemy, he turns back at once.
+const SCOUTS = new Map();   // id -> { k, phase, to, intel: Map, t }
+function scoutSaw(e, s, now) {
+  const sc = SCOUTS.get(e.id); if (!sc) return;
+  const ids = new Set([...s.seen.keys()]); if (s.threat?.isValid) ids.add(s.threat.id);
+  for (const id of ids) { const o = world.getEntity(id); if (o?.isValid && !isMob(o)) sc.intel.set(id, { ent: o, x: o.location.x, y: o.location.y, z: o.location.z }); }
+  if (sc.intel.size && sc.phase === "out") { sc.phase = "back"; sc.t = now; note(e, "scout: spotted them, heading back"); }
+}
+system.runInterval(() => {
+  const now = tick();
+  for (const [k, S] of squads) {
+    try {
+      if (!S.ours?.length) continue;
+      // send one
+      if (!S.known?.size && S.ours.length >= 4 && now - (S.scoutT ?? -99999) > 2400 && ![...SCOUTS.values()].some((q) => q.k === k)) {
+        const lead = S.ours[0], d0 = sd(lead);
+        const moving = ["charge", "patrol"].includes(d0.func) || gdp(lead, "war:catchup") !== undefined;
+        if (moving) {
+          const c = S.ourC ?? lead.location, v = lead.getVelocity(), L = Math.hypot(v.x, v.z);
+          if (L > 0.05) {
+            const to = walkableNear(lead.dimension, c.x + (v.x / L) * 30, c.z + (v.z / L) * 30, c.y);
+            const sc = S.ours.filter((o) => o.isValid && !OFFICER_IDS.has(o.id) && GUNS.includes(sd(o).weapon) && sd(o).div !== "medic" && !isRiding(o) && !personal.has(o.id))
+              .sort((a, b) => (traitOf(b) === "brave") - (traitOf(a) === "brave"))[0];
+            if (to && sc) {
+              S.scoutT = now;
+              SCOUTS.set(sc.id, { k, phase: "out", to, intel: new Map(), t: now });
+              planPersonalTo(sc, "settle", to, now); note(sc, "scouting ahead"); radio(sc, `${soldierName(sc)} goes ahead to scout`, "story"); v9stat("scoutOut");
+            }
+          }
+        }
+      }
+    } catch {}
+  }
+  for (const [id, sc] of [...SCOUTS]) {
+    const e = world.getEntity(id), S = squads.get(sc.k);
+    if (!e?.isValid || downed.has(id) || !S) { SCOUTS.delete(id); if (e?.isValid === false || !e) v9stat("scoutLost"); continue; }
+    try {
+      const home = S.ourC ?? e.location;
+      if (sc.phase === "out" && (flat(e.location, sc.to) < 3 || now - sc.t > 500)) { sc.phase = "back"; sc.t = now; }
+      if (sc.phase === "back") {
+        if (flat(e.location, home) < 10) {
+          for (const [oid, q] of sc.intel) S.known.set(oid, { ...q, t: now });
+          SCOUTS.delete(id);
+          if (sc.intel.size) { const q = [...sc.intel.values()][0]; radio(e, `${soldierName(e)} reports: ${sc.intel.size} enemy ${bearing(home, q)}, about ${Math.round(flat(home, q))} blocks`, "story"); callout(e, "Contact!", { event: true }); v9stat("scoutReport"); }
+          else note(e, "scout: all quiet ahead");
+          continue;
+        }
+        if (!personal.has(id) || now - sc.t > 100) { sc.t = now; planPersonalTo(e, "settle", { x: home.x, y: home.y, z: home.z }, now); }
+        note(e, "scout: heading back");
+      }
+      if (now - (sc.t0 ?? (sc.t0 = now)) > 1600) SCOUTS.delete(id);
+    } catch { SCOUTS.delete(id); }
+  }
+}, 20);
+// the scout keeps his head down: he doesn't start a fight on his own
+WarAPI.on("think", (e, d, want) => { if (SCOUTS.has(e.id) && !(now0() - Number(gdp(e, "war:hurt") ?? -9999) < 60)) { want.t = "t_off"; } });
+const now0 = () => tick();
+
+// ---- feints: as the flankers go one way, two of the base of fire shift the other way and make a lot of noise there,
+// so the enemy turns to face the wrong side
+const FEINT = new Map();   // id -> { at, until }
+function startFeint(S, base, oc, flankPt, now) {
+  if (base.length < 4 || now - (S.feintT ?? -9999) < 1200) return;
+  const dx = flankPt.x - oc.x, dz = flankPt.z - oc.z, L = Math.hypot(dx, dz) || 1;
+  const at = walkableNear(base[0].dimension, oc.x - (dx / L) * 10, oc.z - (dz / L) * 10, oc.y);
+  if (!at || dangerNear(base[0].dimension, at)) return;
+  S.feintT = now;
+  const pair = base.filter((e) => !OFFICER_IDS.has(e.id)).slice(-2);
+  for (const e of pair) { FEINT.set(e.id, { at, until: now + 500 }); planPersonalTo(e, "settle", at, now); note(e, "feint: drawing their eyes"); }
+  if (pair[0]) radio(pair[0], "two men making noise on the other side while the flank goes in", "story");
+  v9stat("feint");
+}
+system.runInterval(() => { const now = tick(); for (const [id, f] of [...FEINT]) if (now > f.until || !world.getEntity(id)) FEINT.delete(id); }, 40);
+// the feint fires at whatever it can see, and a lot of it (the noise is the point)
+WarAPI.on("think", (e, d, want, now) => { const f = FEINT.get(e.id); if (f && flat(f.at, e.location) < 3) { const st = gunState.get(e.id); if (st && !st.target) { const q = [...(squads.get(squadKey(e, d))?.known?.values() ?? [])][0]; if (q?.ent?.isValid) st.supp = { p: { x: q.x, y: q.y + 1.2, z: q.z }, until: now + 30, ent: q.ent }; } } });
+
+// ---- counterattacks: defenders who've just thrown an attack back (the attackers falling back, or few left) go after
+// them for a short while, then return to their positions
+system.runInterval(() => {
+  const now = tick();
+  for (const S of squads.values()) {
+    try {
+      if (!S.ours?.length || !S.known?.size || S.counter && now - S.counterT < 600) continue;
+      const ours = S.ours.filter((o) => o.isValid && !downed.has(o.id) && !shaken.has(o.id));
+      if (ours.length < 3 || !ours.every((o) => ["hold", "stand", "sentry"].includes(sd(o).func))) continue;
+      const foes = [...S.known.values()].filter((q) => q.ent?.isValid && !downed.has(q.ent.id));
+      if (!foes.length) continue;
+      const fleeing = foes.filter((q) => q.ent.typeId === SOLDIER && (sd(q.ent).retreat || shaken.has(q.ent.id))).length;
+      const beaten = fleeing >= Math.ceil(foes.length / 2) || ours.length >= foes.length * 2.5;
+      if (!beaten || now - (S.contactT ?? now) < 300 || now - (S.counterT ?? -99999) < 2400) continue;
+      if (Math.random() > 0.5) { S.counterT = now; continue; }
+      S.counter = true; S.counterT = now; v9stat("counterattack");
+      const q = foes.sort((a, b) => Math.hypot(a.x - (S.ourC?.x ?? 0), a.z - (S.ourC?.z ?? 0)) - Math.hypot(b.x - (S.ourC?.x ?? 0), b.z - (S.ourC?.z ?? 0)))[0];
+      const go = ours.filter((o) => sd(o).func !== "post" && sd(o).div !== "medic").slice(0, Math.max(2, Math.ceil(ours.length * 0.6)));
+      for (const o of go) { planPersonalTo(o, "engage", { x: q.x, y: q.y, z: q.z }, now); note(o, "counterattack!"); }
+      callout(go[0], "Charge!", { event: true }); radio(go[0], "they're breaking, counterattack!", "story");
+    } catch {}
+  }
+  for (const S of squads.values()) if (S.counter && (now - S.counterT > 600 || !S.known?.size)) S.counter = false;
+}, 40);
+
+// ---- traps: defenders settled in a building with no fight yet string a tripwire (with a charge) inside a door or two.
+// It never breaks blocks; the string is taken away after ~5 minutes. Attackers may spot one and cut it, the better
+// soldiers more often.
+const TRAPS = [];          // { dim, at, f, until, spotted }
+let WIRE;
+const wirePerm = () => { if (WIRE !== undefined) return WIRE; for (const id of ["minecraft:trip_wire", "minecraft:tripwire"]) { try { WIRE = BlockPermutation.resolve(id); return WIRE; } catch {} } WIRE = null; return WIRE; };
+function unwire(T) { try { const b = world.getDimension(T.dim).getBlock(T.at); if (b && /trip_?wire$/.test(b.typeId)) b.setType("minecraft:air"); } catch {} }
+system.runInterval(() => {
+  const now = tick();
+  if (!wirePerm()) return;
+  for (const S of squads.values()) {
+    try {
+      if (!S.ours?.length || S.known?.size || S.ours.length < 3 || now - (S.trapT ?? -99999) < 3000) continue;
+      const e0 = S.ours.find((o) => o.isValid && isIndoors(o) && ["hold", "post", "stand"].includes(sd(o).func) && traitOf(o) !== "hothead");
+      if (!e0) continue;
+      const f = Number(sd(e0).faction ?? 0);
+      if (TRAPS.filter((t) => t.f === f).length >= 4) continue;
+      S.trapT = now;
+      const dim = e0.dimension, l = e0.location;
+      let placed = 0;
+      for (let dx = -8; dx <= 8 && placed < 1; dx++) for (let dz = -8; dz <= 8 && placed < 1; dz++) for (const dy of [0, 1, -1]) {
+        const b = dim.getBlock({ x: Math.floor(l.x) + dx, y: Math.floor(l.y) + dy, z: Math.floor(l.z) + dz });
+        if (!b || !/_door$/.test(b.typeId) || b.typeId.includes("trapdoor")) continue;
+        for (const [ox, oz] of [[1, 0], [-1, 0], [0, 1], [0, -1]]) {
+          const c = dim.getBlock({ x: b.location.x + ox, y: b.location.y, z: b.location.z + oz }), under = dim.getBlock({ x: b.location.x + ox, y: b.location.y - 1, z: b.location.z + oz });
+          if (!c?.isAir || !under || under.isAir || passable(under)) continue;
+          let roof = false; for (let k = 2; k <= 6 && !roof; k++) { const rb = dim.getBlock({ x: c.location.x, y: c.location.y + k, z: c.location.z }); if (rb && !rb.isAir && !passable(rb)) roof = true; }
+          if (!roof) continue;                                                  // (the inside of the door: a roof over it; daylight through the doorway doesn't count)
+          if (S.ours.some((o) => o.isValid && Math.floor(o.location.x) === c.location.x && Math.floor(o.location.z) === c.location.z)) continue;
+          c.setPermutation(WIRE);
+          const T = { dim: dim.id, at: { ...c.location }, f, until: now + 6000 };
+          TRAPS.push(T); restoreList.push({ dim: dim.id, loc: { ...c.location }, typeId: "minecraft:air", placed: c.typeId, at: now + 6100 });
+          placed++; note(e0, "rigged a tripwire"); v9stat("trapSet"); break;
+        }
+        if (placed) break;
+      }
+    } catch {}
+  }
+}, 100);
+system.runInterval(() => {
+  const now = tick();
+  for (let i = TRAPS.length - 1; i >= 0; i--) {
+    const T = TRAPS[i];
+    try {
+      if (now > T.until) { unwire(T); TRAPS.splice(i, 1); continue; }
+      const c = { x: T.at.x + 0.5, y: T.at.y, z: T.at.z + 0.5 };
+      for (const o of nearbyCombatants(T.dim, c, 5)) {
+        if (o.typeId !== SOLDIER && !(o.typeId === "minecraft:player" && playerFair(o))) continue;
+        const of = factionOf(o); if (!of || !isHostile(T.f, of) || (o.typeId === SOLDIER && downed.has(o.id))) continue;
+        const dd = dist(o.location, c);
+        if (o.typeId === SOLDIER && !T.spotted && dd < 4.5 && dd > 1.2 && Math.random() < 0.06 + vetTier(o) * 0.05 + (traitOf(o) === "cautious" ? 0.05 : 0)) {
+          T.spotted = true; note(o, "spotted a tripwire"); callout(o, "Hold!", { event: true }) || callout(o, "Wait!", { event: true }); radio(o, `${soldierName(o)} found a tripwire and cut it`, "story"); v9stat("trapSpotted");
+          unwire(T); TRAPS.splice(i, 1); break;
+        }
+        if (dd < 0.9 && Math.abs(o.location.y - T.at.y) < 1.2) {
+          unwire(T); TRAPS.splice(i, 1);
+          explode(world.getDimension(T.dim), { x: c.x, y: c.y + 0.3, z: c.z }, 2.4, { breaksBlocks: false, causesFire: false });
+          v9stat("trapSprung"); break;
+        }
+      }
+    } catch { TRAPS.splice(i, 1); }
+  }
+}, 4);
