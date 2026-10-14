@@ -12,6 +12,12 @@
     },
     "war_sandbag": {
       "textures": "textures/blocks/war_sandbag"
+    },
+    "war_barbed_wire": {
+      "textures": "textures/blocks/war_barbed_wire"
+    },
+    "war_ammo_crate": {
+      "textures": "textures/blocks/war_ammo_crate"
     }
   }
 }

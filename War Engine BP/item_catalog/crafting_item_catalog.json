@@ -29,7 +29,9 @@
               "war:plane_item",
               "war:truck_item",
               "war:gunboat_item",
-              "war:heli_item"
+              "war:heli_item",
+              "war:signal_flag",
+              "war:first_aid"
             ]
           }
         ]

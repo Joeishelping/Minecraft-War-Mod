@@ -3,6 +3,7 @@ import { world, system, Player, ItemStack, EquipmentSlot, GameMode, MolangVariab
 import { ActionFormData, ModalFormData, FormCancelationReason } from "@minecraft/server-ui";
 import { SKINS } from "./skins.js";
 import { WarAPI } from "./api.js";
+import { CULTURE, MIXES } from "./names.js";
 // v6.2: errors are never silent any more in the core loops: counted per system, written to the content log (with the
 // first lines of the stack) at most once a minute per system, and shown in chat when "Show soldier decisions" is on.
 const ERRS = new Map(); // system -> { n, t }
@@ -1760,7 +1761,6 @@ function spawnCorpse0(v, how) {
     try { dim.playSound("war.gibs", a, { volume: 0.9 }); } catch {}
   }
   sprayBlood(dim, chest(v), mask || how?.head || blast ? 1 : 0);
-  pruneBodies();                                                    // (v9.21: the oldest go where nobody's looking, or sink away)
   return body;
 }
 world.afterEvents.entityDie.subscribe((ev) => {
@@ -1771,6 +1771,7 @@ world.afterEvents.entityDie.subscribe((ev) => {
     const fb = FALLS.get(v.id);
     if (fb) { FALLS.delete(v.id); const st = RD.get(fb); if (st) { st.fall = undefined; CORPSES.push({ id: fb, t: tick() }); system.run(() => { try { if (v.isValid) v.remove(); } catch {} }); return; } }
     const h2 = how ?? { dir: undefined, power: 0.12 }; if (downed.has(v.id)) h2.lying = true;   // (killed where he lay: he's already down)
+    try { v.setProperty("war:hide", true); } catch {}                    // (v9.19: gone the same tick the body appears: no double, no red death tilt)
     spawnCorpse(v, h2);
     system.run(() => { try { if (v.isValid) v.remove(); } catch {} });          // (the body takes his place: no death spin)
   } catch {}
@@ -1806,7 +1807,7 @@ try {
 } catch {}
 system.runInterval(() => {
   const now = tick();
-  while (CORPSES.length && now - CORPSES[0].t > 1200) { const o = CORPSES.shift(); try { world.getEntity(o.id)?.remove(); } catch {} }   // (a minute, then gone)
+  // (v9.19: no more "a minute, then gone": that popped bodies away in front of the player. pruneBodies decides, out of sight)
   for (const [id, h] of [...lastHit]) if (now - h.t > 40) lastHit.delete(id);
   if (bloodT.size > 2000) bloodT.clear();
 }, 40);
@@ -2522,6 +2523,8 @@ function tool(player, typeId, target) {
     case "war:gunboat_item": return run(() => placeVehicle(player, "war:gunboat"));
     case "war:heli_item": return run(() => placeVehicle(player, "war:heli"));
     case "war:war_horn": return run(() => blowHorn(player));
+    case "war:signal_flag": return run(async () => giveSignal(player, SIG_SEL.get(player.id) ?? 0));
+    case "war:first_aid": return run(() => firstAid(player, target));
   }
 }
 system.beforeEvents.startup.subscribe((ev) => {
@@ -4915,7 +4918,7 @@ function TI(id) {
     tall: id.includes("fence") || /_wall$/.test(id) || id.endsWith(":cobblestone_wall"),
     trap, leaves: id.includes("leaves"), hazard: HAZARD.some((h) => id.includes(h)), water: id.includes("water"),
     stairs: id.includes("stairs") || id.includes("slab"),
-    web: id === "minecraft:web" || id.endsWith("cobweb"),
+    web: id === "minecraft:web" || id.endsWith("cobweb") || id === "war:barbed_wire",
   };
   t.pass = t.woodDoor || t.plantish || t.web;   // (v9.1: a cobweb can be walked through, slowly: routes go round it if they can)
   TYPE_INFO.set(id, t);
@@ -7065,8 +7068,8 @@ world.afterEvents.entityHurt.subscribe((ev) => {
 // ---- v6.5: battle chatter, spoken. Each faction's soldiers shout in its language (War Table -> Settings -> Callout
 // language); what you read on screen stays English. Recorded lines live in the resource pack (sounds/war_voice/<lang>/),
 // one sound event per line: war.voice.<lang>.<line>. A language with no recordings yet just stays silent.
-const VOICE_KEYS = ["none", "en_us", "en_gb", "greek", "korean", "spanish", "hebrew", "dutch", "german", "mongolian", "russian", "italian", "hindi", "igbo", "haitian", "arabic_sy", "chinese", "maya", "aave"];
-const VOICE_NAMES = ["None (silent)", "US English", "British English", "Greek", "Korean", "Spanish", "Hebrew", "Dutch", "German", "Mongolian", "Russian", "Italian", "Hindi", "Igbo", "Haitian Creole", "Syrian Arabic (mixed)", "Chinese (Mandarin)", "Yucatec Maya", "AAVE"];
+const VOICE_KEYS = ["none", "en_us", "us_mix", "en_gb", "greek", "korean", "spanish", "hebrew", "dutch", "german", "mongolian", "russian", "italian", "hindi", "igbo", "haitian", "arabic_sy", "chinese", "maya", "aave"];
+const VOICE_NAMES = ["None (silent)", "US English", "American (US English + AAVE, mixed)", "British English", "Greek", "Korean", "Spanish", "Hebrew", "Dutch", "German", "Mongolian", "Russian", "Italian", "Hindi", "Igbo", "Haitian Creole", "Syrian Arabic (mixed)", "Chinese (Mandarin)", "Yucatec Maya", "AAVE"];
 function voiceOf(f) { const v = getJSON(world, "war:vlang", {})[f]; return VOICE_KEYS.includes(v) ? v : "en_us"; }
 // the English line (as the code calls it) -> the recorded line. Lines with no recording (Reloading, Grenade, On the gun) are silent
 const CALL_KEY = { "Enemy spotted!": "spotted", "Contact!": "contact", "Flanking!": "flanking", "Charge!": "charge", "Go, go, go!": "gogogo",
@@ -7135,7 +7138,7 @@ function callout(e, text, opt = {}) {
   try {
     if (!e?.isValid || held.has(e.id) || (downed.has(e.id) && !["I'm hit!", "Medic!", "Don't shoot!"].includes(text) && !opt.force)) return false;
     const test = text === "Testing!";
-    const f = Number(P(e, "war:faction") ?? 0), lang = opt.lang ?? voiceOf(f);
+    const f = Number(P(e, "war:faction") ?? 0), lang = heritage(e, opt.lang ?? voiceOf(f));
     if (!lang || lang === "none") return false;
     if (!opt.force && !opt.event && ambushQuiet(e)) return false;          // (v9.0: lying in wait, nobody shouts)
     const has = VOICE_HAS[lang] ?? BASE_LINES, now = tick(), l = e.location, did = e.dimension.id;
@@ -7178,7 +7181,7 @@ function afterLine(e, key, now) {
   const d = sd(e), dimId = e.dimension.id, at = { ...e.location };
   const mate = (r) => { for (const c of nearSnap(dimId, at, r)) if (c.id !== e.id && c.type === SOLDIER && !c.down && c.f === d.faction && c.e.isValid && sd(c.e).squad === d.squad) return c.e; };
   const reply = (r, text, delay, opt) => system.runTimeout(() => { try { const who = mate(r); if (who?.isValid) callout(who, text, opt); } catch {} }, delay);
-  const lang = voiceOf(d.faction), r0 = Math.random();
+  const lang = voiceOfMan(e), r0 = Math.random();
   // v9.5: the new back-and-forth (only where the language has the answer recorded)
   if (IDLE_ASK[key] && voiceHas(lang, IDLE_ASK[key])) { if (r0 < 0.85) reply(10, "REPLY", 45 + Math.floor(Math.random() * 25), { key: IDLE_ASK[key], event: true }); return; }
   if (STORIES.includes(key) || key === "story") { if (r0 < 0.7) reply(6, "REPLY", 30, { key: Math.random() < 0.5 ? "camp_laugh" : "camp_again", event: true }); return; }
@@ -7195,16 +7198,17 @@ function afterLine(e, key, now) {
 async function voiceMenu(player) {
   const pick = await show(new ActionFormData().title("Callouts")
     .button("Set the language per faction").button("Test: soldiers near me each say a line").button("Test: play EVERY line, one by one")
-    .button("Test: play one line...").button("How often they talk / subtitles").button("« Back"), player);
+    .button("Test: play one line...").button("How often they talk / subtitles / names").button("« Back"), player);
   if (!pick || pick.canceled || pick.selection === undefined) return;
   if (pick.selection === 1) { testCallouts(player); return; }
   if (pick.selection === 2) { testEveryLine(player); return; }
   if (pick.selection === 3) { await testOneLine(player); return; }
   if (pick.selection === 4) {
     const r = await show(new ModalFormData().title("Callouts").dropdown("How often they talk", ["Less", "Normal", "A lot"], { defaultValueIndex: Number(setting("vfreq", 1)) })
-      .toggle("Subtitles (the line, in English, on screen)", { defaultValue: !!setting("vsubs", false) }), player);
+      .toggle("Subtitles (the line, in English, on screen)", { defaultValue: !!setting("vsubs", false) })
+      .toggle("Mixed heritage names (about 1 in 7 men has a surname from another culture)", { defaultValue: !!setting("mixnames", false) }), player);
     if (!r || r.canceled || !r.formValues) return;
-    sdp(world, "war:set_vfreq", Number(r.formValues[0])); sdp(world, "war:set_vsubs", !!r.formValues[1]);
+    sdp(world, "war:set_vfreq", Number(r.formValues[0])); sdp(world, "war:set_vsubs", !!r.formValues[1]); sdp(world, "war:set_mixnames", !!r.formValues[2]);
     player.sendMessage("§aCallout settings saved.");
     return;
   }
@@ -7339,6 +7343,7 @@ function revive(e, hpTo = 6) {
   const h = e.getComponent("minecraft:health");
   if (h) h.setCurrentValue(Math.min(h.effectiveMax, hpTo));
   try { e.dimension.spawnParticle("minecraft:heart_particle", { x: e.location.x, y: e.location.y + 2, z: e.location.z }); } catch {}
+  nickCount(e, "lucky");
   updateName(e);
 }
 system.runInterval(() => {
@@ -7648,7 +7653,7 @@ function testCallouts(player) {
   let n = 0;
   const used = new Set();
   for (const e of player.dimension.getEntities({ type: SOLDIER, location: player.location, maxDistance: 24 })) {
-    const lang = voiceOf(Number(P(e, "war:faction") ?? 0)), has = (VOICE_HAS[lang] ?? BASE_LINES).filter((k) => !used.has(k));
+    const lang = voiceOfMan(e), has = (VOICE_HAS[lang] ?? BASE_LINES).filter((k) => !used.has(k));
     if (!has.length || lang === "none") continue;
     const key = has[Math.floor(Math.random() * has.length)]; used.add(key);   // (every soldier a different line)
     system.runTimeout(() => callout(e, "", { key, force: true, subs: true }), n * 50); n++;
@@ -7661,7 +7666,7 @@ function testCallouts(player) {
 function testEveryLine(player) {
   const e = player.dimension.getEntities({ type: SOLDIER, location: player.location, maxDistance: 24, closest: 1 })[0];
   if (!e) { player.sendMessage("§7No soldier within 24 blocks."); return; }
-  const lang = voiceOf(Number(P(e, "war:faction") ?? 0));
+  const lang = voiceOfMan(e);
   if (lang === "none") { player.sendMessage("§7His faction's callouts are set to None."); return; }
   const keys = Object.keys(LINE_INFO).filter((k) => voiceHas(lang, k));
   keys.forEach((k, i) => system.runTimeout(() => {
@@ -7678,7 +7683,7 @@ async function testOneLine(player) {
   const r = await show(new ModalFormData().title("Play one line").dropdown("Line", keys.map((k) => `${LINE_INFO[k][0]}  §7(${LINE_INFO[k][1]})`))
     .dropdown("Language", VOICE_NAMES.slice(1), { defaultValueIndex: 0 }), player);
   if (!r || r.canceled || !r.formValues) return;
-  const key = keys[Number(r.formValues[0])], lang = VOICE_KEYS[Number(r.formValues[1]) + 1];
+  const key = keys[Number(r.formValues[0])], lang0 = VOICE_KEYS[Number(r.formValues[1]) + 1], lang = MIXES[lang0] ? MIXES[lang0][Math.floor(Math.random() * MIXES[lang0].length)][0] : lang0;
   if (!voiceHas(lang, key)) { player.sendMessage(`§7No ${VOICE_NAMES[VOICE_KEYS.indexOf(lang)]} recording of that line yet.`); return; }
   const e = player.dimension.getEntities({ type: SOLDIER, location: player.location, maxDistance: 24, closest: 1 })[0];
   if (e) callout(e, "", { key, lang, force: true, subs: true });
@@ -11206,7 +11211,7 @@ system.runInterval(() => {
     if (!c.story && now - c.t0 > 400 && sitting.length >= 2 && Math.random() < 0.06) {   // (rare: about one fire in three hears one)
       c.story = true;
       const teller = world.getEntity(sitting[Math.floor(Math.random() * sitting.length)]);
-      if (teller?.isValid) { const ks = STORIES.filter((k) => voiceHas(voiceOf(sd(teller).faction), k)); callout(teller, "STORY", { key: ks.length ? ks[Math.floor(Math.random() * ks.length)] : "story", event: true }); }   // (v9.5: a recorded story, else your own story.ogg)
+      if (teller?.isValid) { const ks = STORIES.filter((k) => voiceHas(voiceOfMan(teller), k)); callout(teller, "STORY", { key: ks.length ? ks[Math.floor(Math.random() * ks.length)] : "story", event: true }); }   // (v9.5: a recorded story, else your own story.ogg)
     }
     if (now > c.until || c.seats.size < 2) campEnd(c);
   }
@@ -11659,7 +11664,7 @@ system.runInterval(() => {
   for (const e of allOf(SOLDIER)) {
     try {
       const want = officers.has(e.id); if (!!P(e, "war:officer") !== want) setP(e, "war:officer", want);
-      const key = `${voiceOf(Number(P(e, "war:faction") ?? 0))}|${rankTier(e)}`;   // (v9.23: a name tag made before the language or rank changed is redone)
+      const key = `${voiceOfMan(e)}|${rankTier(e)}|${setting("mixnames", false) ? 1 : 0}`;   // (v9.23: a name tag made before the language or rank changed is redone)
       if (NAME_KEY.get(e.id) !== key || was.has(e.id) !== want) { NAME_KEY.set(e.id, key); updateName(e); }
     } catch {}
   }
@@ -11739,6 +11744,7 @@ const REST_YAW = new Map();      // id -> the way he settled facing
 const GLANCE = new Map();        // id -> { yaw, until, back }
 system.runInterval(() => {
   const now = tick();
+  if (!PLAYER_POS.length || perfLevel() === "low") return;                          // (v9.19: nobody to see it, or the Low setting)
   for (const e of allOf(SOLDIER)) {
     try {
       const id = e.id;
@@ -11780,10 +11786,11 @@ system.runInterval(() => {
   if (!PLAYER_POS.length) return;
   for (const e of allOf(SOLDIER)) {
     try {
-      const g = getJSON(e, "war:st", {}).g;
-      if ((g !== "g_wp" && g !== "g_post" && g !== "g_owner") || gliders.has(e.id)) continue;   // (only the game's own walking-to tips heads; the glider sets his level every step)
+      if (gliders.has(e.id)) continue;                                                     // (the glider sets his level every step)
       const l = e.location;
       if (!PLAYER_POS.some((p) => p.d === e.dimension.id && Math.abs(p.x - l.x) < 32 && Math.abs(p.z - l.z) < 32)) continue;   // (close enough to see a head)
+      const g = getJSON(e, "war:st", {}).g;                                                // (v9.19: read after the cheap checks)
+      if (g !== "g_wp" && g !== "g_post" && g !== "g_owner") continue;                   // (only the game's own walking-to tips heads)
       if (downed.has(e.id) || climbing.has(e.id)) continue;
       const r = e.getRotation();
       if (Math.abs(r.x) <= 20) continue;
@@ -11800,27 +11807,18 @@ system.runInterval(() => {
 // sergeant); stripes on the arm show it. Each man also has a temperament, a buddy in his squad, a grudge when his buddy
 // is killed, and medals for what he did in a battle.
 // ranks: [private, senior private, corporal, sergeant, lieutenant]
-const CULTURE = {
-  en_us: { ranks: ["Pvt.", "PFC", "Cpl.", "Sgt.", "Lt."], names: ["Miller", "Johnson", "Smith", "Brown", "Davis", "Wilson", "Anderson", "Taylor", "Thomas", "Moore", "Jackson", "White", "Harris", "Martin", "Thompson", "Clark", "Lewis", "Walker", "Hall", "Young", "Allen", "King", "Wright", "Scott", "Baker", "Nelson", "Carter", "Mitchell", "Turner", "Parker", "Collins", "Murphy", "Kowalski", "O'Brien", "Russo", "Garcia", "Sullivan", "Novak", "Hayes", "Reed"] },
-  aave: { ranks: ["Pvt.", "PFC", "Cpl.", "Sgt.", "Lt."], names: ["Washington", "Jefferson", "Jackson", "Williams", "Johnson", "Banks", "Freeman", "Brooks", "Booker", "Coleman", "Simmons", "Robinson", "Mosley", "Hayes", "Bell", "Dixon", "Gaines", "Jenkins", "Pryor", "Rhodes", "Carter", "Wallace", "Payne", "Harris", "Moore", "Thomas", "Dawson", "Tate", "Bryant", "Haynes"] },
-  en_gb: { ranks: ["Pte.", "L/Cpl.", "Cpl.", "Sgt.", "Lt."], names: ["Smith", "Jones", "Taylor", "Brown", "Davies", "Evans", "Wilson", "Thomas", "Roberts", "Johnson", "Walker", "Wright", "Hughes", "Edwards", "Green", "Hall", "Wood", "Harris", "Clarke", "Jackson", "Turner", "Hill", "Cooper", "Ward", "Morris", "Baker", "Watson", "Atkinson", "Fletcher", "Pemberton", "Ashworth", "MacLeod", "Campbell", "Murray", "Lloyd", "Price"] },
-  german: { ranks: ["Schuetze", "Gefreiter", "Unteroffizier", "Feldwebel", "Leutnant"], names: ["Mueller", "Schmidt", "Schneider", "Fischer", "Weber", "Meyer", "Wagner", "Becker", "Schulz", "Hoffmann", "Koch", "Richter", "Bauer", "Klein", "Wolf", "Schroeder", "Neumann", "Schwarz", "Zimmermann", "Braun", "Krueger", "Hartmann", "Lange", "Werner", "Krause", "Lehmann", "Koehler", "Vogel", "Jaeger", "Brandt", "Haas", "Keller", "Frank", "Berger"] },
-  russian: { ranks: ["Ryadovoy", "Efreitor", "Ml. Serzhant", "Serzhant", "Leytenant"], names: ["Ivanov", "Smirnov", "Kuznetsov", "Popov", "Vasiliev", "Petrov", "Sokolov", "Mikhailov", "Novikov", "Fyodorov", "Morozov", "Volkov", "Alekseev", "Lebedev", "Semyonov", "Yegorov", "Pavlov", "Kozlov", "Stepanov", "Nikolaev", "Orlov", "Andreev", "Makarov", "Zaitsev", "Belov", "Gusev", "Titov", "Kiselyov", "Romanov", "Vinogradov", "Bogdanov", "Medvedev"] },
-  korean: { ranks: ["Ibyeong", "Ilbyeong", "Sangbyeong", "Hasa", "Sowi"], names: ["Kim", "Lee", "Park", "Choi", "Jung", "Kang", "Cho", "Yoon", "Jang", "Lim", "Han", "Oh", "Seo", "Shin", "Kwon", "Hwang", "Ahn", "Song", "Yoo", "Hong", "Jeon", "Ko", "Moon", "Yang", "Son", "Bae", "Baek", "Heo", "Nam", "Noh"] },
-  greek: { ranks: ["Stratiotis", "Ypodekaneas", "Dekaneas", "Lochias", "Anthypolochagos"], names: ["Papadopoulos", "Pappas", "Georgiou", "Nikolaidis", "Dimitriou", "Karagiannis", "Vlachos", "Oikonomou", "Makris", "Antoniou", "Ioannou", "Konstantinidis", "Christodoulou", "Alexiou", "Theodorou", "Angelopoulos", "Kostopoulos", "Stavrou", "Lambrou", "Michailidis", "Galanis", "Petridis", "Andreou", "Spanos", "Kyriakou", "Zervas", "Raptis", "Doukas"] },
-  mongolian: { ranks: ["Baildagch", "Akhlakh baildagch", "Ded turuuch", "Turuuch", "Deslegch"], names: ["Batbayar", "Ganbold", "Erdenebat", "Bataa", "Sukhbaatar", "Tumurbaatar", "Altangerel", "Enkhbold", "Gantulga", "Munkhbat", "Bayarsaikhan", "Odbayar", "Narangerel", "Temuulen", "Khurelbaatar", "Purevdorj", "Dorj", "Ochir", "Tsogtbayar", "Battulga", "Ganzorig", "Otgonbayar", "Chuluun", "Boldbaatar", "Tserendorj", "Jargal"] },
-  dutch: { ranks: ["Soldaat", "Soldaat 1e kl.", "Korporaal", "Sergeant", "Luitenant"], names: ["de Jong", "Jansen", "de Vries", "van den Berg", "van Dijk", "Bakker", "Janssen", "Visser", "Smit", "Meijer", "de Boer", "Mulder", "de Groot", "Bos", "Vos", "Peters", "Hendriks", "van Leeuwen", "Dekker", "Brouwer", "de Wit", "Dijkstra", "Smits", "de Graaf", "van der Meer", "Kok", "Jacobs", "de Haan", "Vermeulen", "van den Heuvel"] },
-  hebrew: { ranks: ["Turai", "Rav-turai", "Samal", "Samal rishon", "Segen"], names: ["Cohen", "Levi", "Mizrahi", "Peretz", "Biton", "Friedman", "Katz", "Goldberg", "Shapiro", "Rosenberg", "Weiss", "Klein", "Ben-David", "Avraham", "Dahan", "Azoulay", "Malka", "Shalom", "Ashkenazi", "Rubin", "Segal", "Kaplan", "Stern", "Adler", "Gold", "Bernstein", "Weinberg", "Halevi", "Carmeli", "Barak"] },
-  igbo: { ranks: ["Pte.", "L/Cpl.", "Cpl.", "Sgt.", "Lt."], names: ["Okafor", "Okeke", "Okonkwo", "Eze", "Nwosu", "Obi", "Chukwu", "Nwankwo", "Okoro", "Uzor", "Onyeka", "Ibe", "Agu", "Nnamdi", "Ezeh", "Okoye", "Nwachukwu", "Anyanwu", "Obiora", "Udeh", "Achebe", "Iwu", "Nwafor", "Onwuka", "Ekwueme", "Ogbonna", "Ozor", "Chibuike", "Emeka", "Nzeribe"] },
-  haitian: { ranks: ["Solda", "Solda 1e", "Kaporal", "Sejan", "Lyetnan"], names: ["Jean-Baptiste", "Pierre", "Joseph", "Louis", "Charles", "Saint-Fleur", "Toussaint", "Desir", "Dorval", "Etienne", "Francois", "Lafleur", "Michel", "Celestin", "Augustin", "Philippe", "Belizaire", "Dessalines", "Christophe", "Petion", "Laguerre", "Exantus", "Fils-Aime", "Jeune", "Noel", "Estime", "Paul", "Jacques", "Bien-Aime", "Clervil"] },
-  spanish: { ranks: ["Raso", "Cabo", "Sargento", "Sargento Mayor", "Teniente"], names: ["Rodriguez", "Perez", "Martinez", "Garcia", "Santana", "Reyes", "Ramirez", "Diaz", "Hernandez", "Gomez", "Jimenez", "Pena", "Feliz", "Mejia", "Rosario", "De la Cruz", "Castillo", "Guzman", "Batista", "Tavarez", "Polanco", "Almonte", "Abreu", "Vasquez", "Ortiz", "Familia", "Encarnacion", "Lantigua", "Paulino", "Cabrera"] },
-  italian: { ranks: ["Soldato", "Caporale", "Caporalmaggiore", "Sergente", "Tenente"], names: ["Rossi", "Russo", "Ferrari", "Esposito", "Bianchi", "Romano", "Colombo", "Ricci", "Marino", "Greco", "Bruno", "Gallo", "Conti", "De Luca", "Mancini", "Costa", "Giordano", "Rizzo", "Lombardi", "Moretti", "Barbieri", "Fontana", "Santoro", "Mariani"] },
-  hindi: { ranks: ["Sipahi", "Lance Naik", "Naik", "Havildar", "Lieutenant"], names: ["Sharma", "Singh", "Kumar", "Verma", "Gupta", "Yadav", "Patel", "Mishra", "Chauhan", "Rathore", "Thakur", "Pandey", "Joshi", "Rawat", "Negi", "Bisht", "Malik", "Saini", "Tiwari", "Dubey", "Shekhawat", "Bhati"] },
-  arabic_sy: { ranks: ["Jundi", "Jundi awwal", "Areef", "Raqib", "Mulazim"], names: ["Haddad", "Khoury", "Nasser", "Haddad", "Saleh", "Hamdan", "Mansour", "Darwish", "Najjar", "Halabi", "Hamoud", "Kassab", "Shami", "Atassi", "Jaber", "Khalil", "Ibrahim", "Youssef", "Abboud", "Sabbagh"] },
-  chinese: { ranks: ["Liebing", "Shangdengbing", "Xiashi", "Zhongshi", "Shaowei"], names: ["Wang", "Li", "Zhang", "Liu", "Chen", "Yang", "Huang", "Zhao", "Wu", "Zhou", "Xu", "Sun", "Ma", "Zhu", "Hu", "Guo", "He", "Lin", "Gao", "Luo", "Zheng", "Liang"] },
-  maya: { ranks: ["Soldado", "Cabo", "Sargento 2o", "Sargento 1o", "Teniente"], names: ["Pech", "Chan", "Canul", "May", "Cocom", "Tun", "Uc", "Ek", "Poot", "Chi", "Dzul", "Balam", "Cauich", "Puc", "Kuk", "Couoh", "Yam", "Noh", "Itza", "Mukul"] },
-};
-const cultureOf = (f) => CULTURE[voiceOf(f)] ?? CULTURE.en_us;      // ("None (silent)" names like US English)
+// v9.19: a mixed language (American: US English + AAVE) makes each man one or the other, for good: his voice and his
+// name follow it. The "Mixed heritage names" setting gives about one man in seven a surname from another culture.
+function heritage(e, lang) { const mx = MIXES[lang]; if (!mx) return lang; const r = (Math.floor(idSeed(e) / 1000) % 1000) / 1000; let acc = 0; for (const [k, w] of mx) { acc += w; if (r < acc) return k; } return mx[mx.length - 1][0]; }
+function voiceOfMan(e) { try { return heritage(e, voiceOf(Number(P(e, "war:faction") ?? 0))); } catch { return "en_us"; } }
+const CULTURE_KEYS = Object.keys(CULTURE);
+const cultureOf = (f) => CULTURE[voiceOf(f)] ?? CULTURE[MIXES[voiceOf(f)]?.[0]?.[0]] ?? CULTURE.en_us;
+const cultureOfMan = (e) => CULTURE[voiceOfMan(e)] ?? CULTURE.en_us;      // ("None (silent)" names like US English)
+function nameCulture(e) {
+  const c = cultureOfMan(e), sd0 = idSeed(e);
+  if (setting("mixnames", false) && Math.floor(sd0 / 7) % 7 === 0) return CULTURE[CULTURE_KEYS[Math.floor(sd0 / 49) % CULTURE_KEYS.length]] ?? c;
+  return c;
+}
 const RANK_XP = [0, 4, 10, 20];                                        // xp for pvt / senior pvt / cpl / sgt (veteran)
 function idSeed(e) { let s = gdp(e, "war:nseed"); if (s === undefined) { s = Math.floor(Math.random() * 1000000); sdp(e, "war:nseed", s); } return Number(s); }
 const xpOf = (e) => Number(gdp(e, "war:xp") ?? 0);
@@ -11828,8 +11826,23 @@ function vetTier(e) { const x = xpOf(e); return x >= RANK_XP[3] ? 3 : x >= RANK_
 let OFFICER_IDS = new Set();
 const NAME_KEY = new Map();   // id -> the language and rank his name tag was made with
 function rankTier(e) { const v = vetTier(e); return OFFICER_IDS.has(e.id) ? (v >= 3 ? 4 : 3) : v; }
-function surname(e) { const c = cultureOf(Number(P(e, "war:faction") ?? 0)); return c.names[idSeed(e) % c.names.length]; }
-function soldierName(e) { try { const c = cultureOf(Number(P(e, "war:faction") ?? 0)); return `${c.ranks[rankTier(e)]} ${c.names[idSeed(e) % c.names.length]}`; } catch { return "Soldier"; } }
+function surname(e) { const c = nameCulture(e); return c.names[idSeed(e) % c.names.length]; }
+function firstName(e) { const c = nameCulture(e), f = c.first ?? []; return f.length ? f[Math.floor(idSeed(e) / 997) % f.length] : ""; }
+function nickOf(e) { try { return String(gdp(e, "war:nick") ?? ""); } catch { return ""; } }
+function soldierName(e) { try { const c = cultureOfMan(e), nk = nickOf(e); return `${c.ranks[rankTier(e)]} ${nk ? `"${nk}" ` : ""}${surname(e)}`; } catch { return "Soldier"; } }
+function fullName(e) { try { const c = cultureOfMan(e), nk = nickOf(e), fn = firstName(e); return `${c.ranks[rankTier(e)]} ${fn ? `${fn} ` : ""}${nk ? `"${nk}" ` : ""}${surname(e)}`; } catch { return "Soldier"; } }
+// v9.19: nicknames, earned: the first one he earns sticks
+function nickCount(e, k) {
+  try {
+    if (!e?.isValid || e.typeId !== SOLDIER || nickOf(e)) return;
+    const key = `war:nk_${k}`, n = Number(gdp(e, key) ?? 0) + 1; sdp(e, key, n);
+    const w = sd(e).weapon;
+    const nick = k === "save" && n >= 3 ? "Doc" : k === "lucky" && n >= 3 ? "Lucky" : k === "kill" && n >= 8 ? (w === "sniper" ? "Hawkeye" : w === "mg" ? "Buzzsaw" : w === "shotgun" ? "Boom" : !GUNS.includes(w) ? "Butcher" : traitOf(e) === "hothead" ? "Mad Dog" : "Deadeye") : "";
+    if (!nick) return;
+    sdp(e, "war:nick", nick); NAME_KEY.delete(e.id); updateName(e);
+    radio(e, `${surname(e)}'s squad calls him "${nick}" now`, "story");
+  } catch {}
+}
 const TRAITS = { brave: "Brave", cautious: "Cautious", hothead: "Hothead", steady: "Steady" };
 function traitOf(e) {
   let t = gdp(e, "war:trait");
@@ -11858,14 +11871,14 @@ function giveXp(e, n) {
   sdp(e, "war:xp", xpOf(e) + n);
   if (vetTier(e) !== before) { showRank(e); radio(e, `${soldierName(e)} has been promoted`, "story"); }
 }
-function creditSave(e) { if (e?.typeId === SOLDIER) { logTo(SAVES, e.id, tick()); giveXp(e, 1); } }
+function creditSave(e) { if (e?.typeId === SOLDIER) { logTo(SAVES, e.id, tick()); giveXp(e, 1); nickCount(e, "save"); } }
 const GRUDGE = new Map();    // id -> { id (the enemy), until }
 const GRIEF = new Map();     // id -> tick his grief eases (stress)
 world.afterEvents.entityDie.subscribe((ev) => {
   try {
     const v = ev.deadEntity; if (v?.typeId !== SOLDIER) return;
     const now = tick(), k = ev.damageSource?.damagingEntity?.typeId === SOLDIER ? ev.damageSource.damagingEntity : lastAttacker(v, now);
-    if (k?.typeId === SOLDIER && k.id !== v.id && isHostile(Number(P(k, "war:faction") ?? 0), Number(P(v, "war:faction") ?? 0))) { logTo(KILLS, k.id, now); giveXp(k, 3); }
+    if (k?.typeId === SOLDIER && k.id !== v.id && isHostile(Number(P(k, "war:faction") ?? 0), Number(P(v, "war:faction") ?? 0))) { logTo(KILLS, k.id, now); giveXp(k, 3); nickCount(k, "kill"); }
     // his buddy: rage (a grudge against the man who did it) or grief
     const bid = gdp(v, "war:buddy"), b = bid ? world.getEntity(String(bid)) : undefined;
     if (b?.isValid && !downed.has(b.id) && dist(b.location, v.location) < 40) {
@@ -11891,6 +11904,18 @@ system.runInterval(() => {
         free.forEach((o, i) => { const dd = dist(o.location, a.location); if (dd < bd) { bd = dd; bi = i; } });
         const b = free.splice(bi, 1)[0];
         sdp(a, "war:buddy", b.id); sdp(b, "war:buddy", a.id);
+      }
+      // v9.19: no two men in a squad with the same surname: the newer one is somebody else (same heritage)
+      const seen = new Set();
+      for (const o of S.ours) {
+        if (!o.isValid) continue;
+        let nm = surname(o);
+        if (seen.has(nm)) {
+          const s0 = idSeed(o), base = s0 - (s0 % 1000);
+          for (let k = 1; k < 60 && seen.has(nm); k++) { sdp(o, "war:nseed", base + (((s0 % 1000) + k * 37) % 1000)); nm = surname(o); }
+          NAME_KEY.delete(o.id); updateName(o);
+        }
+        seen.add(nm);
       }
     } catch {}
   }
@@ -11926,7 +11951,7 @@ system.runInterval(() => {
       const bud = gdp(e, "war:buddy"), be = bud ? world.getEntity(String(bud)) : undefined;
       const fc = COLORS[(Number(d.faction) || 1) - 1]?.[1] ?? "§7";
       const doing = notes.get(e.id)?.text ?? (downed.has(e.id) ? "wounded" : "standing by");
-      p.onScreenDisplay.setActionBar(`${fc}${soldierName(e)}§r §7${DIV[d.div]?.name ?? "Soldier"} · ${wpn} · §c${Math.ceil(h?.currentValue ?? 0)}/${Math.round(h?.effectiveMax ?? 0)}§7 · ${TRAITS[traitOf(e)]} · ${xpOf(e)} xp${be?.isValid ? ` · buddy ${surname(be)}` : ""}${meds ? ` · ${meds}` : ""}\n§8${doing}`);
+      p.onScreenDisplay.setActionBar(`${fc}${fullName(e)}§r §7${DIV[d.div]?.name ?? "Soldier"} · ${wpn} · §c${Math.ceil(h?.currentValue ?? 0)}/${Math.round(h?.effectiveMax ?? 0)}§7 · ${TRAITS[traitOf(e)]} · ${xpOf(e)} xp${be?.isValid ? ` · buddy ${surname(be)}` : ""}${meds ? ` · ${meds}` : ""}\n§8${doing}`);
     } catch {}
   }
 }, 8);
@@ -12108,7 +12133,7 @@ system.runInterval(() => {
       const quiet = now - (gunState.get(e.id)?.lastShot ?? -9999) > 600 && !perc.get(e.id)?.threat;
       const f = d.faction;
       const depot = vehicleList.some((v) => v.typeId === "war:truck" && v.dimension.id === e.dimension.id && dist(v.location, e.location) < 8 && isFriendly(f, vehicleFaction(v))) ||
-        !!nearestFlag(e.dimension, e.location, (fl) => isFriendly(f, Number(P(fl, "war:faction"))), 8);
+        !!nearestFlag(e.dimension, e.location, (fl) => isFriendly(f, Number(P(fl, "war:faction"))), 8) || !!crateNear(e);
       if (depot || quiet) { giveAmmo(e, depot ? Math.max(mag, Math.ceil(start / 4)) : Math.ceil(start / 3)); continue; }
       // low: a squad mate within a stone's throw shares
       if (r <= mag && now - (OUT_OF.get(e.id) ?? now) >= 0) {
@@ -12521,24 +12546,30 @@ function bodySeen(c) {
   return false;
 }
 function pruneBodies() {
-  const now = tick();
-  let over = CORPSES.length - bodyCap();
-  const old = CORPSES.filter((o) => now - o.t > 12000);
+  // v9.19: a body is never taken away while a player can see it. Out of sight, the oldest go first once there are more
+  // than the cap (or after 10 minutes). Only when there are far too many and they're all in view do the oldest sink,
+  // very slowly, into the ground.
+  const now = tick(), cap = bodyCap();
+  let over = CORPSES.length - cap, looked = 0;
   for (const o of [...CORPSES]) {
-    if (over <= 0 && !old.includes(o)) break;
+    const old = now - o.t > 12000;
+    if (over <= 0 && !old) continue;
+    if (++looked > 24) break;                                           // (a few at a time: the rest next round)
     if (SINKING.has(o.id)) continue;
     const c = world.getEntity(o.id);
     if (!c?.isValid) { CORPSES.splice(CORPSES.indexOf(o), 1); RD.delete(o.id); over--; continue; }
-    if (bodySeen(c)) { if (over > 6 || old.includes(o)) { SINKING.set(o.id, 40); RD.delete(o.id); over--; } continue; }   // (in sight: it sinks; only if there's real pressure)
+    if (bodySeen(c)) { if (over > 24 && now - o.t > 2400) { SINKING.set(o.id, 100); RD.delete(o.id); over--; } continue; }
     try { c.remove(); } catch {} RD.delete(o.id); CORPSES.splice(CORPSES.indexOf(o), 1); over--;
   }
 }
 system.runInterval(() => {
-  if (CORPSES.length > bodyCap() || (tick() % 600 === 0 && CORPSES.length)) pruneBodies();
+  const now = tick();
+  if ((CORPSES.length > bodyCap() && now % 40 === 0) || (now % 600 === 0 && CORPSES.length)) pruneBodies();
+  if (now % 4) return;
   for (const [id, n] of [...SINKING]) {
     const c = world.getEntity(id);
     if (!c?.isValid || n <= 0) { try { c?.remove(); } catch {} SINKING.delete(id); const i = CORPSES.findIndex((o) => o.id === id); if (i >= 0) CORPSES.splice(i, 1); continue; }
-    try { c.teleport({ x: c.location.x, y: c.location.y - 0.025, z: c.location.z }); } catch {}
+    try { c.teleport({ x: c.location.x, y: c.location.y - 0.012, z: c.location.z }); } catch {}
     SINKING.set(id, n - 1);
   }
 }, 1);
@@ -12583,40 +12614,157 @@ function mySoldiers(p, r = 48) {
   const pf = playerFaction(p);
   return p.dimension.getEntities({ type: SOLDIER, location: p.location, maxDistance: r }).filter((e) => { try { const d = sd(e); return !d.surr && !downed.has(e.id) && (gdp(e, "war:cmdr") === p.id || (pf && d.faction === pf)) && d.div !== "medic"; } catch { return false; } });
 }
+const SIGNALS = ["Suppress where I'm looking", "Attack where I'm looking", "Take cover", "Fall back", "Hold fire", "Open fire", "Follow me", "Regroup on me", "Spread out"];
 async function signalMenu(p) {
   const men = mySoldiers(p);
   if (!men.length) { p.onScreenDisplay.setActionBar("§7No soldiers of yours within 48 blocks."); return; }
-  const f = new ActionFormData().title(`Hand signals (${men.length} men)`).button("Suppress where I'm looking").button("Attack where I'm looking").button("Take cover").button("Fall back (away from the enemy)").button("Hold fire").button("Open fire");
+  const f = new ActionFormData().title(`Hand signals (${men.length} men)`); for (const s of SIGNALS) f.button(s);
   const r = await show(f, p);
   if (!r || r.canceled || r.selection === undefined) return;
+  giveSignal(p, r.selection, men);
+}
+// a man on a post/hold gets his post moved there (or he'd walk straight back); anyone else just goes
+function sigMove(e, to, p, now) {
+  const func = sd(e).func;
+  if (ANCHORED.includes(func) && func !== "patrol") { try { giveFunction(e, func, p, makeWaypoint(e.dimension, to)); } catch {} }
+  planPersonalTo(e, "settle", to, now);
+}
+function giveSignal(p, sel, men = mySoldiers(p)) {
+  if (!men.length) { p.onScreenDisplay.setActionBar("§7No soldiers of yours within 48 blocks."); return; }
   const now = tick(), spot = lookedSpot(p, 120);
+  try { p.playAnimation("animation.player.attack.rotations", { blendOutTime: 0.2 }); } catch {}
   const enemyAt = (pt) => { let best, bd = 8; for (const c of nearSnap(p.dimension.id, pt, 8)) { if (c.down || !c.f || !c.e.isValid || !isHostile(sd(men[0]).faction, c.f)) continue; if (c.dd < bd) { bd = c.dd; best = c.e; } } return best; };
-  if (r.selection === 0) {
+  if (sel === 0) {
     const en = spot && enemyAt(spot);
     if (!en) { p.onScreenDisplay.setActionBar("§7No enemy there to suppress."); return; }
     let n = 0; for (const e of men) { const st = gunState.get(e.id); if (st && GUNS.includes(sd(e).weapon)) { st.supp = { p: chest(en), until: now + 160, ent: en }; n++; } }
     p.onScreenDisplay.setActionBar(`§aSuppressing: ${n} guns on him.`); callout(men[0], "Suppressing!", { event: true });
-  } else if (r.selection === 1) {
+  } else if (sel === 1) {
     if (!spot) { p.onScreenDisplay.setActionBar("§7Look at a spot on the ground first."); return; }
     for (const e of men) planPersonalTo(e, "advance", { x: spot.x, y: spot.y, z: spot.z }, now);
     p.onScreenDisplay.setActionBar(`§aAttacking that spot: ${men.length} men.`); callout(men[0], "Go, go, go!", { event: true });
-  } else if (r.selection === 2) {
+  } else if (sel === 2) {
     let n = 0;
     for (const e of men) { const seen = enemiesSeeing(e, sd(e).faction); const to = seen.length ? coverFrom(e.dimension, e.location, seen, now) : undefined; if (to) { planPersonalTo(e, "settle", to, now); n++; } }
     p.onScreenDisplay.setActionBar(n ? `§aTaking cover: ${n} men.` : "§7Nobody's in anyone's sights: they stay put."); callout(men[0], "Take cover!", { event: true });
-  } else if (r.selection === 3) {
+  } else if (sel === 3) {
     for (const e of men) {
       const t = perc.get(e.id)?.threat, l = e.location;
       const dx = t?.isValid ? l.x - t.location.x : l.x - p.location.x - (spot ? spot.x - p.location.x : 0), dz = t?.isValid ? l.z - t.location.z : l.z - p.location.z - (spot ? spot.z - p.location.z : 0), L = Math.hypot(dx, dz) || 1;
       const to = walkableNear(e.dimension, l.x + (dx / L) * 20, l.z + (dz / L) * 20, l.y); if (to) planPersonalTo(e, "settle", to, now);
     }
     p.onScreenDisplay.setActionBar(`§aFalling back: ${men.length} men.`); callout(men[0], "Fall back!", { event: true });
-  } else {
-    const st = r.selection === 4 ? "holdfire" : "aggressive";
+  } else if (sel === 4 || sel === 5) {
+    const st = sel === 4 ? "holdfire" : "aggressive";
     for (const e of men) { sdp(e, "war:stance", st); if (st === "holdfire") { const g = gunState.get(e.id); if (g) { g.target = undefined; g.supp = undefined; } } }
     p.onScreenDisplay.setActionBar(st === "holdfire" ? "§eHold fire." : "§cOpen fire!"); callout(men[0], st === "holdfire" ? "Hold your fire!" : "Open fire!", { event: true });
+  } else if (sel === 6) {
+    snapUndo(p, men);
+    for (const e of men) { try { personal.delete(e.id); travelTo.delete(e.id); giveFunction(e, "follow", p); } catch {} }
+    p.onScreenDisplay.setActionBar(`§aFollowing you: ${men.length} men.`); callout(men[0], "On you!", { event: true });
+  } else if (sel === 7) {
+    const pl = p.location; let i = 0;
+    for (const e of men) { const a = (i++ / men.length) * Math.PI * 2, r = 2 + (i % 3); const to = walkableNear(e.dimension, pl.x + Math.cos(a) * r, pl.z + Math.sin(a) * r, pl.y); if (to) sigMove(e, to, p, now); }
+    p.onScreenDisplay.setActionBar(`§aRegrouping on you: ${men.length} men.`); callout(men[0], "Regroup!", { event: true });
+  } else if (sel === 8) {
+    let cx = 0, cz = 0; for (const e of men) { cx += e.location.x; cz += e.location.z; } cx /= men.length; cz /= men.length;
+    for (const e of men) {
+      const l = e.location; let dx = l.x - cx, dz = l.z - cz; const L = Math.hypot(dx, dz);
+      if (L < 0.5) { const a = Math.random() * Math.PI * 2; dx = Math.cos(a); dz = Math.sin(a); } else { dx /= L; dz /= L; }
+      const to = walkableNear(e.dimension, l.x + dx * 5, l.z + dz * 5, l.y); if (to) sigMove(e, to, p, now);
+    }
+    p.onScreenDisplay.setActionBar(`§aSpreading out: ${men.length} men.`); callout(men[0], "Spread out!", { event: true });
   }
 }
+// v9.19: the Signal Flag: hold it, sneak and scroll to pick a signal, use it to give it. No menu.
+const SIG_SEL = new Map();   // player id -> signal picked
+const SIG_SLOT = new Map();  // player id -> hotbar slot the flag is in
+function sigBar(p) {
+  const n = SIGNALS.length, i = SIG_SEL.get(p.id) ?? 0;
+  p.onScreenDisplay.setActionBar(`§7${SIGNALS[(i + n - 1) % n]}  §f« §e§l${SIGNALS[i]}§r§f »  §7${SIGNALS[(i + 1) % n]}\n§8Sneak + scroll to change, use to signal`);
+}
+system.runInterval(() => {
+  const now = tick();
+  for (const p of world.getPlayers()) {
+    try {
+      const slot = p.selectedSlotIndex, last = SIG_SLOT.get(p.id);
+      if (last !== undefined && slot !== last && p.isSneaking) {
+        const n = SIGNALS.length, dir = ((slot - last + 9) % 9) <= 4 ? 1 : -1;
+        SIG_SEL.set(p.id, ((SIG_SEL.get(p.id) ?? 0) + dir + n) % n);
+        p.selectedSlotIndex = last; sigBar(p);
+        try { p.playSound("random.click", { volume: 0.3, pitch: 1.6 }); } catch {}
+        continue;
+      }
+      const held = p.getComponent("minecraft:equippable")?.getEquipment(EquipmentSlot.Mainhand)?.typeId === "war:signal_flag";
+      if (held) { SIG_SLOT.set(p.id, slot); if (last === undefined || now % 20 === 0) sigBar(p); } else SIG_SLOT.delete(p.id);
+    } catch {}
+  }
+}, 2);
+world.afterEvents.playerLeave.subscribe((ev) => { SIG_SEL.delete(ev.playerId); SIG_SLOT.delete(ev.playerId); });
+
+// v9.19: First Aid Kit: use on a soldier to patch him up (and get a downed man on his feet); with nobody there, on yourself
+function useOne(p) {
+  try { if (p.getGameMode() === GameMode.Creative) return; const inv = p.getComponent("minecraft:inventory")?.container, i = p.selectedSlotIndex, it = inv?.getItem(i); if (!it) return; if (it.amount > 1) { it.amount -= 1; inv.setItem(i, it); } else inv.setItem(i, undefined); } catch {}
+}
+async function firstAid(p, target) {
+  const e = target?.isValid ? target : lookedAt(p, SOLDIER);
+  if (e && (e === target || dist(e.location, p.location) < 6)) {
+    const h = e.getComponent("minecraft:health"); if (!h) return;
+    if (downed.has(e.id)) revive(e, Math.ceil(h.effectiveMax * 0.6)); else h.setCurrentValue(h.effectiveMax);
+    LIMP.delete(e.id); ARM_HIT.delete(e.id);
+    try { e.dimension.spawnParticle("minecraft:heart_particle", { x: e.location.x, y: e.location.y + 2, z: e.location.z }); e.dimension.playSound("armor.equip_leather", e.location); } catch {}
+    useOne(p); note(e, "patched up"); p.onScreenDisplay.setActionBar(`§aPatched up ${soldierName(e)}.`); return;
+  }
+  try { p.addEffect("regeneration", 100, { amplifier: 1 }); p.addEffect("instant_health", 1, { amplifier: 0 }); } catch {}
+  useOne(p); p.onScreenDisplay.setActionBar("§aYou patch yourself up.");
+}
+
+// v9.19: barbed wire (slows and scratches whoever walks into it; soldiers route round it) and ammo crates (soldiers refill there)
+const PLACED_KIND = { "war:barbed_wire": "wire", "war:ammo_crate": "crate" };
+let placedReg = null, placedDirty = false;   // kind -> Map "dim|x|y|z" -> {dim, x, y, z}
+function placed(kind) {
+  if (!placedReg) { placedReg = { wire: new Map(), crate: new Map() }; for (const q of getJSON(world, "war:placed", [])) placedReg[q.k]?.set(`${q.dim}|${q.x}|${q.y}|${q.z}`, q); }
+  return placedReg[kind];
+}
+function placedAdd(kind, dim, x, y, z) { placed(kind).set(`${dim}|${x}|${y}|${z}`, { k: kind, dim, x, y, z }); placedDirty = true; }
+function placedDel(kind, dim, x, y, z) { if (placed(kind).delete(`${dim}|${x}|${y}|${z}`)) placedDirty = true; }
+system.runInterval(() => { if (!placedDirty) return; placedDirty = false; try { setJSON(world, "war:placed", [...placed("wire").values(), ...placed("crate").values()].slice(-2000)); } catch {} }, 200);
+try { world.afterEvents.playerPlaceBlock.subscribe((ev) => { try { const b = ev.block, k = PLACED_KIND[b.typeId]; if (k) placedAdd(k, b.dimension.id, b.x, b.y, b.z); } catch {} }); } catch {}
+try { world.afterEvents.playerBreakBlock.subscribe((ev) => { try { const k = PLACED_KIND[ev.brokenBlockPermutation?.type?.id]; if (k) placedDel(k, ev.block.dimension.id, ev.block.x, ev.block.y, ev.block.z); } catch {} }); } catch {}
+function placedNear(kind, dimId, loc, r) {
+  let best, bd = r;
+  for (const q of placed(kind).values()) { if (q.dim !== dimId) continue; const d = Math.hypot(q.x + 0.5 - loc.x, q.z + 0.5 - loc.z); if (d < bd && Math.abs(q.y - loc.y) < 4) { bd = d; best = q; } }
+  return best;
+}
+const crateNear = (e, r = 6) => placedNear("crate", e.dimension.id, e.location, r);
+system.runInterval(() => {
+  const W = placed("wire"); if (!W.size) return;
+  const now = tick(), cells = new Map();
+  for (const q of W.values()) cells.set(`${q.dim}|${q.x}|${q.y}|${q.z}`, q);
+  const who = [...allOf(SOLDIER), ...world.getPlayers()];
+  for (const e of who) {
+    try {
+      const l = e.location, k = `${e.dimension.id}|${Math.floor(l.x)}|${Math.floor(l.y)}|${Math.floor(l.z)}`, q = cells.get(k);
+      if (!q) continue;
+      if (e.typeId === "minecraft:player" && e.getGameMode() === GameMode.Creative) continue;
+      const b = e.dimension.getBlock({ x: q.x, y: q.y, z: q.z }); if (b && b.typeId !== "war:barbed_wire") { placedDel("wire", q.dim, q.x, q.y, q.z); continue; }
+      e.addEffect("slowness", 30, { amplifier: 3, showParticles: false });
+      if (now % 20 < 10) e.applyDamage(1, { cause: "contact" });
+    } catch {}
+  }
+}, 10);
+// a man low on rounds walks over to a crate he can see nearby
+system.runInterval(() => {
+  if (!placed("crate").size || setting("ammo", true) === false) return;
+  const now = tick();
+  for (const e of allOf(SOLDIER)) {
+    try {
+      if (!OUT_OF.has(e.id) || downed.has(e.id) || personal.has(e.id)) continue;
+      const c = crateNear(e, 32); if (!c || dist(c, e.location) < 3) continue;
+      const to = walkableNear(e.dimension, c.x + 0.5, c.z + 1.5, c.y); if (to) { planPersonalTo(e, "settle", to, now); note(e, "going for ammo"); }
+    } catch {}
+  }
+}, 60);
 
 // ---- undo: the last order you gave (who it went to, what each was doing and where), put back
 const UNDO = new Map();      // player id -> [{ id, func, home, stance, loc }]

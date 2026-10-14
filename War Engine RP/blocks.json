@@ -5,5 +5,11 @@
   },
   "war:sandbag": {
     "sound": "sand"
+  },
+  "war:barbed_wire": {
+    "sound": "chain"
+  },
+  "war:ammo_crate": {
+    "sound": "wood"
   }
 }

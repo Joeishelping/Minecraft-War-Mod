@@ -36,3 +36,7 @@ item.war:gunboat_item=Coast Guard Gunboat
 entity.war:heli.name=Transport Helicopter
 item.war:heli_item=Transport Helicopter
 war:itemGroup.war=War Engine
+item.war:signal_flag=Signal Flag
+item.war:first_aid=First Aid Kit
+tile.war:barbed_wire.name=Barbed Wire
+tile.war:ammo_crate.name=Ammo Crate

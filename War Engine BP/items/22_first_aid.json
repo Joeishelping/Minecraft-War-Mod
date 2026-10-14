@@ -1,0 +1,24 @@
+{
+  "format_version": "1.21.90",
+  "minecraft:item": {
+    "description": {
+      "identifier": "war:first_aid",
+      "menu_category": {
+        "category": "items"
+      }
+    },
+    "components": {
+      "minecraft:icon": {
+        "textures": {
+          "default": "war_first_aid"
+        }
+      },
+      "minecraft:display_name": {
+        "value": "First Aid Kit"
+      },
+      "minecraft:max_stack_size": 16,
+      "minecraft:hand_equipped": true,
+      "war:tool": {}
+    }
+  }
+}

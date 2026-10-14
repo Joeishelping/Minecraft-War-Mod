@@ -8,7 +8,7 @@
 const KIT_PLAYER = { id: "kit-player", name: "Kit", typeId: "minecraft:player", isValid: true, get location() { return KIT ? { x: KIT.ox, y: 100, z: KIT.oz - 20 } : { x: 0, y: 100, z: 0 }; },
   get dimension() { return world.getDimension("overworld"); }, onScreenDisplay: { setActionBar() {}, setTitle() {} }, sendMessage() {},
   hasTag: () => false, getTags: () => [], addTag() {}, removeTag() {}, getRotation: () => ({ x: 0, y: 0 }), getViewDirection: () => ({ x: 0, y: 0, z: 1 }),
-  getEntitiesFromViewDirection: () => [], getDynamicProperty() { return undefined; }, setDynamicProperty() {}, getGameMode: () => "Survival", getComponent: () => undefined };
+  getEntitiesFromViewDirection: () => [], getBlockFromViewDirection: () => undefined, getDynamicProperty() { return undefined; }, setDynamicProperty() {}, getGameMode: () => "Survival", getComponent: () => undefined };
 const ow = () => world.getDimension("overworld");
 const kcmd = (c) => { try { return ow().runCommand(c); } catch (err) { console.warn(`KIT cmd failed: ${c} :: ${err}`); } };
 function kfill(x0, y0, z0, x1, y1, z1, b) {
@@ -1706,4 +1706,80 @@ KS.namefollow = async (o, ox, oz) => {
   await kitWait(130); const after = men.map((e) => strip(e.nameTag).split("\n")[0]);
   setJSON(world, "war:vlang", keep);
   return { before, after };
+};
+
+// v9.19: Signal Flag signals, First Aid Kit, barbed wire, ammo crate
+KS.items = async (o, ox, oz) => {
+  floorAt(ox - 20, oz - 20, ox + 20, oz + 20);
+  setRelPair(1, 2, "1", true);
+  const r = {};
+  const men = [0, 1, 2, 3].map((i) => kitSoldier(1, { x: ox + i * 1.2 + 0.5, y: Y, z: oz + 0.5 }, "rifle", "hold"));
+  for (const e of men) sdp(e, "war:cmdr", KIT_PLAYER.id);
+  await kitWait(20);
+  r.mine = mySoldiers(KIT_PLAYER).length;
+  giveSignal(KIT_PLAYER, 8); await kitWait(80); r.spreadPlan = men.map((e) => personal.get(e.id)?.kind ?? sd(e).func);
+  let mind = 99; for (const a of men) for (const b of men) if (a !== b) mind = Math.min(mind, dist(a.location, b.location));
+  r.spreadMinGap = Math.round(mind * 10) / 10;
+  giveSignal(KIT_PLAYER, 6); await kitWait(5); r.followFunc = men.map((e) => sd(e).func);
+  // first aid on a downed man
+  const hurt = men[0]; hurt.applyDamage(15); await kitWait(5); goDown(hurt); await kitWait(10);
+  r.downedBefore = downed.has(hurt.id);
+  await firstAid(KIT_PLAYER, hurt); await kitWait(5);
+  r.downedAfter = downed.has(hurt.id); r.hp = Math.round(hurt.getComponent("minecraft:health").currentValue);
+  for (const e of men) try { e.remove(); } catch {}
+  // wire: a man ordered through a wire line gets slowed
+  for (let x = ox - 3; x <= ox + 3; x++) { kset(x, Y, oz + 6, "war:barbed_wire"); placedAdd("wire", "minecraft:overworld", x, Y, oz + 6); }
+  r.wireBlock = ow().getBlock({ x: ox, y: Y, z: oz + 6 })?.typeId;
+  const w = kitSoldier(1, { x: ox + 0.5, y: Y, z: oz + 6.5 }, "rifle", "hold");
+  await kitWait(25); r.wireSlowed = !!w.getEffect("slowness"); r.wireHp = Math.round(w.getComponent("minecraft:health").currentValue);
+  try { w.remove(); } catch {}
+  for (let x = ox - 3; x <= ox + 3; x++) { kset(x, Y, oz + 6, "air"); placedDel("wire", "minecraft:overworld", x, Y, oz + 6); }
+  // crate: a dry rifleman walks to a crate and refills
+  kset(ox + 12, Y, oz, "war:ammo_crate"); placedAdd("crate", "minecraft:overworld", ox + 12, Y, oz);
+  const dry = kitSoldier(1, { x: ox - 8 + 0.5, y: Y, z: oz + 0.5 }, "rifle", "hold");
+  await kitWait(10); RESERVE.set(dry.id, 0); OUT_OF.set(dry.id, tick());
+  const tr = []; for (let i = 0; i < 8; i++) { const g = gunState.get(dry.id); if (g) g.lastShot = tick(); await kitWait(50); tr.push(Math.round(dist(dry.location, { x: ox + 12.5, y: Y, z: oz + 0.5 }))); } r.crateTrail = tr;
+  r.crateDist = Math.round(dist(dry.location, { x: ox + 12.5, y: Y, z: oz + 0.5 })); r.reserve = RESERVE.get(dry.id); r.stillDry = OUT_OF.has(dry.id);
+  try { dry.remove(); } catch {} kset(ox + 12, Y, oz, "air"); placedDel("crate", "minecraft:overworld", ox + 12, Y, oz);
+  return r;
+};
+KS.pdbg = async (o, ox, oz) => {
+  floorAt(ox - 20, oz - 20, ox + 20, oz + 20);
+  const e = kitSoldier(1, { x: ox + 0.5, y: Y, z: oz + 0.5 }, "rifle", "hold");
+  await kitWait(20);
+  const to = walkableNear(e.dimension, ox + 8.5, oz + 0.5, Y);
+  planPersonalTo(e, "settle", to, tick());
+  const tr = [];
+  for (let i = 0; i < 10; i++) { await kitWait(10); const pr = personal.get(e.id); tr.push(`${Math.round((e.location.x - ox) * 10) / 10}|${pr ? (pr.planning ? "plan" : pr.pts ? pr.pts.length : "none") : "-"}|${e.getProperty("war:goal") ?? ""}|${note && (globalThis.__lastNote?.get?.(e.id) ?? "")}`); }
+  try { e.remove(); } catch {}
+  return { to, tr };
+};
+KS.pdbg2 = async (o, ox, oz) => {
+  floorAt(ox - 20, oz - 20, ox + 20, oz + 20);
+  kset(ox + 12, Y, oz, "war:ammo_crate"); placedAdd("crate", "minecraft:overworld", ox + 12, Y, oz);
+  const e = kitSoldier(1, { x: ox - 8 + 0.5, y: Y, z: oz + 0.5 }, "rifle", "hold");
+  await kitWait(10); RESERVE.set(e.id, 0); OUT_OF.set(e.id, tick());
+  const c = crateNear(e, 32); const to = c && walkableNear(e.dimension, c.x + 0.5, c.z + 1.5, c.y);
+  const tr = [];
+  for (let i = 0; i < 12; i++) { const g = gunState.get(e.id); if (g) g.lastShot = tick(); await kitWait(20); const pr = personal.get(e.id); tr.push(`${Math.round((e.location.x - ox) * 10) / 10}|${pr ? pr.kind + (pr.planning ? "plan" : pr.pts ? pr.pts.length : "none") : "-"}|${OUT_OF.has(e.id)}`); }
+  try { e.remove(); } catch {} kset(ox + 12, Y, oz, "air"); placedDel("crate", "minecraft:overworld", ox + 12, Y, oz);
+  return { c, to, size: placed("crate").size, tr };
+};
+KS.names2 = async (o, ox, oz) => {
+  floorAt(ox - 15, oz - 15, ox + 15, oz + 15);
+  const keep = getJSON(world, "war:vlang", {});
+  setJSON(world, "war:vlang", { ...keep, 1: "us_mix", 2: "greek" });
+  const men = [...Array(12).keys()].map((i) => kitSoldier(1, { x: ox - 6 + i + 0.5, y: Y, z: oz + 0.5 }, "rifle", "hold"));
+  for (const e of men) sdp(e, "war:nseed", 5000);         // all the same name to start: the squad check must sort it out
+  const gr = [0, 1].map((i) => kitSoldier(2, { x: ox + i * 2 + 0.5, y: Y, z: oz + 8.5 }, "rifle", "hold"));
+  await kitWait(260);
+  const names = men.map((e) => surname(e));
+  const r = { heritage: men.map((e) => voiceOfMan(e)), names, uniq: new Set(names).size, full: men.slice(0, 3).map((e) => fullName(e)), greek: gr.map((e) => fullName(e)) };
+  // seeds spread: how the 60/40 mix comes out over 1000 men
+  let aave = 0; const fake = { id: "x" }; for (let i = 0; i < 1000; i++) { const s0 = Math.floor(Math.random() * 1000000); aave += (Math.floor(s0 / 1000) % 1000) / 1000 >= 0.6 ? 1 : 0; } r.aavePer1000 = aave;
+  // a nickname: three saves
+  for (let i = 0; i < 3; i++) creditSave(men[0]);
+  r.nick = soldierName(men[0]); r.tag = strip(men[0].nameTag).split("\n")[0];
+  setJSON(world, "war:vlang", keep);
+  return r;
 };

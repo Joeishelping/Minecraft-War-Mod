@@ -61,6 +61,12 @@
     },
     "war_heli_item": {
       "textures": "textures/items/war_heli_item"
+    },
+    "war_signal_flag": {
+      "textures": "textures/items/war_signal_flag"
+    },
+    "war_first_aid": {
+      "textures": "textures/items/war_first_aid"
     }
   }
 }
