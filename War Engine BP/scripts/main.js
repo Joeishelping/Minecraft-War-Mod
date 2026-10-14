@@ -2369,6 +2369,7 @@ function drive(v) {
         fireShell(v, gunner);
       }
     }
+    else if (CREW_DRIVEN.includes(v.typeId) && riders[0]?.typeId === SOLDIER) target = crewDrive(v, riders, st, loc, vel, boat);   // (v9.19: a soldier at the wheel)
     v.applyImpulse({ x: (target.x - vel.x) * 0.5, y: 0, z: (target.z - vel.z) * 0.5 });
     if (v.typeId === "war:tank" && st.age % 20 === 0) {
       for (const r of riders) { try { r.addEffect("invisibility", 45, { showParticles: false }); } catch {} } // crew is inside
@@ -2839,6 +2840,8 @@ async function giveOrderInner(player, cfg, given) {
     return;
   }
   if (order === "mount" || order === "dismount") {
+    // v9.19: mounted up on your order, they follow you (in boats too: whoever's at the front rows after you)
+    if (order === "mount") pool = pool.map((e) => { try { if (!isRiding(e) && sd(e).div !== "garrison") { personal.delete(e.id); travelTo.delete(e.id); const ne = giveFunction(e, "follow", player); return ne?.isValid ? ne : e; } } catch {} return e; }).filter((e) => e?.isValid);
     const n = order === "mount" ? mountUp(pool, false) : dismountAll(pool);
     if (order === "mount" && n) { const w = pool.find((e) => e.isValid && !downed.has(e.id)); if (w) callout(w, "Mount up!", { event: true }); }   // (v9.5)
     player.onScreenDisplay.setActionBar(order === "mount" ? (n ? `§eMounting up: §f${n}` : "§7No free saddled animals or boats near them (within 16 blocks).") : `§eDismounting: §f${n}`);
@@ -2851,10 +2854,11 @@ async function giveOrderInner(player, cfg, given) {
     const rd = veh.getComponent("minecraft:rideable");
     const free = Math.max(0, rd.seatCount - rd.getRiders().length);
     let n = 0;
-    for (const e of pool.filter((x) => sd(x).div !== "cavalier").slice(0, free)) {
+    for (let e of pool.filter((x) => sd(x).div !== "cavalier").slice(0, free)) {
+      try { const ne = giveFunction(e, "follow", player); if (ne?.isValid) e = ne; } catch {}   // (v9.19: aboard on your order: they follow you; a man at the wheel drives after you)
       try { e.teleport({ x: veh.location.x, y: veh.location.y + 0.5, z: veh.location.z }); if (rd.addRider(e)) { n++; sdp(e, "war:ordt", now); } } catch {}
     }
-    player.onScreenDisplay.setActionBar(`§eBoarded: §f${n} §7(${free - n} seats left)`);
+    player.onScreenDisplay.setActionBar(`§eBoarded: §f${n} §7(${free - n} seats left)${CREW_DRIVEN.includes(veh.typeId) ? " · if you don't take the wheel, they drive after you" : ""}`);
     return;
   }
   let slot, spotCenter, march, orderDest, walkTo;
@@ -13689,4 +13693,42 @@ async function guideBook(p) {
     const r2 = await show(new ActionFormData().title(t).body(body).button("« Chapters").button("Close"), p);
     if (!r2 || r2.canceled || r2.selection !== 0) return;
   }
+}
+
+// ---- v9.19: soldiers drive the troop boat, the gunboat and the transport truck themselves when no player has the
+// wheel: after the player they follow (anyone aboard on "Follow me" / "Escort", e.g. put aboard with Mount up or
+// Board), else to where their order sends them. They slow as they close in and stop a few blocks off; a truck takes
+// one-block steps, a boat only goes where there's water.
+const CREW_DRIVEN = ["war:boat", "war:gunboat", "war:truck"];
+function crewDest(riders, dimId) {
+  for (const r of riders) {
+    if (r.typeId !== SOLDIER) continue;
+    try {
+      const d = sd(r);
+      if ((d.func === "follow" || d.func === "escort") && d.leader) { const p = findPlayer(d.leader); if (p && p.dimension.id === dimId) return { at: p.location, stop: 6 }; }
+      const rt = rideTo.get(r.id); if (rt) return { at: rt, stop: 4 };
+    } catch {}
+  }
+  return undefined;
+}
+function crewDrive(v, riders, st, loc, vel, boat) {
+  const want = crewDest(riders, v.dimension.id); if (!want) return { x: 0, z: 0 };
+  const dx = want.at.x - loc.x, dz = want.at.z - loc.z, L = Math.hypot(dx, dz);
+  if (L <= want.stop) return { x: 0, z: 0 };
+  let inWater = false;
+  if (boat) { try { inWater = !!v.dimension.getBlock({ x: loc.x, y: loc.y - 0.1, z: loc.z })?.isLiquid || !!v.dimension.getBlock(loc)?.isLiquid; } catch {} }
+  const max = boat ? (inWater ? (v.typeId === "war:gunboat" ? 0.5 : 0.4) : 0.04) : 0.28;
+  const wantYaw = (Math.atan2(-dx, dz) * 180) / Math.PI, cur = v.getRotation().y;
+  const off = Math.abs(((wantYaw - cur + 540) % 360) - 180);
+  const yaw = turnToward(cur, wantYaw, boat ? 5 : 3.5);
+  v.setRotation({ x: 0, y: yaw });
+  let sp = max * Math.min(1, (L - want.stop) / 8 + 0.25) * (off > 90 ? 0.25 : off > 45 ? 0.6 : 1);
+  if (!boat && solidAt(v.dimension, { x: loc.x, y: loc.y - 0.2, z: loc.z })) {      // a one-block step ahead: up it goes
+    const f0 = fwdFromYaw(yaw), ahead = { x: loc.x + f0.x * 1.8, y: loc.y + 0.5, z: loc.z + f0.z * 1.8 };
+    if (solidAt(v.dimension, ahead) && !solidAt(v.dimension, { x: ahead.x, y: loc.y + 1.5, z: ahead.z }) && !solidAt(v.dimension, { x: ahead.x, y: loc.y + 2.5, z: ahead.z })) { try { v.applyImpulse({ x: 0, y: 0.45, z: 0 }); } catch {} }
+    else if (solidAt(v.dimension, ahead)) sp *= 0.3;                                  // (a wall: it eases off and turns)
+  }
+  if (boat && !inWater) sp = Math.min(sp, 0.04);
+  const f = fwdFromYaw(yaw);
+  return { x: f.x * sp, z: f.z * sp };
 }

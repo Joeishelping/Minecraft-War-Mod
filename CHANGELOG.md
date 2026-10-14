@@ -1,5 +1,15 @@
 # War Engine changelog
 
+## v9.20.1 (Boats and trucks follow you)
+
+- "Mount up" from the Command Baton now also sets the men to follow you: in vanilla boats the man at the front rows
+  after you; on horses they ride after you.
+- "Board the vehicle I'm looking at": the men aboard follow you too. If you don't take the wheel yourself, the
+  soldier in the driver's seat drives the Troop Boat, Coast Guard Gunboat or Transport Truck after you, slows as he
+  closes in and stops a few blocks off. A truck takes one-block steps; a boat only goes where there's water.
+  (Tested: a truck closed from 46 to 7 blocks, a troop boat from 54 to 6, everyone still aboard.)
+- Soldiers on another order (Charge to a spot) drive there instead.
+
 ## v9.20 (Steadier minds, faction people, missions, battle sounds)
 
 Every item below was tested on a real server unless marked otherwise.

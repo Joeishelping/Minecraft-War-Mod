@@ -2185,3 +2185,31 @@ KS.raytype = async (o, ox, oz) => {
   const rh = rayHit(ow(), h, u, 30);
   return { direct: ow().getBlock({ x: ox, y: Y + 1, z: oz + 5 })?.typeId, rayBlock: hb?.block?.typeId, rayLoc: hb?.block?.location, rhType: rh?.hb?.block?.typeId, pierce: rh ? pierces(rh.hb.block.typeId) : null };
 };
+// v9.19: soldiers at the wheel drive the truck / troop boat after the man they follow
+KS.crewdrive = async (o, ox, oz) => {
+  floorAt(ox - 50, oz - 50, ox + 50, oz + 50);
+  const res = {};
+  const ld = ow().spawnEntity("minecraft:armor_stand", { x: ox + 35.5, y: Y, z: oz + 0.5 });
+  globalThis.__fakeLeader = (id) => (id === ld.id ? ld : undefined);
+  // truck on the ground
+  const tr = ow().spawnEntity("war:truck", { x: ox - 10.5, y: Y, z: oz + 0.5 });
+  const crew = [0, 1, 2].map((i) => { const e = kitSoldier(1, { x: ox - 10.5 + i, y: Y, z: oz + 2.5 }, "rifle", "hold"); giveFunction(e, "follow", ld); return e; });
+  await kitWait(10);
+  const rd = tr.getComponent("minecraft:rideable"); for (const e of crew) { try { e.teleport(tr.location); rd.addRider(e); } catch {} }
+  await kitWait(5); res.truckRiders = rd.getRiders().length;
+  const t0 = flat(tr.location, ld.location); await kitWait(300); res.truck = { start: Math.round(t0), end: Math.round(flat(tr.location, ld.location)), aboard: rd.getRiders().length };
+  for (const e of crew) try { e.remove(); } catch {} try { tr.remove(); } catch {}
+  // troop boat on a lake
+  kfill(ox - 30, Y - 3, oz + 15, ox + 30, Y - 1, oz + 35, "water");
+  ld.teleport({ x: ox + 28.5, y: Y, z: oz + 25.5 });
+  const bt = ow().spawnEntity("war:boat", { x: ox - 25.5, y: Y - 1, z: oz + 25.5 });
+  const bc = [0, 1].map((i) => { const e = kitSoldier(1, { x: ox - 25.5, y: Y, z: oz + 13.5 + i }, "rifle", "hold"); giveFunction(e, "follow", ld); return e; });
+  await kitWait(10);
+  const rb = bt.getComponent("minecraft:rideable"); for (const e of bc) { try { e.teleport(bt.location); rb.addRider(e); } catch {} }
+  await kitWait(5); res.boatRiders = rb.getRiders().length;
+  const b0 = flat(bt.location, ld.location); await kitWait(300); res.boat = { start: Math.round(b0), end: Math.round(flat(bt.location, ld.location)), aboard: rb.getRiders().length };
+  for (const e of bc) try { e.remove(); } catch {} try { bt.remove(); } catch {}
+  kfill(ox - 30, Y - 3, oz + 15, ox + 30, Y - 1, oz + 35, "stone");
+  globalThis.__fakeLeader = undefined; try { ld.remove(); } catch {}
+  return res;
+};
