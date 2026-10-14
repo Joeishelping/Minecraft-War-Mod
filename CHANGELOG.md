@@ -1,5 +1,69 @@
 # War Engine changelog
 
+## v9.20 (Steadier minds, faction people, missions, battle sounds)
+
+Every item below was tested on a real server unless marked otherwise.
+
+### Soldiers stop second-guessing themselves (top priority)
+Measured in a 6 v 6 firefight and on a march, before -> after:
+- Changes of plan per man per minute: 19 -> 5. Flip-flopping (doing A, then B, then A again within 3 seconds):
+  3.2 a minute -> none. Switching targets: 10 a minute -> about 1.
+- Big head swings (12 degrees one way and back within half a second): on the march 12.7 a minute -> 0; in a
+  firefight 7.2 -> 0.3; in a sword fight 16 -> 4.
+
+What was wrong:
+- Gun soldiers still carried the game's own "ranged attack" behaviour. It fired invisible blanks, took over
+  their legs whenever it saw an enemy and turned them toward its own choice of target, fighting the mod's aim.
+  It's gone (crossbowmen keep it: their bolts are the game's own).
+- The brain re-decided every half second with no preference for what it was already doing. Now a man sticks to
+  his plan unless something is clearly better.
+- When the man he was shooting ducked, his gun swung onto someone else and straight back. Now he keeps his sights
+  there for two seconds.
+- Two parts of the code turned him toward different enemies; now one does.
+- Marching side by side, each man's place in the line swung from side to side on grid-shaped routes, and the
+  game snapped bodies up to 30 degrees a tick toward each grid step. Both fixed.
+- In a sword fight, the swing faces him now (two things were turning him).
+- Men turned to whoever was talking even mid-fight; now only off duty.
+
+### Faction people
+- War Table > Settings > Faction people: each faction has a primary language and skin, and optionally a second
+  and third group of men with their own language, skin and share. A man's voice, name and skin all come from his
+  group. Example: a US army in US English, with 30% AAVE wearing the new American Infantry (Black) skin.
+- New skin slot 18: American Infantry (Black).
+
+### Command
+- Order form: Formation (auto, line, column, wedge), kept on the march.
+- "Follow me" squads walk behind you in that formation, turned the way you walk (each man within about half a
+  block of his place in tests).
+- New orders: "Set a rally flag where I'm looking" and "Return to base".
+- New flag type: Headquarters. "Return to base" marches there, men heal there, and a reinforcement point can send
+  its waves from the HQ.
+- Squads at rest keep men on watch (a quarter by day, a third at night) at posts facing out, changing every two
+  minutes.
+
+### Missions (War Table > Missions)
+- Attack / Defend: one side holds where you look, the other comes for it, against a timer.
+- Wave survival: waves, bigger each time, come for you from all sides until you fall.
+- Escort: get a VIP across the map past ambushes.
+
+### Sights and sounds
+- Gun smoke puffs and ejected brass casings (with a tinkle) near the player.
+- The crack of a round passing close to your head.
+- A distant rumble when a fight is going on out of sight, from its direction.
+- Dust from running men; a hit tick when your shot lands; men hunch over in the rain.
+- A blood trail where the wounded are dragged; bloody stumps where a limb came off (drawn on your screen: not
+  testable on the server).
+- Bodies falling against a wall slump down it instead of bouncing off.
+- Rounds now really go through full glass, wood and leaf blocks (only panes worked before); stone stops them.
+
+### Tools and upkeep
+- War Engine Guide item: what everything does, in chapters.
+- Settings > Export / import settings: one code with all your settings, faction people and formations.
+- Settings > Recent problems: the last script errors, for bug reports.
+- Each soldier's identity is now one saved record (older soldiers are moved over automatically).
+- The build refuses to pack a broken JSON file or script; a check runs on every push.
+- Fewer game calls in big battles (about 505 -> 440 a tick in a 90 v 90).
+
 ## v9.19 (Signal flag, real names, quieter camps, prisoners spared)
 
 Every item below was tested on a real server.
