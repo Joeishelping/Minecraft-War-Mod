@@ -1919,3 +1919,21 @@ KS.prisoners = async (o, ox, oz) => {
   for (const e of [...caps, ...pr]) try { e.remove(); } catch {}
   return r;
 };
+KS.skinmix = async (o, ox, oz) => {
+  floorAt(ox - 15, oz - 15, ox + 15, oz + 15);
+  const keepL = getJSON(world, "war:vlang", {}), k1 = getJSON(world, "war:fskins", {}), k2 = getJSON(world, "war:fgroups", {});
+  setJSON(world, "war:vlang", { ...keepL, 1: "en_us", 2: "german" });
+  setJSON(world, "war:fskins", { ...k1, 1: 3, 2: 10 }); setJSON(world, "war:fgroups", { ...k2, 1: [{ lang: "aave", skin: 18, pct: 30 }], 2: [{ lang: "russian", skin: 13, pct: 20 }, { lang: "dutch", skin: 0, pct: 10 }] });
+  const a = [...Array(30).keys()].map((i) => kitSoldier(1, { x: ox - 15 + i + 0.5, y: Y, z: oz + 0.5 }, "rifle", "hold"));
+  const b = [...Array(30).keys()].map((i) => kitSoldier(2, { x: ox - 15 + i + 0.5, y: Y, z: oz + 6.5 }, "rifle", "hold"));
+  await kitWait(o.w ?? 30);
+  const inC = (e, k) => CULTURE[k].names.includes(surname(e));
+  const r = {
+    us: { aave: a.filter((e) => voiceOfMan(e) === "aave").length, match: a.filter((e) => (voiceOfMan(e) === "aave") === (e.getProperty("war:skin") === 18) && inC(e, voiceOfMan(e))).length },
+    de: b.map((e) => `${voiceOfMan(e).slice(0, 2)}${e.getProperty("war:skin")}`).reduce((m, k) => ((m[k] = (m[k] ?? 0) + 1), m), {}),
+    sample: [a.find((e) => voiceOfMan(e) === "aave"), b.find((e) => voiceOfMan(e) === "russian")].map((e) => e && strip(e.nameTag).split("\n")[0]),
+  };
+  for (const e of [...a, ...b]) try { e.remove(); } catch {}
+  setJSON(world, "war:vlang", keepL); setJSON(world, "war:fskins", k1); setJSON(world, "war:fgroups", k2);
+  return r;
+};

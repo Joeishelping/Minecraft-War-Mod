@@ -1721,7 +1721,7 @@ function spawnCorpse0(v, how) {
   const dim = v.dimension, l = v.location, now = tick();
   const f = Number(P(v, "war:faction") ?? 0), med = !!P(v, "war:medic"), yaw = (() => { try { return v.getRotation().y; } catch { return 0; } })();
   let sk = 0, cav = false; try { sk = Number(v.getProperty("war:skin") ?? 0); cav = !!v.getProperty("war:cav"); } catch {}   // (the skin he's drawn with: his own, or his faction's)
-  if (!sk) sk = Number(gdp(v, "p_war:skin") ?? 0) || factionSkin(f);
+  if (!sk) sk = Number(gdp(v, "p_war:skin") ?? 0) || factionSkinFor(v, f);
   let mo = V3(0, 0, 0); try { const q = v.getVelocity(); mo = V3(Math.max(-0.4, Math.min(0.4, q.x)), 0, Math.max(-0.4, Math.min(0.4, q.z))); } catch {}
   const mask = gore() && !how?.fall ? (how?.mask ?? (how?.limb ? 1 << (how.limb - 1) : 0)) : 0;
   const make = (at, gibIdx) => {
@@ -7212,7 +7212,7 @@ function callout(e, text, opt = {}) {
   try {
     if (!e?.isValid || held.has(e.id) || (downed.has(e.id) && !["I'm hit!", "Medic!", "Don't shoot!"].includes(text) && !opt.force)) return false;
     const test = text === "Testing!";
-    const f = Number(P(e, "war:faction") ?? 0), lang = heritage(e, opt.lang ?? voiceOf(f));
+    const f = Number(P(e, "war:faction") ?? 0), lang = opt.lang ? heritage(e, opt.lang) : voiceOfMan(e);
     if (!lang || lang === "none") return false;
     if (!opt.force && !opt.event && ambushQuiet(e)) return false;          // (v9.0: lying in wait, nobody shouts)
     const has = VOICE_HAS[lang] ?? BASE_LINES, now = tick(), l = e.location, did = e.dimension.id;
@@ -7302,7 +7302,7 @@ async function voiceMenu(player) {
   if (!r || r.canceled || !r.formValues) return;
   r.formValues.forEach((v, i) => { all[FO[i]] = VOICE_KEYS[Number(v)]; });
   setJSON(world, "war:vlang", all);
-  for (const e of allOf(SOLDIER)) { try { updateName(e); NAME_KEY.delete(e.id); } catch {} }   // (v9.23: their names change with the language, now)
+  for (const e of allOf(SOLDIER)) { try { updateName(e); NAME_KEY.delete(e.id); syncSkin(e); } catch {} }   // (v9.23: their names change with the language, now; v9.19: and a mixed faction's skins)
   player.sendMessage("§aCallout languages saved. Soldiers' names now follow each faction's language.");
 }
 
@@ -7652,34 +7652,63 @@ system.runInterval(() => {
 
 // ---- faction skins: a default skin per faction (individual Unit Wand skins still win)
 const factionSkin = (f) => Number(getJSON(world, "war:fskins", {})[f] ?? 0);
+// v9.19: a faction's people. Each faction has a primary language and skin (most of the men) and, if you like, a second
+// and a third group, each with its own language, skin and share of the men. A soldier belongs to one group for good:
+// his voice, his name and his skin all come from it (say a US army: US English; AAVE with the American Infantry
+// (Black) skin, 30% of the men).
+const fGroups = (f) => getJSON(world, "war:fgroups", {})[f] ?? [];
+function groupOf(e, f) {
+  const gs = fGroups(f);
+  if (gs.length) {
+    const r = (Math.floor(idSeed(e) / 31) % 100) / 100; let acc = 0;
+    for (const g of gs) { acc += (g.pct ?? 0) / 100; if (r < acc) return { lang: VOICE_KEYS.includes(g.lang) ? g.lang : voiceOf(f), skin: Number(g.skin ?? 0) || factionSkin(f), n: 1 }; }
+  }
+  return { lang: voiceOf(f), skin: factionSkin(f), n: 0 };
+}
 async function factionSkinMenu(player) {
-  const all = getJSON(world, "war:fskins", {});
-  const choices = [{ name: "Faction uniform", slot: 0 }, ...skinChoices()];
-  const f = new ModalFormData().title("Faction skins");
   const FO = facOrder();
-  FO.forEach((fac) => f.dropdown(factionLabel(fac), choices.map((c) => c.name), { defaultValueIndex: Math.max(0, choices.findIndex((c) => c.slot === Number(all[fac] ?? 0))) }));
+  const allS = getJSON(world, "war:fskins", {}), allL = getJSON(world, "war:vlang", {}), allG = getJSON(world, "war:fgroups", {});
+  const choices = [{ name: "Faction uniform", slot: 0 }, ...skinChoices()];
+  const nm = (slot) => choices.find((c) => c.slot === Number(slot ?? 0))?.name ?? "Faction uniform";
+  const ln = (k) => VOICE_NAMES[Math.max(0, VOICE_KEYS.indexOf(k))];
+  const pick = new ActionFormData().title("Faction people: languages and skins").body("Pick a faction. Each has a primary language and skin, and optionally a second and third group of men with their own.");
+  FO.forEach((fac) => { const gs = allG[fac] ?? []; pick.button(`${factionLabel(fac, true)}\n§8${ln(voiceOf(fac))} / ${nm(allS[fac])}${gs.map((g) => ` + ${g.pct}% ${ln(g.lang)}`).join("")}`); });
+  const pr = await show(pick, player);
+  if (!pr || pr.canceled || pr.selection === undefined) return;
+  const fac = FO[pr.selection], gs = allG[fac] ?? [];
+  const langIdx = (k) => Math.max(0, VOICE_KEYS.indexOf(k));
+  const skinIdx = (sl) => Math.max(0, choices.findIndex((c) => c.slot === Number(sl ?? 0)));
+  const f = new ModalFormData().title(`${factionLabel(fac, true)}`)
+    .dropdown("Primary language", VOICE_NAMES, { defaultValueIndex: langIdx(voiceOf(fac)) })
+    .dropdown("Primary skin", choices.map((c) => c.name), { defaultValueIndex: skinIdx(allS[fac]) });
+  for (const [k, label] of [[0, "Second"], [1, "Third"]]) {
+    const g = gs[k];
+    f.dropdown(`${label} group: language (None: no ${label.toLowerCase()} group)`, ["None", ...VOICE_NAMES], { defaultValueIndex: g ? langIdx(g.lang) + 1 : 0 })
+      .dropdown(`${label} group: skin`, ["Same as the primary skin", ...choices.slice(1).map((c) => c.name)], { defaultValueIndex: g?.skin ? skinIdx(g.skin) : 0 })
+      .slider(`${label} group: share of the men (%)`, 5, 60, { valueStep: 5, defaultValue: g?.pct ?? (k ? 15 : 30) });
+  }
   f.toggle("Also apply to soldiers with their own skin (everyone matches)", { defaultValue: false });
   const r = await show(f, player);
   if (!r || r.canceled || !r.formValues) return;
-  const vals = r.formValues;
-  for (let i = 0; i < COLORS.length; i++) all[FO[i]] = choices[Number(vals[i])]?.slot ?? 0;
-  setJSON(world, "war:fskins", all);
-  const everyone = !!vals[COLORS.length];
-  let n = 0;
+  const v = r.formValues.map((x) => (typeof x === "boolean" ? x : Number(x)));
+  allL[fac] = VOICE_KEYS[v[0]] ?? "en_us"; allS[fac] = choices[v[1]]?.slot ?? 0;
+  const out = [];
+  for (const k of [0, 1]) { const L = v[2 + k * 3], S0 = v[3 + k * 3], P0 = v[4 + k * 3]; if (L) out.push({ lang: VOICE_KEYS[L - 1], skin: S0 ? choices[S0]?.slot ?? 0 : 0, pct: P0 }); }
+  const tot = out.reduce((t, g) => t + g.pct, 0); if (tot > 90) for (const g of out) g.pct = Math.floor((g.pct * 90) / tot);   // (the primary always keeps some men)
+  if (out.length) allG[fac] = out; else delete allG[fac];
+  setJSON(world, "war:vlang", allL); setJSON(world, "war:fskins", allS); setJSON(world, "war:fgroups", allG);
+  const everyone = !!v[8];
   for (const e of allOf(SOLDIER)) {
-    try {
-      const d = sd(e);
-      if (everyone) { setP(e, "war:skin", 0); }
-      syncSkin(e); n++;
-    } catch {}
+    try { if (Number(P(e, "war:faction") ?? 0) !== fac) continue; if (everyone) setP(e, "war:skin", 0); syncSkin(e); NAME_KEY.delete(e.id); updateName(e); } catch {}
   }
-  player.sendMessage(`§aFaction skins saved${everyone ? " and applied to everyone" : ""}.`);
+  player.sendMessage(`§aSaved for ${factionLabel(fac, true)}§a: ${ln(allL[fac])} / ${nm(allS[fac])}${out.map((g) => `, ${g.pct}% ${ln(g.lang)} / ${g.skin ? nm(g.skin) : "primary skin"}`).join("")}.`);
 }
+const factionSkinFor = (e, f) => groupOf(e, f).skin;
 // the skin actually drawn: his own Unit Wand skin, else his faction's skin, else the faction uniform
 function syncSkin(e) {
   try {
     const own = Number(gdp(e, "p_war:skin") ?? 0);
-    const eff = own || factionSkin(Number(P(e, "war:faction") ?? 0));
+    const eff = own || factionSkinFor(e, Number(P(e, "war:faction") ?? 0));
     if (e.getProperty("war:skin") !== eff) e.setProperty("war:skin", eff);
   } catch {}
 }
@@ -11915,7 +11944,7 @@ system.runInterval(() => {
 // v9.19: a mixed language (American: US English + AAVE) makes each man one or the other, for good: his voice and his
 // name follow it. The "Mixed heritage names" setting gives about one man in seven a surname from another culture.
 function heritage(e, lang) { const mx = MIXES[lang]; if (!mx) return lang; const r = (Math.floor(idSeed(e) / 1000) % 1000) / 1000; let acc = 0; for (const [k, w] of mx) { acc += w; if (r < acc) return k; } return mx[mx.length - 1][0]; }
-function voiceOfMan(e) { try { return heritage(e, voiceOf(Number(P(e, "war:faction") ?? 0))); } catch { return "en_us"; } }
+function voiceOfMan(e) { try { return heritage(e, groupOf(e, Number(P(e, "war:faction") ?? 0)).lang); } catch { return "en_us"; } }
 const CULTURE_KEYS = Object.keys(CULTURE);
 const cultureOf = (f) => CULTURE[voiceOf(f)] ?? CULTURE[MIXES[voiceOf(f)]?.[0]?.[0]] ?? CULTURE.en_us;
 const cultureOfMan = (e) => CULTURE[voiceOfMan(e)] ?? CULTURE.en_us;      // ("None (silent)" names like US English)
@@ -11931,7 +11960,7 @@ function vetTier(e) { const x = xpOf(e); return x >= RANK_XP[3] ? 3 : x >= RANK_
 let OFFICER_IDS = new Set();
 const NAME_KEY = new Map();   // id -> the language and rank his name tag was made with
 function rankTier(e) { const v = vetTier(e); return OFFICER_IDS.has(e.id) ? (v >= 3 ? 4 : 3) : v; }
-function surname(e) { const c = nameCulture(e); return c.names[idSeed(e) % c.names.length]; }
+function surname(e) { const c = nameCulture(e); return c.names[(idSeed(e) + Number(gdp(e, "war:noff") ?? 0)) % c.names.length]; }
 function firstName(e) { const c = nameCulture(e), f = c.first ?? []; return f.length ? f[Math.floor(idSeed(e) / 997) % f.length] : ""; }
 function nickOf(e) { try { return String(gdp(e, "war:nick") ?? ""); } catch { return ""; } }
 function soldierName(e) { try { const c = cultureOfMan(e), nk = nickOf(e); return `${c.ranks[rankTier(e)]} ${nk ? `"${nk}" ` : ""}${surname(e)}`; } catch { return "Soldier"; } }
@@ -12016,9 +12045,8 @@ system.runInterval(() => {
         if (!o.isValid) continue;
         let nm = surname(o);
         if (seen.has(nm)) {
-          const s0 = idSeed(o), base = s0 - (s0 % 1000);
-          for (let k = 1; k < 60 && seen.has(nm); k++) { sdp(o, "war:nseed", base + (((s0 % 1000) + k * 37) % 1000)); nm = surname(o); }
-          NAME_KEY.delete(o.id); updateName(o);
+          for (let k = 1; k < 60 && seen.has(nm); k++) { sdp(o, "war:noff", k * 7); nm = surname(o); }   // (only his surname changes: his group, voice and skin stay)
+          NAME_KEY.delete(o.id); updateName(o); syncSkin(o);
         }
         seen.add(nm);
       }

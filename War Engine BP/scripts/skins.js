@@ -23,7 +23,7 @@ export const SKINS = [
   "Shlomo Castle Soldier", // skin_15
   "Jeetya Soldier", // skin_16
   "Tout Donner Soldier", // skin_17
-  "", // skin_18
+  "American Infantry (Black)", // skin_18
   "", // skin_19
   "", // skin_20
   "", // skin_21
