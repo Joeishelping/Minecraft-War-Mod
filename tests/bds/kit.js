@@ -1827,3 +1827,95 @@ KS.beat = async (o, ox, oz) => {
   try { s.remove(); } catch {}
   return r;
 };
+// v9.19: duels, helmets, glass, spears against a charge
+const v9get = (k) => globalThis.__v9?.[k] ?? 0;
+KS.combat2 = async (o, ox, oz) => {
+  floorAt(ox - 30, oz - 30, ox + 30, oz + 30);
+  for (const m of ow().getEntities({ type: "minecraft:horse", location: { x: ox, y: Y, z: oz }, maxDistance: 80 })) { try { m.remove(); } catch {} }
+  setRelPair(1, 2, "1", true);
+  const r = {};
+  const s0 = { ...globalThis.__v9 };
+  // swords
+  const a = [0, 1, 2].map((i) => kitSoldier(1, { x: ox - 3 + i * 3 + 0.5, y: Y, z: oz - 3.5 }, "sword", "hold"));
+  const b = [0, 1, 2].map((i) => kitSoldier(2, { x: ox - 3 + i * 3 + 0.5, y: Y, z: oz + 3.5 }, "sword", "hold"));
+  await kitWait(300);
+  r.duel = { parry: v9get("parry"), riposte: v9get("riposte"), bash: v9get("shieldBash") };
+  for (const e of [...a, ...b]) try { e.remove(); } catch {}
+  // helmets: iron-armoured men under rifle fire
+  const tgt = [0, 1, 2].map((i) => { const e = kitSoldier(2, { x: ox - 3 + i * 3 + 0.5, y: Y, z: oz + 14.5 }, "rifle", "hold"); sdp(e, "war:armor", "iron"); equipArmor(e, "iron"); sdp(e, "war:armor", "iron"); e.addEffect("resistance", 3000, { amplifier: 3, showParticles: false }); e.addEffect("regeneration", 3000, { amplifier: 4, showParticles: false }); return e; });
+  const sh = [0, 1, 2].map((i) => kitSoldier(1, { x: ox - 3 + i * 3 + 0.5, y: Y, z: oz - 6.5 }, "rifle", "hold"));
+  for (let i = 0; i < 60; i++) { const g = sh[i % 3], t = tgt[i % 3]; if (!g.isValid || !t.isValid) continue; const h = headLoc(g), c = headLoc(t); hitscan(g, GUN_SPEC.rifle, h, { x: c.x - h.x, y: c.y - 0.15 - h.y, z: c.z - h.z }, 40, "rifle"); await kitWait(3); }
+  r.helmet = { ping: v9get("helmetPing"), off: v9get("helmetOff"), armor: String(gdp(tgt[0], "war:armor")) };
+  for (const e of [...tgt, ...sh]) try { e.remove(); } catch {}
+  // glass: a pane between, shots that hit it go through (count hits on a man behind)
+  kfill(ox - 4, Y, oz + 5, ox + 4, Y + 3, oz + 5, "glass_pane");
+  let hits = 0; const sub = (ev) => { try { if (ev.hurtEntity?.typeId === SOLDIER) hits++; } catch {} };
+  const behind = kitSoldier(2, { x: ox + 0.5, y: Y, z: oz + 8.5 }, "rifle", "hold"); behind.addEffect("resistance", 3000, { amplifier: 2, showParticles: false }); behind.addEffect("regeneration", 3000, { amplifier: 5, showParticles: false });
+  const gunner = kitSoldier(1, { x: ox + 0.5, y: Y, z: oz - 2.5 }, "rifle", "hold"); await kitWait(20);
+  world.afterEvents.entityHurt.subscribe(sub);
+  for (let i = 0; i < 20; i++) { const h = headLoc(gunner), c = chest(behind); hitscan(gunner, GUN_SPEC.rifle, h, { x: c.x - h.x, y: c.y - h.y, z: c.z - h.z }, 30, "rifle"); await kitWait(2); }
+  world.afterEvents.entityHurt.unsubscribe(sub);
+  r.glassHits = hits;
+  kfill(ox - 4, Y, oz + 5, ox + 4, Y + 3, oz + 5, "stone");
+  hits = 0; world.afterEvents.entityHurt.subscribe(sub);
+  for (let i = 0; i < 20; i++) { const h = headLoc(gunner), c = chest(behind); hitscan(gunner, GUN_SPEC.rifle, h, { x: c.x - h.x, y: c.y - h.y, z: c.z - h.z }, 30, "rifle"); await kitWait(2); }
+  world.afterEvents.entityHurt.unsubscribe(sub);
+  r.stoneHits = hits;
+  kfill(ox - 4, Y, oz + 5, ox + 4, Y + 3, oz + 5, "air");
+  for (const e of [behind, gunner]) try { e.remove(); } catch {}
+  // cavalry into a spear line
+  const spears = [0, 1, 2, 3].map((i) => { const e = kitSoldier(2, { x: ox - 3 + i * 2 + 0.5, y: Y, z: oz + 0.5 }, "spear", "post"); e.setRotation({ x: 0, y: 180 }); return e; });
+  const cav = [0, 1].map((i) => kitCav(1, { x: ox - 1 + i * 2 + 0.5, y: Y, z: oz - 22.5 }, "sword", "minecraft:horse"));
+  await kitWait(400);
+  r.spearStop = v9get("spearStop"); r.chargeHit = v9get("chargeHit");
+  for (const e of [...spears, ...cav]) try { e.remove(); } catch {}
+  for (const m of ow().getEntities({ type: "minecraft:horse", location: { x: ox, y: Y, z: oz }, maxDistance: 80 })) { try { m.remove(); } catch {} }
+  return r;
+};
+KS.glass = async (o, ox, oz) => {
+  floorAt(ox - 10, oz - 10, ox + 10, oz + 15);
+  setRelPair(1, 2, "1", true);
+  kfill(ox - 4, Y, oz + 5, ox + 4, Y + 3, oz + 5, o.b ?? "glass_pane"); await kitWait(10);
+  const behind = kitSoldier(2, { x: ox + 0.5, y: Y, z: oz + 8.5 }, "rifle", "hold"); behind.addEffect("regeneration", 3000, { amplifier: 5, showParticles: false });
+  const gunner = kitSoldier(1, { x: ox + 0.5, y: Y, z: oz - 2.5 }, "rifle", "hold"); await kitWait(20);
+  const out = []; globalThis.__warShot = (q) => out.push(`${q.hit ? "HIT" : "miss"} bd=${Math.round(q.blockD * 10) / 10}`);
+  const h = headLoc(gunner), c = chest(behind);
+  const rh = rayHit(ow(), h, (() => { const dx = c.x - h.x, dy = c.y - h.y, dz = c.z - h.z, L = Math.hypot(dx, dy, dz); return { x: dx / L, y: dy / L, z: dz / L }; })(), 30);
+  for (let i = 0; i < 3; i++) { hitscan(gunner, GUN_SPEC.rifle, h, { x: c.x - h.x, y: c.y - h.y, z: c.z - h.z }, 30, "rifle"); await kitWait(2); }
+  globalThis.__warShot = undefined;
+  kfill(ox - 4, Y, oz + 5, ox + 4, Y + 3, oz + 5, "air");
+  for (const e of [behind, gunner]) try { e.remove(); } catch {}
+  const dv = (() => { const dx = c.x - h.x, dy = c.y - h.y, dz = c.z - h.z, L = Math.hypot(dx, dy, dz); return { x: dx / L, y: dy / L, z: dz / L }; })();
+  let ents = []; try { ents = ow().getEntitiesFromRay(h, dv, { maxDistance: 30 }).map((q) => `${q.entity.typeId}@${Math.round(q.distance)}:${hittable(q.entity, gunner)}`); } catch (err) { ents = [String(err)]; }
+  const at = ow().getBlock({ x: Math.floor(h.x + dv.x * 7.95), y: Math.floor(h.y + dv.y * 7.95), z: Math.floor(h.z + dv.z * 7.95) })?.typeId;
+  return { first: rh?.hb?.block?.typeId, loc: rh?.hb?.block?.location, d: rh?.d, at, ents, h, c, out };
+};
+KS.reinfskin = async (o, ox, oz) => {
+  floorAt(ox - 20, oz - 20, ox + 20, oz + 20);
+  const sk = skinChoices()[0]?.slot ?? 3;
+  const old = [0, 1, 2].map((i) => { const e = kitSoldier(1, { x: ox + i * 2 + 0.5, y: Y, z: oz + 10.5 }, "rifle", "hold"); setP(e, "war:skin", sk); return e; });
+  globalThis.__fakeLeader = (id) => (id === KIT_PLAYER.id ? KIT_PLAYER : undefined);
+  const before = new Set(allOf(SOLDIER).map((e) => e.id));
+  setReinf([{ id: 2, dim: "minecraft:overworld", at: { x: ox + 0.5, y: Y, z: oz - 10.5 }, f: 1, n: 3, mix: "rifle", every: 10, waves: 1, mode: "spot", done: 0, next: 0, owner: KIT_PLAYER.id, squad: 9 }]);
+  await kitWait(80);
+  globalThis.__fakeLeader = undefined;
+  const fresh = allOf(SOLDIER).filter((e) => !before.has(e.id));
+  const r = { want: sk, got: fresh.map((e) => e.getProperty("war:skin")) };
+  for (const e of [...old, ...fresh]) try { e.remove(); } catch {}
+  setReinf([]);
+  return r;
+};
+KS.prisoners = async (o, ox, oz) => {
+  floorAt(ox - 20, oz - 20, ox + 20, oz + 20);
+  setRelPair(1, 2, "1", true);
+  const caps = [0, 1, 2, 3].map((i) => kitSoldier(1, { x: ox - 3 + i * 2 + 0.5, y: Y, z: oz + 0.5 }, i % 2 ? "sword" : "rifle", "hold"));
+  const pr = [0, 1, 2].map((i) => kitSoldier(2, { x: ox - 2 + i * 2 + 0.5, y: Y, z: oz + 4.5 }, "rifle", "hold"));
+  await kitWait(10);
+  for (const e of pr) soldierTakes(e, caps[0]);
+  const r = { tags: pr.map((e) => e.getTags().filter((t) => t.startsWith("war_")).join(",")) };
+  await kitWait(400);
+  r.alive = pr.filter((e) => e.isValid).length; r.pows = pr.filter((e) => e.isValid && pows.has(e.id)).length;
+  r.hp = pr.map((e) => (e.isValid ? Math.round(e.getComponent("minecraft:health").currentValue) : 0));
+  for (const e of [...caps, ...pr]) try { e.remove(); } catch {}
+  return r;
+};
