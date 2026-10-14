@@ -1,5 +1,89 @@
 # War Engine changelog
 
+## v9.18 (Soldiers with names, nerves and a war around them)
+
+Every item below was tested on a real server; the numbers are from those tests.
+
+### Who they are
+- **Names and ranks in their own language.** Each soldier has a surname and a rank that follow his faction's callout
+  language (War Table > Settings > Callout language): American, AAVE, British, German, Russian, Korean, Greek,
+  Mongolian, Dutch, Hebrew (Jewish), Igbo, Haitian Creole, Spanish (Dominican), plus Italian, Hindi, Syrian Arabic,
+  Chinese and Yucatec Maya. Change the language and every name changes with it ("Schuetze Becker", "Ibyeong Kim",
+  "Solda Francois"). The name shows above his head and on spoken lines.
+- **Veterancy.** Kills, putting enemies down, rescues and surviving fights give experience. Men are promoted (private,
+  senior private, corporal, sergeant; a veteran squad leader is a lieutenant), wear 1-3 stripes on the arm, aim
+  steadier and keep their nerve longer.
+- **Temperaments.** Brave (first to hold, last to break), Cautious (pulls back sooner, spots traps more), Steady, and
+  the rare Hothead. Now and then a hothead fires too early in an ambush or charges alone against orders (at most once
+  every few minutes across the whole map, so it's an event, not a habit).
+- **Buddies.** Men are paired in each squad. A man's buddy comes for him first when he's hit, and they bound together
+  as a fire team. When a buddy is killed, the other either goes after the man who did it (a grudge: he picks that man
+  out) or is badly shaken for a while.
+- **Medals.** After a fight: Valor (3+ enemies), Lifesaver (got a wounded man back up or out of the fire), Wound (went
+  down and lived). Shown as ribbons on the chest; announced on the radio.
+- **Unit card.** Crouch and look at a soldier: name, rank, type, weapon, health, temperament, experience, his buddy,
+  his medals and what he's doing.
+
+### Men who feel it
+- **Hit reactions.** A flinch on every hit and a step back from the blow; a leg hit staggers him and he limps for about
+  30 seconds; an arm hit spoils his aim for a while.
+- **Pinned down.** Under heavy fire a man crouches with his head down behind cover and only fires blind (badly).
+- **Panic and rally.** A squad that's lost half its men and is still losing can break: the green men run. Their
+  sergeant (who holds) or the steadiest veteran rallies them back. Veterans and brave men don't break.
+- **The wounded.** Badly hurt men limp; a man going down calls the squad medic by name on the radio.
+- **Surrender.** Hands up and on his knees. A squad that's down to a few hurt men facing three times their number
+  raises a white flag together.
+- **Grenades.** A man with a live grenade at his feet sometimes throws it straight back (veterans and the brave more
+  often). Veterans cook their grenades first, so theirs can't be thrown back.
+
+### Tactics
+- **Ammo.** Every gunner carries a limited number of rounds. In a long fight they run low: a squad mate with the same
+  gun shares his, a friendly truck or flag refills them, and so does a quiet spell. Out completely, he fixes his
+  bayonet. (Settings: "Limited ammo", on by default. The sidearm pistol is unlimited.)
+- **Fire teams.** Bounding (one team moves while the other covers) now uses fixed teams: each man with his buddy.
+- **Snipers** move after a few shots or when shot at, to a new spot that still sees the enemy, and pick off squad
+  leaders first.
+- **Clearing buildings.** Attackers call "Clear!" room by room, and one man stays at the foot of the stairs watching
+  up them until the squad goes up.
+- **Rearguard.** When men fall back with the enemy in sight, one or two of the steadiest stay a few seconds to cover
+  them, then go.
+- **Formations by the ground.** A column on a road or through a narrow way, a line when the enemy is about, a wedge
+  across open ground (on the march's start, front and arrival).
+- **Scouts.** A squad on the move sends a man about 30 blocks ahead. He doesn't start fights; when he sees the enemy
+  he comes back, and only when he's back does the squad know: kill him and they march in blind.
+- **Traps.** Defenders settled in a building with no fight yet string a tripwire with a charge inside a door. The
+  blast never breaks blocks; the string is taken away after ~5 minutes. Attackers can spot and cut it (veterans and
+  cautious men more often).
+- **Feints.** When part of a squad flanks, two men move the other way and make a lot of noise.
+- **Counterattacks.** Defenders who throw back an attack (the attackers running or few left) chase them for a short
+  while, then return.
+- Routes in a fight already keep out of the enemy's sight where they can (unchanged).
+
+### The world and the command
+- **Night in camp.** Off duty at night, men sleep where they stand while a third keep watch, in turns. Any sign of
+  the enemy, a shot nearby, a hit or an order and they're up.
+- **Weather.** Rain cuts how far soldiers can see (to ~70%), a thunderstorm more (~55%). (Fog can't be detected by
+  add-ons.)
+- **Bodies cleared gracefully.** At most ~32 bodies (by the Performance setting); the oldest are removed where no
+  player is looking, or sink slowly into the ground if every one is in sight. Bodies older than 10 minutes go too.
+- **Desertion.** Rare: at night, a beaten man with nothing left (hurt, lost his buddy, out of ammo, squad half gone)
+  may slip away from his squad and is gone, unseen.
+- **Hand signals.** Command Baton > first page > Hand signals: to your soldiers within 48 blocks: suppress the enemy
+  you're looking at, attack where you're looking, take cover, fall back, hold fire, open fire.
+- **Undo my last order** (Command Baton, first page): everyone it went to goes back to what they were doing and where.
+- **Reinforcement waves** (War Table > Reinforcements): a point that sends a squad of 2-20 every 1-10 minutes, for a
+  number of waves or until removed, marching on a spot you pick, on the nearest enemy, or holding.
+
+### Scale and settings
+- **Performance** (Settings > Performance): Low / Medium / High: how many bodies fall with full physics at once and
+  how much time they get, how many bodies are kept, how close a soldier must be to a player for full attention.
+- **Huge battles.** Over 200 soldiers, the far ones (out of every player's sight) think and look about half as often,
+  and their bodies are laid down without physics. 300 soldiers fighting ran slightly faster than v9.17 did, with all of
+  the above added.
+- **Save / load battles** (War Table): every soldier within 200 blocks (name, rank, temperament, kit, medals, health,
+  job and place) into one of five slots; load it back later, with or without clearing the area first.
+- **Quick presets** (Settings): Realistic, Arcade, Cinematic: a group of settings at once.
+
 ## v9.17 (Guns that work, mounts that face forward, smoother bodies)
 
 - **Bullets work again against swordsmen.** Since v9.15 a raised shield stopped 80% of a round, and swordsmen raise

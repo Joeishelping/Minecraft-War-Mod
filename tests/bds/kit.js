@@ -1672,3 +1672,18 @@ KS.worldlife = async (o, ox, oz) => {
   globalThis.__fakeLeader = undefined;
   return r;
 };
+// v9.22: a battle saved and loaded back: the same men, ranks, temperaments, kit and places
+KS.bsave = async (o, ox, oz) => {
+  floorAt(ox - 20, oz - 20, ox + 20, oz + 20);
+  setRelPair(1, 2, "0", false);
+  const men = [0, 1, 2, 3].map((i) => kitSoldier(1 + (i % 2), { x: ox - 3 + i * 2 + 0.5, y: Y, z: oz + 0.5 }, i % 2 ? "smg" : "sword", "hold"));
+  sdp(men[0], "war:xp", 25); sdp(men[1], "war:trait", "hothead"); setP(men[2], "war:medals", 5);
+  await kitWait(20);
+  const before = men.map((e) => `${soldierName(e)}|${traitOf(e)}|${sd(e).weapon}|${Math.round(e.location.x - ox)}|${e.getProperty("war:medals")}`);
+  const n = battleSave(KIT_PLAYER, 5);
+  const n2 = battleLoad(KIT_PLAYER, 5, true);
+  await kitWait(20);
+  const after = allOf(SOLDIER).filter((e) => dist(e.location, { x: ox, y: Y, z: oz }) < 10).sort((a, b) => a.location.x - b.location.x).map((e) => `${soldierName(e)}|${traitOf(e)}|${sd(e).weapon}|${Math.round(e.location.x - ox)}|${e.getProperty("war:medals")}`);
+  for (let i = 0; i < 40; i++) world.setDynamicProperty(`war:bsave5_${i}`, undefined);
+  return { saved: n, loaded: n2, before, after };
+};

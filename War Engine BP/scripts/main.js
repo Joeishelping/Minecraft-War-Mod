@@ -1325,7 +1325,7 @@ const THINK_MAX = 24;
 // are read once a second.
 let PLAYER_POS = [];
 system.runInterval(() => { try { PLAYER_POS = world.getAllPlayers().map((p) => ({ d: p.dimension.id, x: p.location.x, z: p.location.z })); const xv = globalThis.__viewers?.(); if (xv) PLAYER_POS.push(...xv); } catch {} }, 20);   // (__viewers: test kits only)
-const farFromPlayers = (e) => { const l = e.location, d = e.dimension.id; for (const p of PLAYER_POS) if (p.d === d && Math.abs(p.x - l.x) < 96 && Math.abs(p.z - l.z) < 96) return false; return true; };
+const farFromPlayers = (e) => { const l = e.location, d = e.dimension.id, R = FAR_R(); for (const p of PLAYER_POS) if (p.d === d && Math.abs(p.x - l.x) < R && Math.abs(p.z - l.z) < R) return false; return true; };   // (v9.22: closer in on Low, or in a huge battle)
 let thinkCursor = 0, thinkAcc = 0;
 const thinkPass = new Map(), g2Done = new Set();
 system.runInterval(() => {
@@ -1351,7 +1351,7 @@ system.runInterval(() => {
       const pass = (thinkPass.get(e.id) ?? 0) + 1; thinkPass.set(e.id, pass);
       const hot = isHot(e, now);
       if (!hot && pass % 3) continue;
-      if (pass % (hot ? 2 : 6) && farFromPlayers(e)) continue;                    // (v9.2: nobody near to see him)
+      if (pass % (hot ? (lodOn() ? 4 : 2) : 6) && farFromPlayers(e)) continue;                    // (v9.2: nobody near to see him; v9.22: a huge battle: the far ones decide half as often)
       think(e);
     } catch (err) { oops("think", err); }
   }
@@ -1466,7 +1466,7 @@ function oneShot(v, ev, cause) {
 // on its own joint), so nothing comes apart unless it's meant to: a limb or the head torn off is its own tumbling
 // piece. Each body runs only while it moves (a second or two) and then sleeps; a later blast wakes it again.
 const RD = new Map();                      // entity id -> sim { c, pts, cons, gib, act, still, t, sent, ... }
-const RD_ACTIVE_MAX = 10;
+const RD_ACTIVE_MAX_BY = { low: 4, medium: 10, high: 16 };   // (v9.22: by the Performance setting)
 const RD_G = 0.075;
 const V3 = (x, y, z) => ({ x, y, z });
 const vadd = (a, b) => V3(a.x + b.x, a.y + b.y, a.z + b.z), vsub = (a, b) => V3(a.x - b.x, a.y - b.y, a.z - b.z), vmul = (a, k) => V3(a.x * k, a.y * k, a.z * k);
@@ -1622,7 +1622,7 @@ function rdStart(c, gibIdx, pts, vel, mask, squirt) {
   else { s.cons = rdCons(false, mask); s.rad = RD_RAD; s.mass = RD_MASS; s.hinges = [[3, 9, 5, -1], [2, 10, 6, -1], [1, 11, 7, 1], [0, 12, 8, 1]].filter(([, , e]) => !(mask & { 5: 2, 6: 4, 7: 8, 8: 16 }[e])); }
   RD.set(c.id, s); s.act = true;
   const actives = [...RD.values()].filter((q) => q.act).length;
-  if (actives > RD_ACTIVE_MAX && !s.fall) { rdLay(s); s.act = false; rdRender(s, true); }   // (too many falling at once: this one is laid down where he fell, no physics)   // (too many falling at once: this one falls in one go)
+  if ((actives > (RD_ACTIVE_MAX_BY[perfLevel()] ?? 10) || (lodOn() && !playerNearAt(c.dimension.id, c.location, 48))) && !s.fall) { rdLay(s); s.act = false; rdRender(s, true); }   // (v9.22: or nobody near enough to watch it fall)   // (too many falling at once: this one is laid down where he fell, no physics)   // (too many falling at once: this one falls in one go)
   else rdRender(s, true);
   return s;
 }
@@ -1633,7 +1633,7 @@ system.runInterval(() => {
   const n = all.length, start = RD_RR % Math.max(1, n); RD_RR++;
   for (let k = 0; k < n; k++) {
     const [id, s] = all[(start + k) % n];
-    if (Date.now() - t0 > 3) break;                                                                 // (v9.14: 3 ms a tick for all of them; the rest go on next tick)
+    if (Date.now() - t0 > ({ low: 1.5, medium: 3, high: 5 }[perfLevel()] ?? 3)) break;                 // (v9.14: ms a tick for all of them, by the Performance setting; the rest go on next tick)
     try {
       if (!s.c?.isValid) { RD.delete(id); continue; }
       if (!s.act) continue;
@@ -3150,9 +3150,11 @@ async function warTable(player, pre) {
   } else if (r.selection === 7) {
     await warArchive(player);
   } else if (r.selection === 5) {
-    const which = await show(new ActionFormData().title("Settings").button("General").button("Gun loadouts (per faction)").button("Realism (battle tuning)").button("Faction skins").button("Callout language (per faction)").button("« Back"), player);
+    const which = await show(new ActionFormData().title("Settings").button("General").button("Gun loadouts (per faction)").button("Realism (battle tuning)").button("Faction skins").button("Callout language (per faction)").button("« Back").button("§bQuick presets§r\nRealistic / Arcade / Cinematic").button("Performance"), player);
     if (!which || which.canceled || which.selection === undefined) return;
     if (which.selection === 5) return warTable(player);
+    if (which.selection === 6) { await presetMenu(player); return warTable(player, 5); }   // (v9.22)
+    if (which.selection === 7) { await perfMenu(player); return warTable(player, 5); }
     if (which.selection === 4) { await voiceMenu(player); return warTable(player, 5); }   // (v6.5)
     if (which.selection === 1) { await loadoutMenu(player); return warTable(player, 5); }
     if (which.selection === 3) { await factionSkinMenu(player); return warTable(player, 5); }
@@ -4695,7 +4697,7 @@ system.runInterval(() => {
         const pass = (percPass.get(e.id) ?? 0) + 1; percPass.set(e.id, pass);
         const hot = isHot(e, now);
         if (!hot && pass % 3) continue;
-        if (pass % (hot ? 2 : 6) && farFromPlayers(e)) continue;                  // (v9.2)
+        if (pass % (hot ? (lodOn() ? 4 : 2) : 6) && farFromPlayers(e)) continue;                  // (v9.2; v9.22: a huge battle: the far ones look about half as often)
         perceive(e, now);
       } catch (err) { oops("perception", err); }
     }
@@ -12472,7 +12474,7 @@ function bodySeen(c) {
 }
 function pruneBodies() {
   const now = tick();
-  let over = CORPSES.length - 32;
+  let over = CORPSES.length - bodyCap();
   const old = CORPSES.filter((o) => now - o.t > 12000);
   for (const o of [...CORPSES]) {
     if (over <= 0 && !old.includes(o)) break;
@@ -12484,7 +12486,7 @@ function pruneBodies() {
   }
 }
 system.runInterval(() => {
-  if (CORPSES.length > 32 || (tick() % 600 === 0 && CORPSES.length)) pruneBodies();
+  if (CORPSES.length > bodyCap() || (tick() % 600 === 0 && CORPSES.length)) pruneBodies();
   for (const [id, n] of [...SINKING]) {
     const c = world.getEntity(id);
     if (!c?.isValid || n <= 0) { try { c?.remove(); } catch {} SINKING.delete(id); const i = CORPSES.findIndex((o) => o.id === id); if (i >= 0) CORPSES.splice(i, 1); continue; }
@@ -12650,3 +12652,93 @@ system.runInterval(() => {
   }
   if (changed) setReinf(list);
 }, 100);
+
+// ================================================================ v9.22: performance, huge battles, saved battles, presets
+// ---- Performance (War Table > Settings > Performance): Low / Medium / High. It sets how many bodies fall with full
+// physics at once and how much time they get, how many bodies stay, and how close a man has to be to a player to get
+// full attention. "Huge battle" mode (over 200 soldiers, or Low) thins out the far ones further.
+const perfLevel = () => { const v = String(setting("perf", "medium")); return ["low", "medium", "high"].includes(v) ? v : "medium"; };
+let SOLDIER_N = 0;
+system.runInterval(() => { SOLDIER_N = allOf(SOLDIER).length; }, 40);
+const lodOn = () => perfLevel() === "low" || SOLDIER_N > 200;
+const FAR_R = () => (perfLevel() === "low" ? 64 : SOLDIER_N > 200 ? 80 : 96);
+const bodyCap = () => ({ low: 16, medium: 32, high: 48 }[perfLevel()] ?? 32) - (SOLDIER_N > 250 ? 8 : 0);
+const playerNearAt = (dimId, l, r) => PLAYER_POS.some((p) => p.d === dimId && Math.abs(p.x - l.x) < r && Math.abs(p.z - l.z) < r);
+async function perfMenu(p) {
+  const f = new ModalFormData().title("Performance")
+    .dropdown("Level", ["Low (phones, consoles, very big battles)", "Medium (most devices)", "High (strong PC: more falling bodies, more kept)"], { defaultValueIndex: ["low", "medium", "high"].indexOf(perfLevel()) });
+  const r = await show(f, p); if (!r || r.canceled || !r.formValues) return;
+  sdp(world, "war:set_perf", ["low", "medium", "high"][Number(r.formValues[0])] ?? "medium");
+  p.sendMessage(`§aPerformance: ${perfLevel()}.`);
+}
+// ---- quick presets: many settings at once
+const PRESETS = {
+  realistic: { name: "Realistic", desc: "Limited ammo, surrender, shields, kneeling, drills, gore; real damage; radio: important only", set: { ammo: true, isosurr: true, shields: true, poses: true, drills: true, gore: true, nightfx: true, commit: true, radio: 1, r_dmg: 100, r_react: 100 } },
+  arcade: { name: "Arcade", desc: "Unlimited ammo, no surrender, quicker kills, faster reactions, no gore, quiet radio", set: { ammo: false, isosurr: false, shields: true, poses: false, drills: true, gore: false, nightfx: true, commit: true, radio: 0, r_dmg: 150, r_react: 140 } },
+  cinematic: { name: "Cinematic", desc: "Everything that looks good: gore, night flares, kneeling, all radio chatter, more bodies with physics", set: { ammo: true, isosurr: true, shields: true, poses: true, drills: true, gore: true, nightfx: true, commit: true, radio: 2, r_dmg: 100, r_react: 100, perf: "high" } },
+};
+async function presetMenu(p) {
+  const keys = Object.keys(PRESETS);
+  const f = new ActionFormData().title("Quick presets").body("Each sets a group of settings at once (you can still change any of them after).");
+  for (const k of keys) f.button(`${PRESETS[k].name}\n§8${PRESETS[k].desc.slice(0, 60)}`);
+  const r = await show(f, p); if (!r || r.canceled || r.selection === undefined) return;
+  const P0 = PRESETS[keys[r.selection]];
+  for (const [k, v] of Object.entries(P0.set)) sdp(world, `war:set_${k}`, v);
+  p.sendMessage(`§aPreset applied: ${P0.name}. §7${P0.desc}.`);
+}
+
+// ---- saving and loading battles (War Table > Save / load battles): every soldier within 200 blocks (who he is, his
+// faction and squad, kit, rank, temperament, health, his job and where he stands) into one of five slots; loading puts
+// them all back, at the same places
+const BSLOTS = 5, BCHUNK = 30000;
+function battleSave(p, slot) {
+  const men = p.dimension.getEntities({ type: SOLDIER, location: p.location, maxDistance: 200 }).filter((e) => !downed.has(e.id));
+  const rows = men.map((e) => {
+    const d = sd(e), h = e.getComponent("minecraft:health"), l = e.location;
+    return [Math.round(l.x * 10) / 10, Math.round(l.y * 10) / 10, Math.round(l.z * 10) / 10, d.faction, d.squad, d.div, d.weapon, String(gdp(e, "war:armor") ?? "none"), Number(P(e, "war:skin") ?? 0),
+      d.func, String(gdp(e, "war:stance") ?? "aggressive"), h ? Math.round(h.currentValue) : 20, xpOf(e), traitOf(e), idSeed(e), Number(P(e, "war:medals") ?? 0), d.custom ?? "", String(gdp(e, "war:mount") ?? "")];
+  });
+  const txt = JSON.stringify(rows);
+  for (let i = 0; i < 40; i++) world.setDynamicProperty(`war:bsave${slot}_${i}`, undefined);
+  for (let i = 0; i * BCHUNK < txt.length; i++) world.setDynamicProperty(`war:bsave${slot}_${i}`, txt.slice(i * BCHUNK, (i + 1) * BCHUNK));
+  const meta = getJSON(world, "war:bsaves", {});
+  meta[slot] = { n: rows.length, when: new Date().toISOString().slice(0, 16).replace("T", " "), dim: p.dimension.id, by: p.name };
+  setJSON(world, "war:bsaves", meta);
+  return rows.length;
+}
+function battleLoad(p, slot, clear) {
+  let txt = ""; for (let i = 0; i < 40; i++) { const c = world.getDynamicProperty(`war:bsave${slot}_${i}`); if (c === undefined) break; txt += String(c); }
+  if (!txt) return -1;
+  const rows = JSON.parse(txt), meta = getJSON(world, "war:bsaves", {})[slot];
+  const dim = world.getDimension(meta?.dim ?? p.dimension.id);
+  if (clear) for (const e of dim.getEntities({ type: SOLDIER, location: p.location, maxDistance: 200 })) { try { e.remove(); } catch {} }
+  let n = 0;
+  for (const r of rows) {
+    try {
+      const [x, y, z, f, squad, div, weapon, armor, skin, func, stance, hp, xp, trait, seed, medals, custom, mount] = r;
+      if (!dim.getBlock({ x, y, z })) continue;                                 // (not loaded: skipped)
+      const e0 = dim.spawnEntity(SOLDIER, { x, y, z }, { spawnEvent: "war:init" });
+      const e = setupSoldier(e0, { faction: f, squad, weapon, ranged: isRangedW(weapon), div, radius: 8, func: "__none", owner: p.id, armor, skin: skin || undefined, custom: custom || undefined, mount: mount || undefined }, p) ?? e0;
+      sdp(e, "war:xp", xp); sdp(e, "war:trait", trait); sdp(e, "war:nseed", seed); if (medals) setP(e, "war:medals", medals); setP(e, "war:vet", vetTier(e));
+      sdp(e, "war:stance", stance);
+      const f2 = ANCHORED.includes(func) || ["follow", "escort", "squad"].includes(func) ? func : "hold";
+      giveFunction(e, f2, p, ANCHORED.includes(f2) ? makeWaypoint(dim, { x, y, z }) : undefined);
+      system.runTimeout(() => { try { const h = e.getComponent("minecraft:health"); if (h) h.setCurrentValue(Math.max(1, Math.min(h.effectiveMax, hp))); updateName(e); } catch {} }, 5);
+      n++;
+    } catch {}
+  }
+  return n;
+}
+async function battleSaveMenu(p) {
+  const meta = getJSON(world, "war:bsaves", {});
+  const f = new ActionFormData().title("Save / load battles").body("Saves every soldier within 200 blocks of you: who they are, their kit, rank, health, job and where they stand.");
+  for (let s = 1; s <= BSLOTS; s++) f.button(meta[s] ? `Slot ${s}: ${meta[s].n} soldiers\n§8${meta[s].when}` : `Slot ${s}: empty`);
+  const r = await show(f, p); if (!r || r.canceled || r.selection === undefined) return;
+  const slot = r.selection + 1;
+  const a = new ActionFormData().title(`Slot ${slot}`).button("Save the battle here (overwrites)");
+  if (meta[slot]) a.button("Load it (keep the soldiers here now)").button("Load it, removing the soldiers here now").button("§cDelete this save");
+  const ar = await show(a, p); if (!ar || ar.canceled || ar.selection === undefined) return;
+  if (ar.selection === 0) { const n = battleSave(p, slot); p.sendMessage(`§aSaved ${n} soldiers to slot ${slot}.`); }
+  else if (ar.selection === 1 || ar.selection === 2) { const n = battleLoad(p, slot, ar.selection === 2); p.sendMessage(n < 0 ? "§cThat slot is empty." : `§aLoaded ${n} soldiers from slot ${slot}.`); }
+  else { for (let i = 0; i < 40; i++) world.setDynamicProperty(`war:bsave${slot}_${i}`, undefined); delete meta[slot]; setJSON(world, "war:bsaves", meta); p.sendMessage(`§7Slot ${slot} deleted.`); }
+}
