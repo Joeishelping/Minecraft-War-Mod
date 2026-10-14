@@ -1937,3 +1937,94 @@ KS.skinmix = async (o, ox, oz) => {
   setJSON(world, "war:vlang", keepL); setJSON(world, "war:fskins", k1); setJSON(world, "war:fgroups", k2);
   return r;
 };
+// v9.19: second-guessing meter: decision changes, flip-flops (A->B->A within 3 s) and which pairs flip, movement
+// reversals, yaw flicks, target switches, goal-group changes (the game's own movement switching)
+async function churn(list, T) {
+  const st = new Map(), pairs = {}; let acts = 0, flips = 0, tsw = 0, gsw = 0, rev = 0, moves = 0, flick = 0, turns = 0, samples = 0, bigFlick = 0;
+  for (let k = 0; k < T; k++) {
+    await kitWait(1);
+    const now = tick();
+    for (const e of list) {
+      if (!e?.isValid) continue;
+      let S = st.get(e.id); if (!S) { S = { hist: [] }; st.set(e.id, S); }
+      const B = brain.get(e.id), act = B?.act ?? "", g = getJSON(e, "war:st", {}).g ?? "", tg = gunState.get(e.id)?.target?.id ?? "";
+      samples++;
+      if (S.act !== undefined && act !== S.act) {
+        acts++; S.hist.push({ a: act, t: now });
+        const h = S.hist; if (h.length >= 3 && h[h.length - 3].a === act && now - h[h.length - 3].t <= 60) { flips++; const kk = `${h[h.length - 2].a}<>${act}`; pairs[kk] = (pairs[kk] ?? 0) + 1; }
+        if (h.length > 6) h.shift();
+      }
+      if (S.g !== undefined && g !== S.g) gsw++;
+      if (S.tg !== undefined && tg !== S.tg && tg && S.tg) tsw++;
+      const v = e.getVelocity(), r = e.getRotation();
+      if (S.v) { const sp = Math.hypot(v.x, v.z), lsp = Math.hypot(S.v.x, S.v.z); if (sp > 0.04 && lsp > 0.04) { moves++; if ((v.x * S.v.x + v.z * S.v.z) / (sp * lsp) < -0.3) rev++; } }
+      if (S.y !== undefined) { const dy = ((r.y - S.y + 540) % 360) - 180; if (Math.abs(dy) > 3) { turns++; if (S.dy && Math.sign(dy) !== Math.sign(S.dy)) { flick++; if (Math.abs(dy) > 12 && Math.abs(S.dy) > 12 && now - (S.dyT ?? -99) < 10) bigFlick++; } S.dy = dy; S.dyT = now; } }
+      S.act = act; S.g = g; S.tg = tg; S.v = v; S.y = r.y;
+    }
+  }
+  const perMin = (n) => +((n / Math.max(1, list.length)) * (1200 / T)).toFixed(1);
+  return { actsPerMin: perMin(acts), flipsPerMin: perMin(flips), groupSwPerMin: perMin(gsw), targetSwPerMin: perMin(tsw), revPct: +(100 * rev / Math.max(1, moves)).toFixed(1), flickPerTurn: +(flick / Math.max(1, turns)).toFixed(2), bigFlickPerMin: perMin(bigFlick), topFlips: Object.entries(pairs).sort((a, b) => b[1] - a[1]).slice(0, 8).map(([k, v]) => `${k}:${v}`) };
+}
+KS.brainy = async (o, ox, oz) => {
+  floorAt(ox - 40, oz - 40, ox + 40, oz + 40);
+  const res = {};
+  // a line of cover in the middle (half walls), like a real field
+  for (const z of [oz - 8, oz + 8]) for (let x = ox - 12; x <= ox + 12; x += 4) { kset(x, Y, z, "cobblestone_wall"); kset(x + 1, Y, z, "cobblestone_wall"); }
+  const idle = [...Array(6).keys()].map((i) => kitSoldier(1, { x: ox - 30 + i * 2 + 0.5, y: Y, z: oz - 30.5 }, i % 2 ? "rifle" : "smg", "hold"));
+  await kitWait(40); res.idle = await churn(idle, 300);
+  for (const e of idle) try { e.remove(); } catch {}
+  setRelPair(1, 2, "1", true);
+  const n = o.n ?? 6;
+  const a = [...Array(n).keys()].map((i) => kitSoldier(1, { x: ox - 10 + i * 3 + 0.5, y: Y, z: oz - 16.5 }, ["rifle", "smg", "rifle", "semi", "mg", "rifle"][i % 6], "hold"));
+  const b = [...Array(n).keys()].map((i) => kitSoldier(2, { x: ox - 10 + i * 3 + 0.5, y: Y, z: oz + 16.5 }, ["rifle", "smg", "rifle", "semi", "mg", "rifle"][i % 6], "hold"));
+  for (const e of [...a, ...b]) try { e.addEffect("resistance", 3000, { amplifier: 3, showParticles: false }); e.addEffect("regeneration", 3000, { amplifier: 2, showParticles: false }); } catch {}
+  await kitWait(40); res.fight = await churn([...a, ...b], o.t ?? 600);
+  for (const e of [...a, ...b]) try { e.remove(); } catch {}
+  // a squad ordered across the field
+  const m = [...Array(6).keys()].map((i) => kitSoldier(1, { x: ox - 30 + i * 2 + 0.5, y: Y, z: oz + 30.5 }, "rifle", "hold"));
+  await kitWait(20); await kitOrder(1, { x: ox + 30.5, y: Y, z: oz + 30.5 }, "hold");
+  res.march = await churn(m, 300);
+  for (const e of m) try { e.remove(); } catch {}
+  return res;
+};
+// who turns a man: every setRotation / teleport-with-rotation on him, with the line that did it
+KS.whoturns = async (o, ox, oz) => {
+  floorAt(ox - 40, oz - 40, ox + 40, oz + 40);
+  const m = [...Array(4).keys()].map((i) => kitSoldier(1, { x: ox - 30 + i * 2 + 0.5, y: Y, z: oz + 0.5 }, "rifle", "hold"));
+  await kitWait(20);
+  const P0 = Object.getPrototypeOf(m[0]), ids = new Set(m.map((e) => e.id)), by = {};
+  const line = () => (String(new Error().stack).split("\n").map((l) => Number((l.match(/main\.js:(\d+)/) ?? [])[1] ?? 0)).filter((n) => n > 40).slice(0, 2).join(">"));
+  const oS = P0.setRotation, oT = P0.teleport;
+  P0.setRotation = function (r) { if (ids.has(this.id)) { const k = `rot@${line()}`; by[k] = (by[k] ?? 0) + 1; } return oS.call(this, r); };
+  P0.teleport = function (l, opt) { if (ids.has(this.id) && opt?.rotation) { const k = `tp@${line()}`; by[k] = (by[k] ?? 0) + 1; } return oT.call(this, l, opt); };
+  if (o.fight) { setRelPair(1, 2, "1", true); const b = [...Array(4).keys()].map((i) => kitSoldier(2, { x: ox - 3 + i * 2 + 0.5, y: Y, z: oz + 25.5 }, "rifle", "hold")); for (const e of [...m, ...b]) e.addEffect("resistance", 3000, { amplifier: 3, showParticles: false }); }
+  else await kitOrder(1, { x: ox + 30.5, y: Y, z: oz + 0.5 }, "hold");
+  const tr = []; let last = m[0].getRotation().y;
+  const c = await churn(m, 200);
+  P0.setRotation = oS; P0.teleport = oT;
+  return { churn: c, by };
+};
+KS.yawser = async (o, ox, oz) => {
+  floorAt(ox - 40, oz - 40, ox + 40, oz + 40);
+  const m = [...Array(4).keys()].map((i) => kitSoldier(1, { x: ox - 30 + i * 2 + 0.5, y: Y, z: oz + 0.5 }, "rifle", "hold"));
+  await kitWait(20); await kitOrder(1, { x: ox + 30.5, y: Y, z: oz + (o.dz ?? 0) + 0.5 }, "hold");
+  const tr = []; let ly = m[1].getRotation().y;
+  for (let k = 0; k < 160; k++) { await kitWait(1); const r = m[1].getRotation(), l = m[1].location; const dy = ((r.y - ly + 540) % 360) - 180; ly = r.y; if (Math.abs(dy) > 0.5) tr.push(`${k}:${Math.round(r.y)}(${Math.round(dy)})${gliders.has(m[1].id) ? "G" : ""}`); }
+  for (const e of m) try { e.remove(); } catch {}
+  return { tr: tr.join(" ") };
+};
+KS.mktrace = async (o, ox, oz) => {
+  floorAt(ox - 40, oz - 40, ox + 40, oz + 40);
+  const m = [...Array(4).keys()].map((i) => kitSoldier(1, { x: ox - 30 + i * 2 + 0.5, y: Y, z: oz + 0.5 }, "rifle", "hold"));
+  await kitWait(20); await kitOrder(1, { x: ox + 30.5, y: Y, z: oz + (o.dz ?? 12) + 0.5 }, "hold");
+  const w = m[Number(o.i ?? 1)], tr = []; let ly = w.getRotation().y;
+  for (let k = 0; k < 200; k++) {
+    await kitWait(1);
+    const r = w.getRotation(), l = w.location, s = Number(gdp(w, "war:mymk") ?? 0), mp = mkPos.get(s);
+    const dy = ((r.y - ly + 540) % 360) - 180; ly = r.y;
+    const toMk = mp ? Math.round((Math.atan2(-(mp.x - l.x), mp.z - l.z) * 180) / Math.PI) : "-";
+    if (Math.abs(dy) > 8) tr.push(`${k}:y${Math.round(r.y)}(${Math.round(dy)}) mk${toMk}@${mp ? Math.round(Math.hypot(mp.x - l.x, mp.z - l.z) * 10) / 10 : "-"} g=${getJSON(w, "war:st", {}).g}${gliders.has(w.id) ? " G" : ""}`);
+  }
+  for (const e of m) try { e.remove(); } catch {}
+  return { tr };
+};

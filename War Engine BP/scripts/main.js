@@ -4352,9 +4352,15 @@ function gunTick(e, now) {
     const ps = perc.get(e.id);
     const prev = st.target;
     const t = ps?.threat;
-    st.target = t && t.isValid && canHit(e, t) ? t : undefined;         // only targets the bullet can actually reach
+    const tHit = !!(t && t.isValid && canHit(e, t));
+    if (tHit) { st.hitT = now; st.hitId = t.id; }
+    st.target = tHit ? t : undefined;                                   // only targets the bullet can actually reach
     if (!st.target && prev?.isValid && prev !== t && !downed.has(prev.id) && canHit(e, prev)) st.target = prev;   // (v7.0: still on the one he's shooting: no flip-flopping, which reset his aim every time)
-    if (!st.target && !onNest && (t?.isValid || ps?.alert !== "calm" || squads.get(squadKey(e, d))?.known?.size)) st.target = altTarget(e, d, now);   // (v7.0: the one he's watching is out of reach: any other enemy he CAN hit)
+    // v9.19: the man he's fighting ducked out of sight a moment ago: he keeps his sights where he was for 2 s, ready for
+    // him to show again, instead of swinging onto someone else and straight back (the head-flicking in a firefight)
+    const waiting = !st.target && t?.isValid && st.hitId === t.id && now - (st.hitT ?? -999) < 40 && !downed.has(t.id);
+    if (!st.target && !waiting && !onNest && (t?.isValid || ps?.alert !== "calm" || squads.get(squadKey(e, d))?.known?.size)) st.target = altTarget(e, d, now);   // (v7.0: the one he's watching is out of reach: any other enemy he CAN hit)
+    if (waiting) { const c = altTarget(e, d, now); if (c && dist(c.location, e.location) < 8) st.target = c; }   // (unless another is right on top of him)
     if (st.target && (!prev || prev.id !== st.target.id)) {
       if (!prev && Math.random() < 0.25) callout(e, "Enemy spotted!");   // (v6.9.1: eyes on a new one)
       const ang = facingAngle(e, st.target.location);          // new target: the aim needs to settle
@@ -4878,7 +4884,7 @@ function engagement(e, d, now, orderGoal, melee) {
   const t = s.threat;
   if (t && t.isValid) {
     if (stance === "holdfire" && !isProvoker(d.faction, t, now)) return undefined; // hold fire until someone of ours is attacked
-    turnTo(e, t.location);
+    { const gt = gunState.get(e.id)?.target; turnTo(e, (gt?.isValid && !downed.has(gt.id) ? gt : t).location); }   // (v9.19: one place to look: the man his gun is on, else his threat; two disagreeing turned his head back and forth)
     const dd = dist(t.location, e.location);
     if (anchor && flat(t.location, anchor.location) > leash) {        // fight from the post
       // v6.4: ...from the best spot of it: no shot from where he stands (behind a merlon, back from a window) -> the
@@ -6776,7 +6782,12 @@ function brainMove(e, d, now, melee, anchor, leash) {
     let Bg = brain.get(e.id); if (!Bg) { Bg = { act: "", decT: -999 }; brain.set(e.id, Bg); }
     return buildingRole(e, d, now, S, Bg, undefined);
   }
-  if (!S || !S.known.size) { brain.delete(e.id); return undefined; }
+  if (!S || !S.known.size) {                                           // (v9.19: a moment with no enemy in the list doesn't wipe his mind: 3 s)
+    if (S) S.emptyT ??= now;
+    if (!S || now - S.emptyT > 60) brain.delete(e.id);
+    return undefined;
+  }
+  S.emptyT = undefined;
   if (["charge", "follow", "patrol"].includes(d.func)) {
     const n0 = nearestKnownB(S, e);
     const hit = now - (hurtBy.get(e.id)?.t ?? -999) < 100 || now - (firedAt.get(e.id)?.t ?? -999) < 60;
@@ -6858,8 +6869,13 @@ function brainMove(e, d, now, melee, anchor, leash) {
     }
     opts.sort((a, b) => b[1] - a[1]);
     const prevAct = B.act;
+    // v9.19: commitment. He sticks with what he's doing unless something else is clearly better (by more in the first
+    // two seconds of it): re-scored every half second with no preference, a hair's difference flipped him between
+    // firing, peeking and holding, and he looked like he couldn't make up his mind.
+    { const cur = opts.find((o) => o[0] === prevAct);
+      if (cur && cur !== opts[0] && cur[1] > 0 && opts[0][1] - cur[1] < (now - (B.actT ?? -999) < 40 ? 0.6 : 0.25)) { opts.splice(opts.indexOf(cur), 1); opts.unshift(cur); } }
     B.act = opts[0][0];
-    if (B.act !== prevAct) decisionLine(e, B.act, underFire);           // (v6.9.1: what he's doing, out loud)
+    if (B.act !== prevAct) { B.actT = now; decisionLine(e, B.act, underFire); }           // (v6.9.1: what he's doing, out loud)
     B.spot = undefined;
     const ts = (o) => { const r = tac ? tacSpot(e, d, S, { anchor, leash, ...o }, now) : undefined; if (r?.spot) B.reachSpot = r.spot; return r; };   // (its spot is known reachable)
     if (B.act === "cover") {
@@ -9063,9 +9079,11 @@ function stepAlong(e, pts, i, firm = false) {
 function sideBySide(e, m, pts, k, tgt) {
   const n = m.members.indexOf(e.id); if (n <= 0) return undefined;
   const lane = [0, 1, -1, 2, -2, 3, -3][n % 7]; if (!lane) return undefined;
-  const a = pts[Math.max(0, k - 2)], b = pts[k], L = Math.hypot(b.x - a.x, b.z - a.z);
-  if (L < 0.5) return undefined;
-  const sp = 2.2 * spacingSetting() / 1.5, x = b.x + (-(b.z - a.z) / L) * lane * sp, z = b.z + ((b.x - a.x) / L) * lane * sp;
+  // (v9.19: the line's direction over a longer stretch of the route: two grid points apart it flipped between straight
+  //  and diagonal, and the lane swung from one side to the other: the men zig-zagged and their heads swung with it)
+  const a = pts[Math.max(0, k - 6)], c = pts[Math.min(pts.length - 1, k + 4)], b = pts[k], L = Math.hypot(c.x - a.x, c.z - a.z);
+  if (L < 1.5) return undefined;
+  const sp = 2.2 * spacingSetting() / 1.5, x = b.x + (-(c.z - a.z) / L) * lane * sp, z = b.z + ((c.x - a.x) / L) * lane * sp;
   try {
     const w = walkableNear(e.dimension, x, z, b.y);
     if (!w || Math.abs(w.y - b.y) > 0.6 || dangerNear(e.dimension, w) || !straightReach(e.dimension, e.location, w) || !straightReach(e.dimension, w, tgt)) { return undefined; }
@@ -10078,8 +10096,13 @@ system.runInterval(() => {
       g.blocked = 0;
       const gt = gunState.get(id)?.target;                          // (v7.0: a target in sight: he faces him as he goes, and can fire)
       const aimT = gt?.isValid && dist(gt.location, e.location) < 40;
-      const look = aimT ? gt.location : (Math.hypot(nb.x - tx, nb.z - tz) > 0.3 ? nb : { x: tx + (tx - p.x) * 10, z: tz + (tz - p.z) * 10 });
-      const rot = faceRot(e, { x: tx, y, z: tz }, look, 22, aimT ? { x: gt.location.x, y: gt.location.y + 1.4, z: gt.location.z } : undefined, g.yaw);
+      // (v9.19: he looks where the route goes about 3 blocks on, not at the next grid corner: a staircase of points
+      //  turned his head left-right every step; small differences are let be, and he turns at a walking pace)
+      let look = gt?.isValid && aimT ? gt.location : undefined;
+      if (!look) { let acc = 0, q0 = { x: tx, z: tz }; for (let j = g.k + 1; j < pts.length; j++) { const q = pts[j]; acc += Math.hypot(q.x - q0.x, q.z - q0.z); q0 = q; look = q; if (acc >= 3) break; } }
+      if (!look || Math.hypot(look.x - tx, look.z - tz) < 0.3) look = { x: tx + (tx - p.x) * 10, z: tz + (tz - p.z) * 10 };
+      let rot = faceRot(e, { x: tx, y, z: tz }, look, aimT ? 22 : 12, aimT ? { x: gt.location.x, y: gt.location.y + 1.4, z: gt.location.z } : undefined, g.yaw);
+      if (!aimT && g.yaw !== undefined && Math.abs(((rot.y - g.yaw + 540) % 360) - 180) < 4) rot = { x: rot.x, y: g.yaw };
       g.yaw = rot.y;                                                  // (his heading remembered: no asking the game every step)
       e.teleport({ x: tx, y, z: tz }, { rotation: rot });
       if (Math.hypot(b.x - tx, b.z - tz) < 0.05) g.k++;
