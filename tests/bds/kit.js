@@ -1636,3 +1636,39 @@ KS.ammo = async (o, ox, oz) => {
   for (const e of [a, b]) try { e.remove(); } catch {}
   return r;
 };
+// v9.21: sleeping and the watch at night (and waking on contact); bodies cleared gracefully; undo; a reinforcement wave
+KS.worldlife = async (o, ox, oz) => {
+  floorAt(ox - 40, oz - 40, ox + 40, oz + 40);
+  const r = {};
+  setRelPair(1, 2, "1", true);
+  kcmd("time set midnight"); await kitWait(110);
+  const sq = [0, 1, 2, 3, 4, 5].map((i) => kitSoldier(1, { x: ox - 5 + i * 2 + 0.5, y: Y, z: oz + 0.5 }, "rifle", "hold"));
+  for (const e of sq) sdp(e, "war:ordt", -999999);
+  await kitWait(500);
+  r.night = NIGHT; r.asleep = sq.filter((e) => SLEEP.has(e.id)).length; r.watch = [...(WATCH.values())].map((w) => w.ids.size);
+  r.sleepProp = sq.filter((e) => e.getProperty("war:sleep")).length;
+  const en = kitSoldier(2, { x: ox + 0.5, y: Y, z: oz + 25.5 }, "rifle", "hold"); en.addEffect("resistance", 2000, { amplifier: 255, showParticles: false });
+  for (const e of sq) e.addEffect("resistance", 2000, { amplifier: 255, showParticles: false });
+  await kitWait(80); r.asleepAfterContact = sq.filter((e) => SLEEP.has(e.id)).length;
+  try { en.remove(); } catch {}
+  kcmd("time set noon"); await kitWait(110);
+  // undo: an order, then undo it
+  snapUndo(KIT_PLAYER, sq); const before = sq.map((e) => sd(e).func);
+  await kitOrder(1, { x: ox + 0.5, y: Y, z: oz + 30.5 }, "hold"); await kitWait(40);
+  const moved = sq.filter((e) => gdp(e, "war:catchup") !== undefined || sd(e).func === "charge").length;
+  UNDO.set(KIT_PLAYER.id, UNDO.get(KIT_PLAYER.id)); undoOrder(KIT_PLAYER); await kitWait(10);
+  r.undo = { before: before[0], movedByOrder: moved, after: sd(sq[0]).func, catchupAfter: sq.filter((e) => gdp(e, "war:catchup") !== undefined).length };
+  for (const e of sq) try { e.remove(); } catch {}
+  // bodies: 40 men killed in front of nobody: at most ~32 stay
+  for (const c of ow().getEntities({ type: "war:corpse" })) { try { c.remove(); } catch {} } CORPSES.length = 0; RD.clear();
+  const many = [...Array(40).keys()].map((i) => kitSoldier(1, { x: ox - 20 + (i % 10) * 4 + 0.5, y: Y, z: oz - 30 + Math.floor(i / 10) * 4 + 0.5 }, "rifle", "hold"));
+  await kitWait(20); for (const e of many) killReal(e); await kitWait(80);
+  r.bodies = ow().getEntities({ type: "war:corpse" }).filter((c) => !c.getProperty("war:gib")).length; r.tracked = CORPSES.length;
+  // a reinforcement wave
+  globalThis.__fakeLeader = (id) => (id === KIT_PLAYER.id ? KIT_PLAYER : undefined);
+  setReinf([{ id: 1, dim: "minecraft:overworld", at: { x: ox + 0.5, y: Y, z: oz - 35.5 }, f: 1, n: 4, mix: "mixguns", every: 10, waves: 1, to: { x: ox + 0.5, y: Y, z: oz + 10.5 }, mode: "spot", done: 0, next: 0, owner: KIT_PLAYER.id, squad: 9 }]);
+  const n0 = allOf(SOLDIER).length; await kitWait(160);
+  r.reinforced = allOf(SOLDIER).length - n0; r.reinfLeft = getReinf().length;
+  globalThis.__fakeLeader = undefined;
+  return r;
+};

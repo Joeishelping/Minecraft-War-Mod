@@ -152,6 +152,11 @@
           "type": "bool",
           "default": false,
           "client_sync": true
+        },
+        "war:sleep": {
+          "type": "bool",
+          "default": false,
+          "client_sync": true
         }
       }
     },

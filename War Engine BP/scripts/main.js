@@ -1757,7 +1757,7 @@ function spawnCorpse0(v, how) {
     try { dim.playSound("war.gibs", a, { volume: 0.9 }); } catch {}
   }
   sprayBlood(dim, chest(v), mask || how?.head || blast ? 1 : 0);
-  while (CORPSES.length > 24) { const o = CORPSES.shift(); try { world.getEntity(o.id)?.remove(); } catch {} RD.delete(o.id); }
+  pruneBodies();                                                    // (v9.21: the oldest go where nobody's looking, or sink away)
   return body;
 }
 world.afterEvents.entityDie.subscribe((ev) => {
@@ -2651,8 +2651,11 @@ async function batonUseInner(player) {
     const coalsO = getCoals().map((c, i) => ({ c, i })).filter((x) => (x.c.members ?? []).length >= 1);
     for (const x of coalsO) { facOpts.push({ coal: x.i }); ff.button(`§l⚑ ${x.c.name}§r\n${x.c.members.map((m) => factionLabel(m)).join(" ")}`); }
     for (let i = 1; i <= NF; i++) if (i !== playerFaction(player)) { facOpts.push(i); ff.button(factionLabel(i)); }
+    facOpts.push("signals"); ff.button("§2Hand signals§r\nto the soldiers around me"); facOpts.push("undo"); ff.button("§6Undo my last order");   // (v9.21)
     const fr = await show(ff, player);
     if (!fr || fr.canceled || fr.selection === undefined) return;
+    if (facOpts[fr.selection] === "signals") { await signalMenu(player); return; }
+    if (facOpts[fr.selection] === "undo") { undoOrder(player); return; }
     const pickF = facOpts[fr.selection], coalPick = typeof pickF === "object" ? pickF.coal : undefined;
     const fac = coalPick !== undefined ? 0 : pickF;
     const of = new ModalFormData().title(`Orders: ${coalPick !== undefined ? getCoals()[coalPick].name : factionLabel(fac, true)}`)
@@ -2844,6 +2847,7 @@ async function giveOrderInner(player, cfg, given) {
       return;
     }
   }
+  try { snapUndo(player, pool); } catch {}                          // (v9.21: "Undo my last order")
   let n = 0;
   for (const e of pool) {
     try {
@@ -3070,12 +3074,14 @@ async function placeFlag(player) {
 // ================================================================ War Table
 async function warTable(player, pre) {
   const af = new ActionFormData().title("War Table").body(`Your faction: ${factionLabel(playerFaction(player))}`)
-    .button("Join a faction").button("Leave my faction").button("Diplomacy").button("Name factions").button("Name squads").button("Settings").button("Coalitions").button("War archive").button("Test battle").button("Cleanup / repair").button("Neutral zones");
+    .button("Join a faction").button("Leave my faction").button("Diplomacy").button("Name factions").button("Name squads").button("Settings").button("Coalitions").button("War archive").button("Test battle").button("Cleanup / repair").button("Neutral zones").button("Reinforcements").button("Save / load battles");
   const r = pre !== undefined ? { selection: pre, canceled: false } : await show(af, player);
   if (!r || r.canceled || r.selection === undefined) return;
   if (r.selection === 8) { await testBattle(player); return; }
   if (r.selection === 9) { await cleanupMenu(player); return; }
   if (r.selection === 10) { await zoneMenu(player); return; }
+  if (r.selection === 11) { await reinfMenu(player); return; }               // (v9.21)
+  if (r.selection === 12) { await battleSaveMenu(player); return; }          // (v9.22)
   const pickFaction = async (title) => {
     const jf = new ActionFormData().title(title);
     for (const l of factionList()) jf.button(l);
@@ -4255,6 +4261,7 @@ function gunTick(e, now) {
   const d = sd(e);
   const onNest = ridingNest(e);
   if (SCOUTS.has(e.id) && now - Number(gdp(e, "war:hurt") ?? -9999) > 60) return;   // (v9.20: a scout doesn't give himself away)
+  if (SLEEP.has(e.id) || DESERT.has(e.id)) return;
   const arm = ARM.get(e.id);
   const spec = onNest ? NEST_SPEC : GUN_SPEC[arm?.arm === "pistol" ? "pistol" : d.weapon];
   if (pows.has(e.id)) return;
@@ -4593,7 +4600,7 @@ function perceive(e, now) {
   const visible = new Set();
   let best, bestScore = -1e9;
   for (const { o, dd } of cands) {
-    const reach = base * (0.35 + 0.65 * lightAt(e.dimension, o.location) / 15) * visibility(o, now);
+    const reach = base * (0.35 + 0.65 * lightAt(e.dimension, o.location) / 15) * visibility(o, now) * WEATHER_K * (SLEEP.has(e.id) ? 0.15 : 1);   // (v9.21: rain, a storm; asleep he only notices what's right on top of him)
     const asg = assist.get(e.id);
     const fa = firedAt.get(e.id);
     const attacking = attackedRecently(e, o, now) || (!!asg && asg.id === o.id && now - asg.t < 200) || (!!fa && fa.by === o.id && now - fa.t < 100);
@@ -9252,9 +9259,11 @@ const poseSeen = new Map(); // id -> { x, z, t } where he last stood still from
 function wantPose(e, now) {
   if (downed.has(e.id) || pows.has(e.id) || isRiding(e) || climbing.has(e.id) || inWater(e) || personal.has(e.id)) return 0;
   const d = sd(e);
-  { const v = e.getVelocity(), still = Math.hypot(v.x, v.z) < 0.03;                      // (v9.19)
+  if (d.surr || ((suppB.get(e.id) ?? 0) > 14 && now - (gunState.get(e.id)?.lastShot ?? -999) > 25 && d.div !== "cavalier")) {   // (v9.19; the cheap checks first)
+    const v = e.getVelocity(), still = Math.hypot(v.x, v.z) < 0.03;
     if (d.surr) return still ? 1 : 0;                                                    // hands up, on his knees
-    if (still && (suppB.get(e.id) ?? 0) > 14 && now - (gunState.get(e.id)?.lastShot ?? -999) > 25 && d.div !== "cavalier") return 3; }   // pinned: head down behind cover
+    if (still) return 3;                                                                 // pinned: head down behind cover
+  }
   if (d.surr || d.div === "cavalier" || d.div === "medic" || !GUNS.includes(d.weapon) || !P(e, "war:gun")) return 0;
   const l = e.location, ps = poseSeen.get(e.id);
   if (!ps || Math.hypot(l.x - ps.x, l.z - ps.z) > 0.35) { poseSeen.set(e.id, { x: l.x, z: l.z, t: now }); return 0; }   // moving: on his feet
@@ -11376,7 +11385,7 @@ system.runInterval(() => {
       if (!want) setP(e, "war:block", false);
     } catch {}
   }
-  for (const id of [...SHIELD_ON.keys()]) if (!world.getEntity(id)) { SHIELD_ON.delete(id); SHIELD_HIT.delete(id); BASH_T.delete(id); }
+  if (tick() % 1200 < 40) { const live = new Set(allOf(SOLDIER).map((q) => q.id)); for (const id of [...SHIELD_ON.keys()]) if (!live.has(id)) { SHIELD_ON.delete(id); SHIELD_HIT.delete(id); BASH_T.delete(id); } }   // (once a minute, no lookups)
 }, 40);
 // raised or lowered, and the bash
 system.runInterval(() => {
@@ -11735,7 +11744,7 @@ system.runInterval(() => {
       GLANCE.set(id, { yaw, until: now + 30 + Math.floor(Math.random() * 40), back: rest });
     } catch {}
   }
-  for (const id of [...REST_YAW.keys()]) if (!world.getEntity(id)) REST_YAW.delete(id);
+  if (now % 1200 < 20) { const live = new Set(allOf(SOLDIER).map((q) => q.id)); for (const id of [...REST_YAW.keys()]) if (!live.has(id)) REST_YAW.delete(id); }
 }, 20);
 system.runInterval(() => {
   const now = tick();
@@ -11861,7 +11870,8 @@ system.runInterval(() => {
       if (!S.ours?.length) continue;
       const live = S.ours.filter((o) => o.isValid && !downed.has(o.id));
       const ids = new Set(live.map((o) => o.id));
-      const free = live.filter((o) => { const b = gdp(o, "war:buddy"); return !b || !ids.has(String(b)) || gdp(world.getEntity(String(b)), "war:buddy") !== o.id; });
+      const byId = new Map(live.map((o) => [o.id, o]));
+      const free = live.filter((o) => { const b = gdp(o, "war:buddy"); return !b || !ids.has(String(b)) || gdp(byId.get(String(b)), "war:buddy") !== o.id; });
       while (free.length >= 2) {
         const a = free.shift(); let bi = 0, bd = 1e9;
         free.forEach((o, i) => { const dd = dist(o.location, a.location); if (dd < bd) { bd = dd; bi = i; } });
@@ -11955,17 +11965,19 @@ system.runInterval(() => {
 }, 2);
 // limping: a leg wound, or simply badly hurt; it eases as he heals
 system.runInterval(() => {
+  const now = tick();
   for (const e of allOf(SOLDIER)) {
     try {
+      if (!LIMP.has(e.id) && !P(e, "war:limp") && now - Number(gdp(e, "war:hurt") ?? -99999) > 2400) continue;   // (never hurt lately: nothing to check)
       const h = e.getComponent("minecraft:health"), r = h ? h.currentValue / h.effectiveMax : 1;
-      if (LIMP.has(e.id) && (r > 0.95 || tick() > LIMP.get(e.id))) LIMP.delete(e.id);   // (a leg wound: ~30 s, or till he's mended)
+      if (LIMP.has(e.id) && (r > 0.95 || now > LIMP.get(e.id))) LIMP.delete(e.id);   // (a leg wound: ~30 s, or till he's mended)
       const want = !downed.has(e.id) && !isRiding(e) && (LIMP.has(e.id) || r < 0.35);
       if (!!P(e, "war:limp") !== want) setP(e, "war:limp", want);
-      if (want) e.addEffect("slowness", 30, { amplifier: LIMP.has(e.id) ? 1 : 0, showParticles: false });
+      if (want) e.addEffect("slowness", 50, { amplifier: LIMP.has(e.id) ? 1 : 0, showParticles: false });
     } catch {}
   }
-  for (const m of [ARM_HIT, LIMP]) for (const id of [...m.keys()]) if (!world.getEntity(id)) m.delete(id);
-}, 20);
+  if (now % 1200 < 40) { const live = new Set(allOf(SOLDIER).map((q) => q.id)); for (const m of [ARM_HIT, LIMP]) for (const id of [...m.keys()]) if (!live.has(id)) m.delete(id); }
+}, 40);
 // calling his medic by name
 function callMedic(e) {
   try {
@@ -12095,7 +12107,7 @@ system.runInterval(() => {
       }
     } catch {}
   }
-  for (const id of [...RESERVE.keys()]) if (!world.getEntity(id)) { RESERVE.delete(id); OUT_OF.delete(id); }
+  if (now % 1200 < 40) { const live = new Set(allOf(SOLDIER).map((q) => q.id)); for (const id of [...RESERVE.keys()]) if (!live.has(id)) { RESERVE.delete(id); OUT_OF.delete(id); } }
 }, 40);
 // dry: bayonet
 WarAPI.on("think", (e, d, want) => { if (OUT_OF.has(e.id) && GUNS.includes(d.weapon) && !d.surr) { want.w = "w_melee"; want.t = "t_short"; want.r = "r_on"; } });
@@ -12389,3 +12401,252 @@ system.runInterval(() => {
     } catch { TRAPS.splice(i, 1); }
   }
 }, 4);
+
+// ================================================================ v9.21: the world and the command
+// ---- weather: rain and storms cut how far a man can make out another
+let WEATHER_K = 1;
+function setWeatherK(w) { const s = String(w ?? "").toLowerCase(); WEATHER_K = s.includes("thunder") ? 0.55 : s.includes("rain") ? 0.72 : 1; }
+try { world.afterEvents.weatherChange.subscribe((ev) => { try { if (String(ev.dimension ?? "overworld").includes("overworld")) setWeatherK(ev.newWeather); } catch {} }); } catch {}
+system.runTimeout(() => { try { setWeatherK(world.getDimension("overworld").getWeather?.()); } catch {} }, 40);
+
+// ---- camp life at night: off duty with nothing going on, men sleep where they are, one in three keeps watch (and
+// they take turns). The watch shouts at anything; a shot, a hit, an order or daylight and everybody's up.
+const SLEEP = new Map();     // id -> tick he lay down
+const WATCH = new Map();     // squad key -> { ids: Set, t }
+function wake(e) { if (!SLEEP.has(e.id)) return; SLEEP.delete(e.id); try { setP(e, "war:sleep", false); } catch {} }
+system.runInterval(() => {
+  const now = tick();
+  if (!NIGHT) { for (const id of [...SLEEP.keys()]) { const e = world.getEntity(id); if (e?.isValid) wake(e); else SLEEP.delete(id); } return; }
+  for (const [k, S] of squads) {
+    try {
+      if (!S.ours?.length) continue;
+      const busy = !!S.known?.size || (S.contactT >= 0 && now - S.t < 200 && S.known?.size);
+      const men = S.ours.filter((o) => o.isValid && !downed.has(o.id) && !pows.has(o.id) && !isRiding(o));
+      if (busy) { for (const o of men) if (SLEEP.has(o.id)) { wake(o); } continue; }
+      if (men.length < 2) continue;
+      // the watch: a third of them, rotating every ~2 minutes
+      let W = WATCH.get(k);
+      if (!W || now - W.t > 2400) { const off = W?.ids ?? new Set(); const pool = men.filter((o) => !off.has(o.id)); const n = Math.max(1, Math.ceil(men.length / 3)); W = { ids: new Set((pool.length >= n ? pool : men).slice(0, n).map((o) => o.id)), t: now }; WATCH.set(k, W); for (const id of W.ids) { const o = world.getEntity(id); if (o?.isValid) { wake(o); note(o, "on watch"); } } }
+      for (const o of men) {
+        if (W.ids.has(o.id) || SLEEP.has(o.id)) continue;
+        const d = sd(o); if (d.retreat || d.surr || seated.has(o.id) || personal.has(o.id) || now - Number(gdp(o, "war:ordt") ?? -99999) < 600 || now - Number(gdp(o, "war:hurt") ?? -99999) < 600) continue;
+        if (["charge", "follow", "escort", "patrol"].includes(d.func) || d.div === "guard") continue;
+        const v = o.getVelocity(); if (Math.hypot(v.x, v.z) > 0.02 || Math.random() > 0.25) continue;
+        if (!PLAYER_POS.some((p) => p.d === o.dimension.id && Math.abs(p.x - o.location.x) < 64 && Math.abs(p.z - o.location.z) < 64)) continue;   // (nobody to see it: why bother)
+        SLEEP.set(o.id, now); setP(o, "war:sleep", true); note(o, "asleep");
+      }
+    } catch {}
+  }
+}, 100);
+// woken by a shot fired near, a hit, an order
+world.afterEvents.entityHurt.subscribe((ev) => { try { const v = ev.hurtEntity; if (v?.typeId === SOLDIER && SLEEP.has(v.id)) wake(v); } catch {} });
+system.runInterval(() => {
+  if (!SLEEP.size) return;
+  const now = tick();
+  for (const [id] of [...SLEEP]) {
+    const e = world.getEntity(id); if (!e?.isValid) { SLEEP.delete(id); continue; }
+    try {
+      const S = squads.get(squadKey(e, sd(e)));
+      if (S?.known?.size || perc.get(id)?.threat || now - Number(gdp(e, "war:ordt") ?? -99999) < 40 || SHOTS.some((sh) => now - sh.t < 20 && Math.hypot(sh.x - e.location.x, sh.z - e.location.z) < 40)) { wake(e); note(e, "woken up"); }
+    } catch {}
+  }
+}, 10);
+WarAPI.registerBehavior({ name: "asleep", when: "first", priority: 130, decide(e) { return SLEEP.has(e.id) ? { g: "g_none", t: "t_off", urgent: false, note: "asleep" } : undefined; } });
+
+// ---- the dead, cleared gracefully: at most ~32 bodies; the oldest goes first, from where no player is looking. If
+// every old one is in sight, it sinks slowly into the ground instead of vanishing. Bodies older than 10 minutes go too.
+const SINKING = new Map();   // corpse id -> ticks left
+function bodySeen(c) {
+  try {
+    const l = c.location;
+    for (const p of PLAYERS_LIST) {
+      if (!p.isValid || p.dimension.id !== c.dimension.id) continue;
+      const dx = l.x - p.location.x, dz = l.z - p.location.z, L = Math.hypot(dx, dz);
+      if (L > 48) continue;
+      if (L < 12) return true;
+      const v = p.getViewDirection(), dot = (v.x * dx + v.z * dz) / (L * (Math.hypot(v.x, v.z) || 1));
+      if (dot > 0.5) return true;
+    }
+  } catch {}
+  return false;
+}
+function pruneBodies() {
+  const now = tick();
+  let over = CORPSES.length - 32;
+  const old = CORPSES.filter((o) => now - o.t > 12000);
+  for (const o of [...CORPSES]) {
+    if (over <= 0 && !old.includes(o)) break;
+    if (SINKING.has(o.id)) continue;
+    const c = world.getEntity(o.id);
+    if (!c?.isValid) { CORPSES.splice(CORPSES.indexOf(o), 1); RD.delete(o.id); over--; continue; }
+    if (bodySeen(c)) { if (over > 6 || old.includes(o)) { SINKING.set(o.id, 40); RD.delete(o.id); over--; } continue; }   // (in sight: it sinks; only if there's real pressure)
+    try { c.remove(); } catch {} RD.delete(o.id); CORPSES.splice(CORPSES.indexOf(o), 1); over--;
+  }
+}
+system.runInterval(() => {
+  if (CORPSES.length > 32 || (tick() % 600 === 0 && CORPSES.length)) pruneBodies();
+  for (const [id, n] of [...SINKING]) {
+    const c = world.getEntity(id);
+    if (!c?.isValid || n <= 0) { try { c?.remove(); } catch {} SINKING.delete(id); const i = CORPSES.findIndex((o) => o.id === id); if (i >= 0) CORPSES.splice(i, 1); continue; }
+    try { c.teleport({ x: c.location.x, y: c.location.y - 0.025, z: c.location.z }); } catch {}
+    SINKING.set(id, n - 1);
+  }
+}, 1);
+
+// ---- desertion: rare, at night, a beaten man with nothing left in him slips away from his squad and is gone
+const DESERT = new Map();    // id -> { at, t }
+system.runInterval(() => {
+  const now = tick();
+  if (NIGHT) for (const [k, S] of squads) {
+    try {
+      if (!S.ours?.length || S.known?.size || (S.desertNight ?? -1) === Math.floor(now / 24000)) continue;
+      const beaten = (squadMorale.get(k)?.m ?? 0) < 0 || (S.startN ?? 0) >= 4 && S.ours.length <= S.startN / 2;
+      for (const o of S.ours) {
+        if (!o.isValid || downed.has(o.id) || DESERT.has(o.id)) continue;
+        const d = sd(o); if (d.surr || d.div === "guard" || d.div === "medic" || OFFICER_IDS.has(o.id) || traitOf(o) === "brave" || vetTier(o) >= 2) continue;
+        const h = o.getComponent("minecraft:health"), low = h && h.currentValue / h.effectiveMax < 0.5;
+        const bad = (beaten ? 1 : 0) + (low ? 1 : 0) + ((GRIEF.get(o.id) ?? 0) > now - 6000 ? 1 : 0) + (OUT_OF.has(o.id) ? 1 : 0);
+        if (bad < 2 || Math.random() > 0.04) continue;
+        const c = S.ourC ?? o.location, ang = Math.random() * Math.PI * 2;
+        const at = walkableNear(o.dimension, c.x + Math.cos(ang) * 45, c.z + Math.sin(ang) * 45, c.y);
+        if (!at) continue;
+        S.desertNight = Math.floor(now / 24000);
+        DESERT.set(o.id, { at, t: now }); wake(o); equip(o, "air"); planPersonalTo(o, "settle", at, now);
+        radio(o, `${soldierName(o)} deserted during the night`, "story"); v9stat("desertion");
+        break;
+      }
+    } catch {}
+  }
+  for (const [id, D] of [...DESERT]) {
+    const e = world.getEntity(id);
+    if (!e?.isValid) { DESERT.delete(id); continue; }
+    const far = !PLAYER_POS.some((p) => p.d === e.dimension.id && Math.abs(p.x - e.location.x) < 24 && Math.abs(p.z - e.location.z) < 24);
+    if ((flat(e.location, D.at) < 4 || now - D.t > 2400) && far) { DESERT.delete(id); try { e.remove(); } catch {} continue; }   // (gone: nobody saw him go)
+    if (!personal.has(id) && now % 200 < 40) planPersonalTo(e, "settle", D.at, now);
+  }
+}, 40);
+WarAPI.registerBehavior({ name: "deserter", when: "first", priority: 140, decide(e) { return DESERT.has(e.id) ? { g: "g_none", t: "t_off", urgent: true, note: "deserting" } : undefined; } });
+WarAPI.on("think", (e, d, want) => { if (DESERT.has(e.id) || SLEEP.has(e.id)) { want.w = "w_none"; want.t = "t_off"; want.r = SLEEP.has(e.id) ? "r_off" : want.r; } });
+
+// ---- hand signals: quick orders to your own soldiers around you (within 48 blocks), pointing with your view
+function mySoldiers(p, r = 48) {
+  const pf = playerFaction(p);
+  return p.dimension.getEntities({ type: SOLDIER, location: p.location, maxDistance: r }).filter((e) => { try { const d = sd(e); return !d.surr && !downed.has(e.id) && (gdp(e, "war:cmdr") === p.id || (pf && d.faction === pf)) && d.div !== "medic"; } catch { return false; } });
+}
+async function signalMenu(p) {
+  const men = mySoldiers(p);
+  if (!men.length) { p.onScreenDisplay.setActionBar("§7No soldiers of yours within 48 blocks."); return; }
+  const f = new ActionFormData().title(`Hand signals (${men.length} men)`).button("Suppress where I'm looking").button("Attack where I'm looking").button("Take cover").button("Fall back (away from the enemy)").button("Hold fire").button("Open fire");
+  const r = await show(f, p);
+  if (!r || r.canceled || r.selection === undefined) return;
+  const now = tick(), spot = lookedSpot(p, 120);
+  const enemyAt = (pt) => { let best, bd = 8; for (const c of nearSnap(p.dimension.id, pt, 8)) { if (c.down || !c.f || !c.e.isValid || !isHostile(sd(men[0]).faction, c.f)) continue; if (c.dd < bd) { bd = c.dd; best = c.e; } } return best; };
+  if (r.selection === 0) {
+    const en = spot && enemyAt(spot);
+    if (!en) { p.onScreenDisplay.setActionBar("§7No enemy there to suppress."); return; }
+    let n = 0; for (const e of men) { const st = gunState.get(e.id); if (st && GUNS.includes(sd(e).weapon)) { st.supp = { p: chest(en), until: now + 160, ent: en }; n++; } }
+    p.onScreenDisplay.setActionBar(`§aSuppressing: ${n} guns on him.`); callout(men[0], "Suppressing!", { event: true });
+  } else if (r.selection === 1) {
+    if (!spot) { p.onScreenDisplay.setActionBar("§7Look at a spot on the ground first."); return; }
+    for (const e of men) planPersonalTo(e, "advance", { x: spot.x, y: spot.y, z: spot.z }, now);
+    p.onScreenDisplay.setActionBar(`§aAttacking that spot: ${men.length} men.`); callout(men[0], "Go, go, go!", { event: true });
+  } else if (r.selection === 2) {
+    let n = 0;
+    for (const e of men) { const seen = enemiesSeeing(e, sd(e).faction); const to = seen.length ? coverFrom(e.dimension, e.location, seen, now) : undefined; if (to) { planPersonalTo(e, "settle", to, now); n++; } }
+    p.onScreenDisplay.setActionBar(n ? `§aTaking cover: ${n} men.` : "§7Nobody's in anyone's sights: they stay put."); callout(men[0], "Take cover!", { event: true });
+  } else if (r.selection === 3) {
+    for (const e of men) {
+      const t = perc.get(e.id)?.threat, l = e.location;
+      const dx = t?.isValid ? l.x - t.location.x : l.x - p.location.x - (spot ? spot.x - p.location.x : 0), dz = t?.isValid ? l.z - t.location.z : l.z - p.location.z - (spot ? spot.z - p.location.z : 0), L = Math.hypot(dx, dz) || 1;
+      const to = walkableNear(e.dimension, l.x + (dx / L) * 20, l.z + (dz / L) * 20, l.y); if (to) planPersonalTo(e, "settle", to, now);
+    }
+    p.onScreenDisplay.setActionBar(`§aFalling back: ${men.length} men.`); callout(men[0], "Fall back!", { event: true });
+  } else {
+    const st = r.selection === 4 ? "holdfire" : "aggressive";
+    for (const e of men) { sdp(e, "war:stance", st); if (st === "holdfire") { const g = gunState.get(e.id); if (g) { g.target = undefined; g.supp = undefined; } } }
+    p.onScreenDisplay.setActionBar(st === "holdfire" ? "§eHold fire." : "§cOpen fire!"); callout(men[0], st === "holdfire" ? "Hold your fire!" : "Open fire!", { event: true });
+  }
+}
+
+// ---- undo: the last order you gave (who it went to, what each was doing and where), put back
+const UNDO = new Map();      // player id -> [{ id, func, home, stance, loc }]
+function snapUndo(p, pool) {
+  UNDO.set(p.id, pool.slice(0, 300).map((e) => { const d = sd(e), h = marker(Number(gdp(e, "war:home") ?? 0)); return { id: e.id, func: d.func, home: h ? { ...h.location } : { ...e.location }, stance: String(gdp(e, "war:stance") ?? "aggressive") }; }));
+}
+function undoOrder(p) {
+  const list = UNDO.get(p.id);
+  if (!list?.length) { p.onScreenDisplay.setActionBar("§7No order to undo."); return; }
+  let n = 0;
+  for (const s of list) {
+    const e = world.getEntity(s.id); if (!e?.isValid || downed.has(e.id) || sd(e).surr) continue;
+    try {
+      personal.delete(e.id); travelTo.delete(e.id);
+      sdp(e, "war:stance", s.stance);
+      const func = ["hold", "post", "sentry", "stand", "patrol", "follow", "escort", "squad"].includes(s.func) ? s.func : "hold";
+      const slot = ANCHORED.includes(func) ? makeWaypoint(e.dimension, s.home) : undefined;
+      giveFunction(e, func, p, slot); n++;
+    } catch {}
+  }
+  UNDO.delete(p.id);
+  p.onScreenDisplay.setActionBar(`§6Last order undone: ${n} men back to what they were doing.`);
+}
+
+// ---- reinforcement waves: a spot that sends a fresh squad every few minutes, marching on a target (a fixed spot, or
+// the nearest enemy at the time), for a number of waves or until removed (War Table > Reinforcements)
+function getReinf() { return getJSON(world, "war:reinf", []); }
+function setReinf(v) { setJSON(world, "war:reinf", v); }
+const REINF_MIX = [["mixguns", "Mixed guns"], ["rifle", "Rifles"], ["smg", "SMGs"], ["mixmelee", "Swords and crossbows"]];
+async function reinfMenu(p) {
+  const list = getReinf();
+  const f = new ActionFormData().title("Reinforcements").body(list.length ? "Points sending reinforcements:" : "No reinforcement points yet.").button("§aNew point where I'm standing");
+  list.forEach((R) => f.button(`${factionLabel(R.f, true)}: ${R.n} men every ${R.every} min\n${R.done}/${R.waves || "∞"} waves · tap to remove`));
+  const r = await show(f, p);
+  if (!r || r.canceled || r.selection === undefined) return;
+  if (r.selection > 0) { list.splice(r.selection - 1, 1); setReinf(list); p.onScreenDisplay.setActionBar("§7Reinforcement point removed."); return; }
+  const look = lookedSpot(p, 200);
+  const mf = new ModalFormData().title("New reinforcement point")
+    .dropdown("Faction", factionList(), { defaultValueIndex: Math.max(0, (playerFaction(p) || 1) - 1) })
+    .slider("Men per wave", 2, 20, { valueStep: 1, defaultValue: 6 })
+    .dropdown("Weapons", REINF_MIX.map((m) => m[1]), { defaultValueIndex: 0 })
+    .slider("Every (minutes)", 1, 10, { valueStep: 1, defaultValue: 3 })
+    .slider("Waves (0 = until removed)", 0, 20, { valueStep: 1, defaultValue: 5 })
+    .dropdown("Each wave marches on", [look ? "Where I was looking when I opened this" : "(look at a spot first)", "The nearest enemy at the time", "Nowhere: they hold at the point"], { defaultValueIndex: look ? 0 : 1 });
+  const fr = await show(mf, p);
+  if (!fr || fr.canceled || !fr.formValues) return;
+  const v = fr.formValues.map(Number);
+  const R = { id: Date.now(), dim: p.dimension.id, at: { x: p.location.x, y: p.location.y, z: p.location.z }, f: v[0] + 1, n: v[1], mix: REINF_MIX[v[2]][0], every: v[3], waves: v[4], to: v[5] === 0 && look ? { x: look.x, y: look.y, z: look.z } : undefined, mode: ["spot", "enemy", "hold"][v[5]], done: 0, next: Date.now() + 5000, owner: p.id, squad: 9 };
+  list.push(R); setReinf(list);
+  p.onScreenDisplay.setActionBar(`§aReinforcement point set: first wave in a few seconds.`);
+}
+system.runInterval(() => {
+  const list = getReinf(); if (!list.length) return;
+  let changed = false;
+  for (let i = list.length - 1; i >= 0; i--) {
+    const R = list[i];
+    try {
+      if (Date.now() < R.next) continue;
+      const dim = world.getDimension(R.dim);
+      if (!dim.getBlock(R.at)) continue;                                        // (not loaded: it waits)
+      const p = findPlayer(R.owner) ?? PLAYERS_LIST.find((q) => q.isValid && q.dimension.id === R.dim);
+      if (!p) continue;
+      const pool = [];
+      for (let k = 0; k < R.n; k++) {
+        const a = (k / R.n) * Math.PI * 2, rr = 1.5 + (k % 3);
+        const at = walkableNear(dim, R.at.x + Math.cos(a) * rr, R.at.z + Math.sin(a) * rr, R.at.y) ?? R.at;
+        const MIXG = ["rifle", "smg", "semi", "mg"], MIXM = ["sword", "crossbow"];
+        const w = R.mix === "mixguns" ? MIXG[k % 4] : R.mix === "mixmelee" ? MIXM[k % 2] : R.mix;
+        const e = dim.spawnEntity(SOLDIER, { x: at.x, y: at.y, z: at.z }, { spawnEvent: "war:init" });
+        const fin = setupSoldier(e, { faction: R.f, squad: R.squad, weapon: w, ranged: isRangedW(w), div: "foot", radius: 8, func: "__none", owner: p.id }, p) ?? e;
+        giveFunction(fin, "hold", p, makeWaypoint(dim, at)); pool.push(fin);
+      }
+      let dest = R.to;
+      if (R.mode === "enemy") { let bd = 250; for (const c of nearSnap(R.dim, R.at, 250)) if (!c.down && c.f && isHostile(R.f, c.f) && c.dd < bd) { bd = c.dd; dest = { x: c.x, y: c.y, z: c.z }; } }
+      if (dest && R.mode !== "hold") system.runTimeout(() => { try { giveOrderInner(p, { faction: R.f, order: 0, squad: 0, count: 0, radius: 400, stance: "aggressive", ao: 100, free: true, target: 5, cx: Math.floor(dest.x), cz: Math.floor(dest.z), cy: dest.y, then: "hold" }, pool.filter((q) => q.isValid)); } catch {} }, 10);
+      R.done++; R.next = Date.now() + R.every * 60000; changed = true;
+      for (const q of PLAYERS_LIST) { try { if (isFriendly(playerFaction(q), R.f)) q.sendMessage(`§7[Radio] §e${factionLabel(R.f, true)}§7: reinforcements have arrived (${R.n} men, wave ${R.done}${R.waves ? `/${R.waves}` : ""})`); } catch {} }
+      v9stat("reinforcements");
+      if (R.waves && R.done >= R.waves) list.splice(i, 1);
+    } catch {}
+  }
+  if (changed) setReinf(list);
+}, 100);

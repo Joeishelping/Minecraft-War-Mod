@@ -695,6 +695,58 @@
           ]
         }
       }
+    },
+    "animation.war.sleep": {
+      "loop": true,
+      "bones": {
+        "root": {
+          "rotation": [
+            -90,
+            0,
+            0
+          ],
+          "position": [
+            0,
+            2,
+            0
+          ]
+        },
+        "head": {
+          "rotation": [
+            0,
+            "math.sin(q.anim_time * 20) * 4",
+            0
+          ]
+        },
+        "rightArm": {
+          "rotation": [
+            0,
+            0,
+            "-6 - this"
+          ]
+        },
+        "leftArm": {
+          "rotation": [
+            0,
+            0,
+            "6 - this"
+          ]
+        },
+        "rightLeg": {
+          "rotation": [
+            "-this",
+            0,
+            0
+          ]
+        },
+        "leftLeg": {
+          "rotation": [
+            "-this",
+            0,
+            0
+          ]
+        }
+      }
     }
   }
 }

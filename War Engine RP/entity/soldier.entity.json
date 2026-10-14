@@ -589,6 +589,9 @@
           },
           {
             "cower": "q.property('war:pose') == 3 && !q.property('war:down') && !q.is_riding"
+          },
+          {
+            "sleep": "q.property('war:sleep') && !q.property('war:down') && !q.is_riding"
           }
         ]
       },
@@ -696,7 +699,8 @@
         "stagger": "animation.war.stagger",
         "limp": "animation.war.limp",
         "hands_up": "animation.war.hands_up",
-        "cower": "animation.war.cower"
+        "cower": "animation.war.cower",
+        "sleep": "animation.war.sleep"
       },
       "enable_attachables": true
     }
