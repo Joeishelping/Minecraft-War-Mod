@@ -747,6 +747,125 @@
           ]
         }
       }
+    },
+    "animation.war.idle_check": {
+      "loop": true,
+      "bones": {
+        "head": {
+          "rotation": [
+            "28 - this*0.3",
+            0,
+            0
+          ]
+        },
+        "body": {
+          "rotation": [
+            4,
+            0,
+            0
+          ]
+        }
+      }
+    },
+    "animation.war.idle_stretch": {
+      "loop": true,
+      "animation_length": 2.0,
+      "bones": {
+        "rightArm": {
+          "rotation": [
+            "-165 - this + math.sin(q.anim_time*180)*8",
+            0,
+            "-20 - this"
+          ]
+        },
+        "leftArm": {
+          "rotation": [
+            "-165 - this - math.sin(q.anim_time*180)*8",
+            0,
+            "20 - this"
+          ]
+        },
+        "body": {
+          "rotation": [
+            "-6 + math.sin(q.anim_time*180)*3",
+            0,
+            0
+          ]
+        },
+        "head": {
+          "rotation": [
+            "-20 - this*0.5",
+            0,
+            0
+          ]
+        }
+      }
+    },
+    "animation.war.idle_map": {
+      "loop": true,
+      "bones": {
+        "rightArm": {
+          "rotation": [
+            "-55 - this",
+            0,
+            "14 - this"
+          ]
+        },
+        "leftArm": {
+          "rotation": [
+            "-55 - this",
+            0,
+            "-14 - this"
+          ]
+        },
+        "head": {
+          "rotation": [
+            "32 - this*0.3",
+            "math.sin(q.anim_time*40)*10",
+            0
+          ]
+        }
+      }
+    },
+    "animation.war.idle_eat": {
+      "loop": true,
+      "animation_length": 3.0,
+      "bones": {
+        "rightArm": {
+          "rotation": [
+            "-100 - this + math.sin(q.anim_time*120)*25",
+            "-25",
+            0
+          ]
+        },
+        "head": {
+          "rotation": [
+            "-8 - this*0.3",
+            0,
+            0
+          ]
+        }
+      }
+    },
+    "animation.war.idle_talk": {
+      "loop": true,
+      "animation_length": 3.0,
+      "bones": {
+        "leftArm": {
+          "rotation": [
+            "-35 - this + math.sin(q.anim_time*150)*18",
+            0,
+            "-6 - this"
+          ]
+        },
+        "head": {
+          "rotation": [
+            "math.sin(q.anim_time*95)*5",
+            "math.sin(q.anim_time*60)*7",
+            0
+          ]
+        }
+      }
     }
   }
 }

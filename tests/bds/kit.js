@@ -1783,3 +1783,47 @@ KS.names2 = async (o, ox, oz) => {
   setJSON(world, "war:vlang", keep);
   return r;
 };
+// v9.19: off-duty life, sentry beat, scavenging the dead, blast shock
+KS.life = async (o, ox, oz) => {
+  floorAt(ox - 20, oz - 20, ox + 30, oz + 20);
+  setRelPair(1, 2, "1", true);
+  kcmd("time set noon");
+  const r = {};
+  const men = [0, 1, 2, 3, 4, 5].map((i) => kitSoldier(1, { x: ox + 10 + (i % 3) * 2.5 + 0.5, y: Y, z: oz + Math.floor(i / 3) * 2 + 0.5 }, "rifle", "hold"));
+  for (const e of men) sdp(e, "war:ordt", -999999);
+  const seen = new Set(); let gunHid = 0;
+  for (let i = 0; i < 40; i++) { await kitWait(20); for (const e of men) { const a = e.getProperty("war:idle"); if (a) { seen.add(a); if (!e.getProperty("war:gun")) gunHid++; } } }
+  r.idleActs = [...seen].sort(); r.gunHidSamples = gunHid;
+  // an enemy shows up: idling stops
+  const en = kitSoldier(2, { x: ox + 12.5, y: Y, z: oz + 25.5 }, "rifle", "hold"); en.addEffect("resistance", 600, { amplifier: 255, showParticles: false });
+  for (const e of men) e.addEffect("resistance", 600, { amplifier: 255, showParticles: false });
+  await kitWait(60); r.idleInFight = men.filter((e) => e.getProperty("war:idle")).length;
+  // blast nearby: the men round it are shaken
+  explode(ow(), { x: ox + 12.5, y: Y, z: oz + 6.5 }, 1, { breaksBlocks: false, causesFire: false });
+  await kitWait(2); r.shocked = men.filter((e) => (SHOCK.get(e.id) ?? 0) > tick()).length;
+  try { en.remove(); } catch {}
+  for (const e of men) try { e.remove(); } catch {}
+  // sentry walks a beat
+  const s = kitSoldier(1, { x: ox - 10.5, y: Y, z: oz - 10.5 }, "rifle", "sentry"); sdp(s, "war:ordt", -999999);
+  let far = 0; const s0 = { ...s.location };
+  for (let i = 0; i < 25; i++) { await kitWait(20); far = Math.max(far, flat(s.location, s0)); }
+  r.sentryBeat = Math.round(far * 10) / 10;
+  try { s.remove(); } catch {}
+  // dry rifleman takes a dead man's rounds
+  const dry = kitSoldier(1, { x: ox - 8.5, y: Y, z: oz + 8.5 }, "rifle", "hold");
+  await kitWait(10); RESERVE.set(dry.id, 0); OUT_OF.set(dry.id, tick());
+  BODY_KIT.set("fake-body", { dim: "minecraft:overworld", at: { x: ox + 2.5, y: Y, z: oz + 8.5 }, w: "rifle", n: 40, t: tick() });
+  for (let i = 0; i < 12; i++) { const g = gunState.get(dry.id); if (g) g.lastShot = tick(); await kitWait(25); if (!OUT_OF.has(dry.id)) break; }
+  r.scavenged = !OUT_OF.has(dry.id); r.reserve = RESERVE.get(dry.id); r.kitLeft = BODY_KIT.has("fake-body");
+  try { dry.remove(); } catch {}
+  return r;
+};
+KS.beat = async (o, ox, oz) => {
+  floorAt(ox - 20, oz - 20, ox + 20, oz + 20);
+  const s = kitSoldier(1, { x: ox + 0.5, y: Y, z: oz + 0.5 }, "rifle", "sentry"); sdp(s, "war:ordt", -999999);
+  const tr = [];
+  for (let i = 0; i < 15; i++) { await kitWait(20); const pr = personal.get(s.id); tr.push(`${Math.round(flat(s.location, { x: ox + 0.5, z: oz + 0.5 }) * 10) / 10}|${pr ? pr.kind : "-"}`); }
+  const r = { func: sd(s).func, goal: gdp(s, "war:goal"), mk: !!marker(Number(gdp(s, "war:goal") ?? 0)), known: squads.get(squadKey(s, sd(s)))?.known?.size, tr };
+  try { s.remove(); } catch {}
+  return r;
+};

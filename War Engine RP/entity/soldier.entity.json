@@ -592,6 +592,21 @@
           },
           {
             "sleep": "q.property('war:sleep') && !q.property('war:down') && !q.is_riding"
+          },
+          {
+            "idle_check": "q.property('war:idle') == 1 && !q.property('war:down') && !q.is_riding && !q.property('war:sleep')"
+          },
+          {
+            "idle_stretch": "q.property('war:idle') == 2 && !q.property('war:down') && !q.is_riding && !q.property('war:sleep')"
+          },
+          {
+            "idle_map": "q.property('war:idle') == 3 && !q.property('war:down') && !q.is_riding && !q.property('war:sleep')"
+          },
+          {
+            "idle_eat": "q.property('war:idle') == 4 && !q.property('war:down') && !q.is_riding && !q.property('war:sleep')"
+          },
+          {
+            "idle_talk": "q.property('war:idle') == 5 && !q.property('war:down') && !q.is_riding && !q.property('war:sleep')"
           }
         ]
       },
@@ -700,7 +715,12 @@
         "limp": "animation.war.limp",
         "hands_up": "animation.war.hands_up",
         "cower": "animation.war.cower",
-        "sleep": "animation.war.sleep"
+        "sleep": "animation.war.sleep",
+        "idle_check": "animation.war.idle_check",
+        "idle_stretch": "animation.war.idle_stretch",
+        "idle_map": "animation.war.idle_map",
+        "idle_eat": "animation.war.idle_eat",
+        "idle_talk": "animation.war.idle_talk"
       },
       "enable_attachables": true
     }

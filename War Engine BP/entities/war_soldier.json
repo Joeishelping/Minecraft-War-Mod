@@ -157,6 +157,15 @@
           "type": "bool",
           "default": false,
           "client_sync": true
+        },
+        "war:idle": {
+          "type": "int",
+          "range": [
+            0,
+            5
+          ],
+          "default": 0,
+          "client_sync": true
         }
       }
     },

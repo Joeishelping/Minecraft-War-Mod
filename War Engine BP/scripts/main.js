@@ -323,7 +323,7 @@ function mainhand(player) {
 // ================================================================ entity properties
 // Values set on the same tick an entity spawns can be dropped by the game, so every
 // property is mirrored in a dynamic property and re-applied until it sticks.
-const PROPS = ["war:faction", "war:skin", "war:ranged", "war:cav", "war:medic", "war:rally", "war:gun", "war:firing", "war:aiming", "war:down", "war:nest", "war:pose", "war:role", "war:officer", "war:vet", "war:medals"];
+const PROPS = ["war:idle", "war:faction", "war:skin", "war:ranged", "war:cav", "war:medic", "war:rally", "war:gun", "war:firing", "war:aiming", "war:down", "war:nest", "war:pose", "war:role", "war:officer", "war:vet", "war:medals"];
 const propMemo = new Map(); // "id|key" -> value read from the entity (only this add-on changes them, through setP)
 function P(e, key) {
   const v = gdp(e, `p_${key}`);
@@ -1368,6 +1368,8 @@ system.runInterval(() => {
 function freshSeen(e) {
   for (const [k, v] of [["war:pose", 0], ["war:firing", false], ["war:aiming", false]]) { try { if (e.getProperty(k) !== v) e.setProperty(k, v); } catch {} sdp(e, `p_${k}`, v); propMemo.delete(`${e.id}|${k}`); }
   poseOf.delete(e.id);
+  // v9.19: an off-duty moment or a sleep cut short by the reload: on his feet with his rifle again
+  try { if (P(e, "war:idle") || P(e, "war:sleep")) { setP(e, "war:idle", 0); setP(e, "war:sleep", false); if (!pows.has(e.id) && !gdp(e, "war:surr") && !downed.has(e.id)) equip(e, weaponItem(e)); } } catch {}
   try { if (gdp(e, "war:div") === "guard") { const h = e.getComponent("minecraft:health"); if (h && h.effectiveMax < 40) e.triggerEvent("war:hp_60"); } } catch {}
   try { setP(e, "war:role", roleFor(e)); } catch {}
 }
@@ -1769,10 +1771,10 @@ world.afterEvents.entityDie.subscribe((ev) => {
     if (v?.typeId !== SOLDIER || held.has(v.id)) return;
     const how = killHow.get(v.id); killHow.delete(v.id); lastHit.delete(v.id);
     const fb = FALLS.get(v.id);
-    if (fb) { FALLS.delete(v.id); const st = RD.get(fb); if (st) { st.fall = undefined; CORPSES.push({ id: fb, t: tick() }); system.run(() => { try { if (v.isValid) v.remove(); } catch {} }); return; } }
+    if (fb) { FALLS.delete(v.id); const st = RD.get(fb); if (st) { st.fall = undefined; CORPSES.push({ id: fb, t: tick() }); bodyKit(v, fb); system.run(() => { try { if (v.isValid) v.remove(); } catch {} }); return; } }
     const h2 = how ?? { dir: undefined, power: 0.12 }; if (downed.has(v.id)) h2.lying = true;   // (killed where he lay: he's already down)
     try { v.setProperty("war:hide", true); } catch {}                    // (v9.19: gone the same tick the body appears: no double, no red death tilt)
-    spawnCorpse(v, h2);
+    const body = spawnCorpse(v, h2); if (body) bodyKit(v, body.id);
     system.run(() => { try { if (v.isValid) v.remove(); } catch {} });          // (the body takes his place: no death spin)
   } catch {}
 });
@@ -3199,7 +3201,8 @@ async function warTable(player, pre) {
       .dropdown("Content", ["Vanilla (only what the game has: swords, spears, crossbows, vanilla mounts, no add-on vehicles)", "Light (no MG, sniper or bazooka; sensible mounts only)", "Full experience"], { defaultValueIndex: ["vanilla", "light", "full"].indexOf(contentMode()) })
       .toggle("Shields for swordsmen, spearmen and crossbowmen", { defaultValue: setting("shields", true) !== false })
       .toggle("Night battles: muzzle flashes and illumination flares", { defaultValue: setting("nightfx", true) !== false })
-      .toggle("Limited ammo (soldiers run low in long fights; refill from squad mates, trucks, rally flags or a quiet spell)", { defaultValue: setting("ammo", true) !== false });
+      .toggle("Limited ammo (soldiers run low in long fights; refill from squad mates, trucks, rally flags or a quiet spell)", { defaultValue: setting("ammo", true) !== false })
+      .toggle("Off duty: soldiers smoke as well as eat (camp life)", { defaultValue: setting("smoking", false) === true });
     const sr = await show(sf, player);
     if (!sr || sr.canceled || !sr.formValues) return;
     sdp(world, "war:set_capture", sr.formValues[0] === 0 ? "neutral" : "surrender");
@@ -3226,6 +3229,7 @@ async function warTable(player, pre) {
     sdp(world, "war:set_shields", !!sr.formValues[20]);
     sdp(world, "war:set_nightfx", !!sr.formValues[21]);
     sdp(world, "war:set_ammo", !!sr.formValues[22]);
+    sdp(world, "war:set_smoking", !!sr.formValues[23]);
     if (contentMode() !== cm0) player.sendMessage(`§eContent set to ${contentMode()}: soldiers switch their weapons and mounts over as they're near.`);
     player.sendMessage("§aSettings saved.");
     return warTable(player, 5);
@@ -3761,10 +3765,24 @@ world.afterEvents.entitySpawn.subscribe((ev) => {
 
 // ================================================================ Explosions that always go off
 // If crediting the blast to someone is refused by the game, explode anyway without credit.
+// v9.19: a blast close by (not close enough to hurt): the men near it duck, are half-deaf and slow for a few seconds
+const SHOCK = new Map();   // id -> tick it wears off
+function blastShock(dim, at, power) {
+  const now = tick(), r = power * 2.5 + 3;
+  for (const c of nearSnap(dim.id, at, r)) {
+    if (c.type !== SOLDIER || c.down || !c.e.isValid) continue;
+    SHOCK.set(c.id, now + 60 + Math.floor(Math.random() * 40));
+    const st = gunState.get(c.id); if (st) st.next = Math.max(st.next ?? now, now + 25 + Math.floor(Math.random() * 20));
+    try { setP(c.e, "war:react", 1); REACT_T.set(c.id, now + 10); c.e.addEffect("slowness", 50, { amplifier: 1, showParticles: false }); } catch {}
+    if (Math.random() < 0.3) note(c.e, "ears ringing");
+  }
+  if (SHOCK.size > 500) for (const [k, t] of [...SHOCK]) if (t < now) SHOCK.delete(k);
+}
 const BLASTS = []; // v9.7: recent explosions { dim, at, power, t } (bodies thrown away from them, the nearest ones torn apart)
 function explode(dim, loc, power, opts) {
   BLASTS.push({ dim: dim.id, at: { x: loc.x, y: loc.y, z: loc.z }, power, t: tick() }); if (BLASTS.length > 40) BLASTS.shift();
   try { rdBlast(dim, loc, power); } catch {}
+  try { blastShock(dim, loc, power); } catch {}
   try { dim.createExplosion(loc, power, opts); }
   catch { const o = { ...opts }; delete o.source; try { dim.createExplosion(loc, power, o); } catch {} }
   try { blastDamage(dim, loc, power, opts?.source); } catch {}
@@ -4340,9 +4358,16 @@ function gunTick(e, now) {
     return;
   }
   if (turnTo(e, t.location, 20) > 25) { st.next = now + 2; return; } // still turning toward him
+  // v9.19: how he stands: kneeling steadies the gun, running throws it off; an MG gunner who's just moved sets up first
+  let vel = 0; try { const q = e.getVelocity(); vel = Math.hypot(q.x, q.z); } catch {}
+  if (vel > 0.06) st.movedT = now;
+  if (d.weapon === "mg" && !onNest && !isRiding(e) && now - (st.movedT ?? -999) < 30) { if (st.movedT === now) note(e, "setting up the gun"); st.next = now + 4; return; }
+  const stance = vel > 0.12 ? 1.6 : vel > 0.06 ? 1.25 : (poseOf.get(e.id) ?? 0) === 1 ? 0.8 : 1;
+  st.burst = now - (st.lastShot ?? -999) <= Math.max(1, spec.gap) + 3 ? (st.burst ?? 0) + 1 : 0;
+  const climb = ["mg", "smg"].includes(d.weapon) ? 1 + Math.min(st.burst, 12) * 0.06 : 1;   // (the muzzle climbs through a long burst)
   const aim = aimAt(e, t);
   if (!aim) { st.next = now + 6; st.target = undefined; return; } // the shot would hit the terrain: don't waste it
-  const shaky = ((suppB.get(e.id) ?? 0) > 8 ? 1.8 : 1) * woundK(e) * vetAim(e) * ((ARM_HIT.get(e.id) ?? 0) > now ? 1.7 : 1) * ((poseOf.get(e.id) ?? 0) === 3 ? 2.5 : 1);   // (v9.19: a wounded arm; firing blind from cover)  // pinned down / badly wounded: shaky aim (v9.18: veterans steadier)
+  const shaky = ((suppB.get(e.id) ?? 0) > 8 ? 1.8 : 1) * woundK(e) * vetAim(e) * ((ARM_HIT.get(e.id) ?? 0) > now ? 1.7 : 1) * ((poseOf.get(e.id) ?? 0) === 3 ? 2.5 : 1) * stance * climb * ((SHOCK.get(e.id) ?? 0) > now ? 1.8 : 1);   // (v9.19: a wounded arm; firing blind from cover)  // pinned down / badly wounded: shaky aim (v9.18: veterans steadier)
   const fired = st.wild > 0 ? fireGun(e, { ...spec, spread: spec.spread * 3 * shaky }, t, aim) : fireGun(e, shaky === 1 ? spec : { ...spec, spread: spec.spread * shaky }, t, aim);
   if (!fired) { st.next = now + 4; aimMemo.delete(`${e.id}>${t.id}`); return; }   // (v6.9.2: no open line this instant: hold fire)
   if (st.wild > 0) st.wild--;
@@ -7127,7 +7152,7 @@ const heardLine = []; // recent lines: { key, dim, x, z, t } (nobody repeats a l
 const LINE_WIN = (key) => (IDLE_LINES.includes(key) ? 6000 : key === "medic" ? 240 : key === "hit" || key === "man_down" || key === "target_down" ? 60 : 100);   // (v6.9.1: 5 s for battle lines, was 8)
 const callGap = () => [120, 60, 30][Math.max(0, Math.min(2, Number(setting("vfreq", 1))))];   // per man: Low / Normal / High
 function playLine(dim, at, lang, key, pitch = 1, who) {
-  try { dim.playSound(`war.voice.${lang}.${key}`, at, { volume: 1.0, pitch }); } catch {}
+  try { dim.playSound(`war.voice.${lang}.${key}`, at, { volume: who?.vol ?? 1.0, pitch }); } catch {}
   v9stat(`say:${key}`);                                                   // (test statistics only)
   if (setting("vsubs", false) || who?.forceSubs) {
     const txt = `§7${who?.label ?? "Soldier"}:§f "${LINE_INFO[key]?.[0] ?? key}"`;
@@ -7158,7 +7183,14 @@ function callout(e, text, opt = {}) {
     while (heardLine.length && now - heardLine[0].t > 6000) heardLine.shift();
     if (heardLine.length > 300) heardLine.splice(0, heardLine.length - 300);
     const pitch = 0.92 + ((e.id.charCodeAt(e.id.length - 1) * 7) % 17) / 100 - (downed.has(e.id) ? 0.05 : 0);   // his own voice (weaker when he's down)
-    playLine(e.dimension, headLoc(e), lang, key, pitch, { label: `${factionLabel(f)}§7 ${e.typeId === SOLDIER ? soldierName(e) : squadName(f, sd(e).squad)}`, forceSubs: opt.subs });
+    // v9.19: at night with the enemy about but no shooting yet, it's said low (a whisper carries less far)
+    let vol = 1; try { if (NIGHT && !perc.get(e.id)?.threat && squads.get(squadKey(e, sd(e)))?.known?.size && !["hit", "medic", "man_down", "grenade"].includes(key)) vol = 0.35; } catch {}
+    playLine(e.dimension, headLoc(e), lang, key, pitch, { label: `${factionLabel(f)}§7 ${e.typeId === SOLDIER ? soldierName(e) : squadName(f, sd(e).squad)}${vol < 1 ? " §8(quietly)" : ""}`, forceSubs: opt.subs, vol });
+    // v9.19: the men round him look at whoever's talking (out of a fight)
+    if (!perc.get(e.id)?.threat) for (const c of nearSnap(did, l, 6)) {
+      if (c.type !== SOLDIER || c.id === e.id || c.down || c.f !== f || !c.e.isValid || GLANCE.has(c.id) || perc.get(c.id)?.threat || personal.has(c.id)) continue;
+      try { const cur = c.e.getRotation().y; GLANCE.set(c.id, { yaw: (Math.atan2(-(l.x - c.e.location.x), l.z - c.e.location.z) * 180) / Math.PI, until: now + 40 + Math.floor(Math.random() * 30), back: REST_YAW.get(c.id) ?? cur }); } catch {}
+    }
     if (!opt.force) afterLine(e, key, now);                                  // (a test line gets no answer)
     return true;
   } catch { return false; }
@@ -7437,8 +7469,8 @@ function medicMove(e, d, now) {
       mt.progT = now;
       if (isDowned(best)) {
         mt.reachT ??= now;
-        note(e, "treating a downed soldier");
-        if (now - mt.reachT >= 20) { revive(best, 8); creditSave(e); mt.reachT = undefined; note(e, "revived a soldier"); callout(e, "You're okay!", { event: true }); const rb = best; system.runTimeout(() => callout(rb, "Thanks!", { event: true }), 30); }
+        note(e, "treating a downed soldier"); KNEEL.set(e.id, now + 20); turnTo(e, best.location, 30);
+        if (now - mt.reachT >= 50) { revive(best, 8); creditSave(e); mt.reachT = undefined; note(e, "revived a soldier"); callout(e, "You're okay!", { event: true }); const rb = best; system.runTimeout(() => callout(rb, "Thanks!", { event: true }), 30); }
       }
       turnTo(e, best.location, 30);
       return { g: "g_none", t: "t_off", urgent: false };
@@ -9267,8 +9299,10 @@ world.afterEvents.entityHurt.subscribe((ev) => {
 // down as low as he can still shoot from.
 const poseOf = new Map();  // id -> 1 kneel, 2 prone
 const poseSeen = new Map(); // id -> { x, z, t } where he last stood still from
+const KNEEL = new Map();   // v9.19: id -> tick: on one knee (treating a wounded man)
 function wantPose(e, now) {
   if (downed.has(e.id) || pows.has(e.id) || isRiding(e) || climbing.has(e.id) || inWater(e) || personal.has(e.id)) return 0;
+  if ((KNEEL.get(e.id) ?? 0) > now) return 1;
   const d = sd(e);
   if (d.surr || ((suppB.get(e.id) ?? 0) > 14 && now - (gunState.get(e.id)?.lastShot ?? -999) > 25 && d.div !== "cavalier")) {   // (v9.19; the cheap checks first)
     const v = e.getVelocity(), still = Math.hypot(v.x, v.z) < 0.03;
@@ -9350,7 +9384,9 @@ function soldierTakes(e, captor) {
   const home = marker(Number(gdp(captor, "war:home") ?? 0));
   const at = { ...(fl?.location ?? home?.location ?? captor.location) };
   if (gdp(e, "war:surr")) { sdp(e, "war:surr", 0); sdp(e, "war:surrIso", undefined); }
+  const wasDown = downed.has(e.id);
   makePow(e, captor);
+  if (wasDown) { try { KNEEL.set(captor.id, tick() + 40); e.dimension.spawnParticle("minecraft:heart_particle", { x: e.location.x, y: e.location.y + 1.5, z: e.location.z }); note(captor, "bandaging a wounded prisoner"); v9stat("bandaged"); } catch {} }
   const pw = pows.get(e.id); pw.mode = "jail"; pw.at = at; pw.cf = cf; pw.t = tick();
   sdp(e, "war:pow", JSON.stringify(pw));
   applyRelations(e);
@@ -9378,7 +9414,7 @@ system.runInterval(() => {
       if (own) continue;
       const cap = near.filter((c) => c.type === SOLDIER && !c.down && c.f && isHostile(c.f, f) && !pows.has(c.id) && !gdp(c.e, "war:surr") && c.dd < (down ? 6 : 10)).sort((a, b) => a.dd - b.dd)[0];
       if (!cap) continue;
-      if (down) { const k = `${e.id}`; if (PRIZE.has(k)) continue; PRIZE.add(k); if (Math.random() < 0.5) continue; }   // (the wounded: half the time)
+      if (down) { const k = `${e.id}`; if (PRIZE.has(k)) continue; PRIZE.add(k); if (Math.random() < 0.2) continue; }   // (v9.19: the wounded: most of the time)
       soldierTakes(e, cap.e);
     } catch {}
   }
@@ -10332,7 +10368,7 @@ function squadSmoke(S, ours, known, now) {
   }
   // falling back to safety: most of the squad pulling back (retreat order, or broken) with the enemy in sight: a screen
   // between them and the enemy
-  if (!screenAt && nd >= 8 && nd <= 40 && ours.filter((e) => sd(e).retreat || shaken.has(e.id)).length * 2 > ours.length && look.length) {
+  if (!screenAt && nd >= 8 && nd <= 40 && ours.filter((e) => sd(e).retreat || shaken.has(e.id)).length * 3 > ours.length && look.length) {   // (v9.19: a third pulling back is enough)
     const L = nd; screenAt = { x: oc.x + ((near.x - oc.x) / L) * 5, y: oc.y, z: oc.z + ((near.z - oc.z) / L) * 5 }; why = "covering the pull-back";
   }
   // v9.5: covering the move: most of the squad is carrying out a fresh order (moving), they're under fire and the enemy is
@@ -10553,7 +10589,12 @@ function casevacMove(e, d, now) {
       downed.set(vid, Math.max(downed.get(vid) ?? now, now + 500)); try { sdp(v, "war:downed", downed.get(vid)); } catch {}   // pressure on the wound: he holds on
       const seen = enemiesSeeing(v, d.faction);
       const to = seen.length ? coverFrom(e.dimension, v.location, seen, now) : undefined;
-      if (to) { D.phase = "drag"; D.to = to; D.phaseT = now; v9stat("dragStart"); note(e, "dragging a wounded mate to cover"); radio(e, "dragging a wounded man to cover"); }
+      if (to) {
+        // v9.19: a short way under fire: dragged, kept low. Farther (or with smoke round him): over the shoulder, quicker
+        D.carry = flat(v.location, to) > 9 || !!(SMOKES.length && SMOKES.some((sm) => now <= sm.until && flat(sm, v.location) < 8));
+        D.phase = "drag"; D.to = to; D.phaseT = now; v9stat(D.carry ? "carryStart" : "dragStart");
+        note(e, D.carry ? "carrying a wounded mate to cover" : "dragging a wounded mate to cover"); radio(e, D.carry ? "carrying a wounded man to cover" : "dragging a wounded man to cover");
+      }
       else { D.phase = "aid"; D.phaseT = now; }
     } else {
       if (now - D.phaseT > 300) { dragEnd(vid); return undefined; }         // can't get to him
@@ -10563,10 +10604,13 @@ function casevacMove(e, d, now) {
     }
   }
   if (D.phase === "drag") {
-    if (flat(e.location, D.to) < 1.4 || now - D.phaseT > 260) { D.phase = "aid"; D.phaseT = now; }
+    if (flat(e.location, D.to) < 1.4 || now - D.phaseT > 260) {
+      D.phase = "aid"; D.phaseT = now;
+      if (D.carry) { try { const l = e.location, f = fwdFromYaw(e.getRotation().y), g = { x: l.x + f.x * 0.9, y: l.y, z: l.z + f.z * 0.9 }; const at = standAt(v.dimension, Math.floor(g.x), Math.floor(g.y), Math.floor(g.z)) ? g : { ...l }; downPos.set(vid, at); v.teleport(at); } catch {} }   // (put down in front of him)
+    }
     else {
-      note(e, "dragging a wounded mate to cover");
-      try { if (now % 20 === 0) e.addEffect("slowness", 24, { amplifier: 1, showParticles: false }); } catch {}
+      note(e, D.carry ? "carrying a wounded mate to cover" : "dragging a wounded mate to cover");
+      try { if (now % 20 === 0) e.addEffect("slowness", 24, { amplifier: D.carry ? 0 : 1, showParticles: false }); } catch {}
       const mv = travel(e, D.to, "medic", now, true);
       return mv ? { ...mv, t: "t_off" } : undefined;
     }
@@ -10574,7 +10618,7 @@ function casevacMove(e, d, now) {
   // first aid, kneeling beside him
   if (dd > 2.6 || dy > 1.8) { const mv = travel(e, v.location, "medic", now, true); return mv ? { ...mv, t: "t_off" } : undefined; }
   if (!D.aidT) { D.aidT = now; downed.set(vid, Math.max(downed.get(vid) ?? now, now + 400)); try { sdp(v, "war:downed", downed.get(vid)); } catch {} }   // the bleeding's stopped
-  note(e, "first aid");
+  note(e, "first aid"); KNEEL.set(e.id, now + 20);
   turnTo(e, v.location, 30);
   if (now - D.aidT >= 100) {
     revive(v, 4); creditSave(e); dragEnd(vid); v9stat("firstAidRevive");
@@ -10591,7 +10635,12 @@ system.runInterval(() => {
     try {
       const v = world.getEntity(vid), r = world.getEntity(D.by);
       if (!v?.isValid || !r?.isValid) continue;
-      const a = r.location, b = v.location, dx = b.x - a.x, dz = b.z - a.z, L = Math.hypot(dx, dz);
+      const a = r.location;
+      if (D.carry) {                                                          // (v9.19: over his shoulder, across it)
+        const yaw = r.getRotation().y, f = fwdFromYaw(yaw), p = { x: a.x - f.x * 0.15, y: a.y + 1.15, z: a.z - f.z * 0.15 };
+        downPos.set(vid, p); v.teleport(p, { rotation: { x: 0, y: yaw + 90 } }); continue;
+      }
+      const b = v.location, dx = b.x - a.x, dz = b.z - a.z, L = Math.hypot(dx, dz);
       if (L < 1.25) continue;
       const p = { x: a.x + (dx / L) * 1.1, y: a.y, z: a.z + (dz / L) * 1.1 };
       if (!standAt(v.dimension, Math.floor(p.x), Math.floor(p.y), Math.floor(p.z))) { p.x = a.x; p.z = a.z; }
@@ -11925,6 +11974,21 @@ system.runInterval(() => {
 // 4 Wound (went down and lived)
 function afterBattle(S, ours, now) {
   const since = S.contactT >= 0 ? S.contactT : now - 2400;
+  // v9.19: the sergeant counts heads on the radio, and the squad closes up on him
+  try {
+    const sgt = ours.find((o) => OFFICER_IDS.has(o.id)) ?? [...ours].sort((a, b) => rankTier(b) - rankTier(a))[0];
+    if (sgt) {
+      const n0 = Math.max(S.startN ?? ours.length, ours.length), hurt = (S.ours ?? []).filter((o) => o.isValid && downed.has(o.id)).length, lost = Math.max(0, n0 - ours.length - hurt);
+      radio(sgt, `${soldierName(sgt)}: head count, ${ours.length} of ${n0} on their feet${hurt ? `, ${hurt} wounded` : ""}${lost ? `, ${lost} lost` : ""}`, "story");
+      const sl = sgt.location; let i = 0;
+      for (const o of ours) {
+        if (o === sgt || ANCHORED.includes(sd(o).func) || ["charge", "follow", "escort"].includes(sd(o).func) || flat(o.location, sl) < 10) continue;
+        const a = (i++ / Math.max(1, ours.length)) * Math.PI * 2, to = walkableNear(o.dimension, sl.x + Math.cos(a) * 3, sl.z + Math.sin(a) * 3, sl.y);
+        if (to) planPersonalTo(o, "regroup", to, now);
+      }
+      if (i) v9stat("regroup");
+    }
+  } catch {}
   const cnt = (m, id) => (m.get(id) ?? []).filter((t) => t >= since).length;
   for (const e of ours) {
     try {
@@ -12051,7 +12115,13 @@ system.runInterval(() => {
         if (green.length >= Math.ceil(ours.length / 2) && Math.random() < 0.35) {
           S.routT = now; S.routFor = S.contactT; S.rallied = false; let n = 0;
           for (const o of green) if (breakNow(o, sd(o), now)) n++;
-          if (n) { callout(green[0], "Fall back!", { event: true }); radio(green[0], `${squadName(sd(green[0]).faction, sd(green[0]).squad)} is breaking!`, "story"); v9stat("rout"); }
+          if (n) {
+            callout(green[0], "Fall back!", { event: true }); radio(green[0], `${squadName(sd(green[0]).faction, sd(green[0]).squad)} is breaking!`, "story"); v9stat("rout");
+            try {   // (v9.19: whoever has smoke throws it between them and the enemy as they go)
+              const kn = [...S.known.values()][0], sm = ours.find((o) => canSmoke(o, sd(o), now));
+              if (kn && sm) { const l = sm.location, dx = kn.x - l.x, dz = kn.z - l.z, L = Math.hypot(dx, dz) || 1, k = Math.min(8, L / 2); throwSmoke(sm, { x: l.x + (dx / L) * k, y: l.y, z: l.z + (dz / L) * k }, "covering the retreat"); callout(sm, "Smoke out!", { event: true }); }
+            } catch {}
+          }
         }
       }
       // the rally: their sergeant, still standing, calls them back to him
@@ -12456,6 +12526,7 @@ function wake(e) { if (!SLEEP.has(e.id)) return; const b = SLEEP.get(e.id)?.bed;
 const BEDS_TAKEN = new Set();   // "x,y,z" of beds a man is sleeping in or walking to
 const GOING_TO_BED = new Map(); // id -> { at, key, t }
 function lieDown(o, now, bed) {
+  try { if (IDLE.has(o.id)) { IDLE.delete(o.id); setP(o, "war:idle", 0); } } catch {}
   SLEEP.set(o.id, { t: now, bed: bed?.key });
   setP(o, "war:sleep", true); setP(o, "war:gun", 0);                                 // (the rifle laid down beside him, not sticking up out of him)
   try { const at = bed ? { x: bed.x + 0.5, y: bed.y + 0.56, z: bed.z + 0.5 } : o.location; o.teleport(at, { rotation: { x: 0, y: Math.random() * 360 } }); } catch {}   // (each his own way: not lined up)
@@ -12753,18 +12824,34 @@ system.runInterval(() => {
     } catch {}
   }
 }, 10);
-// a man low on rounds walks over to a crate he can see nearby
+// v9.19: what the dead carried: a man out of rounds takes them off a body (his own side's or the enemy's)
+const BODY_KIT = new Map();   // corpse id -> { dim, at, w, n, t }
+function bodyKit(v, cid) {
+  try { const w = sd(v).weapon; if (!GUNS.includes(w)) return; const n = RESERVE.get(v.id) ?? AMMO_START[w] ?? 60; if (n < 5) return; BODY_KIT.set(cid, { dim: v.dimension.id, at: { ...v.location }, w, n, t: tick() }); if (BODY_KIT.size > 200) BODY_KIT.delete(BODY_KIT.keys().next().value); } catch {}
+}
+// a man low on rounds walks over to a crate he can see nearby, or to a body with a gun
 system.runInterval(() => {
-  if (!placed("crate").size || setting("ammo", true) === false) return;
+  if (setting("ammo", true) === false || !OUT_OF.size) return;
   const now = tick();
+  for (const [k, b] of [...BODY_KIT]) if (now - b.t > 6000) BODY_KIT.delete(k);
   for (const e of allOf(SOLDIER)) {
     try {
-      if (!OUT_OF.has(e.id) || downed.has(e.id) || personal.has(e.id)) continue;
-      const c = crateNear(e, 32); if (!c || dist(c, e.location) < 3) continue;
-      const to = walkableNear(e.dimension, c.x + 0.5, c.z + 1.5, c.y); if (to) { planPersonalTo(e, "settle", to, now); note(e, "going for ammo"); }
+      if (!OUT_OF.has(e.id) || downed.has(e.id) || pows.has(e.id)) continue;
+      const c = placed("crate").size ? crateNear(e, 32) : undefined;
+      if (c) { if (personal.has(e.id) || dist(c, e.location) < 3) continue; const to = walkableNear(e.dimension, c.x + 0.5, c.z + 1.5, c.y); if (to) { planPersonalTo(e, "settle", to, now); note(e, "going for ammo"); } continue; }
+      let best, bd = 20;
+      for (const [cid, b] of BODY_KIT) { if (b.dim !== e.dimension.id || Math.abs(b.at.y - e.location.y) > 3) continue; const dd = flat(b.at, e.location); if (dd < bd) { bd = dd; best = cid; } }
+      if (!best) continue;
+      const b = BODY_KIT.get(best);
+      if (bd < 2.2) {
+        const w = sd(e).weapon, n = b.w === w ? b.n : Math.ceil(b.n / 2);   // (another kind of gun: what fits, or near enough)
+        BODY_KIT.delete(best); giveAmmo(e, n); KNEEL.set(e.id, now + 30);
+        note(e, "took ammo off the dead"); v9stat("scavenged"); continue;
+      }
+      if (!personal.has(e.id)) planPersonalTo(e, "settle", b.at, now), note(e, "going for a dead man's ammo");
     } catch {}
   }
-}, 60);
+}, 30);
 
 // ---- undo: the last order you gave (who it went to, what each was doing and where), put back
 const UNDO = new Map();      // player id -> [{ id, func, home, stance, loc }]
@@ -12938,3 +13025,81 @@ async function battleSaveMenu(p) {
   else if (ar.selection === 1 || ar.selection === 2) { const n = battleLoad(p, slot, ar.selection === 2); p.sendMessage(n < 0 ? "§cThat slot is empty." : `§aLoaded ${n} soldiers from slot ${slot}.`); }
   else { for (let i = 0; i < 40; i++) world.setDynamicProperty(`war:bsave${slot}_${i}`, undefined); delete meta[slot]; setJSON(world, "war:bsaves", meta); p.sendMessage(`§7Slot ${slot} deleted.`); }
 }
+
+// ---- v9.19: off-duty life. Nothing going on and a player near enough to see: now and then a man checks his rifle,
+// stretches, studies a map, eats (or smokes: Settings), or two of them talk, facing each other. Anything happening
+// (an enemy, an order, moving off) ends it at once.
+const IDLE = new Map();   // id -> { act, until, gun }
+const IDLE_ACTS = [1, 2, 3, 4, 5];   // 1 rifle check, 2 stretch, 3 map, 4 eat/smoke, 5 talk
+function idleEnd(e) {
+  const I = IDLE.get(e.id); if (!I) return; IDLE.delete(e.id);
+  try { setP(e, "war:idle", 0); if (I.gun) equip(e, weaponItem(e)); } catch {}
+}
+system.runInterval(() => {
+  const now = tick();
+  for (const [id, I] of [...IDLE]) {
+    const e = world.getEntity(id);
+    if (!e?.isValid) { IDLE.delete(id); continue; }
+    try {
+      const v = e.getVelocity();
+      if (now >= I.until || perc.get(id)?.threat || personal.has(id) || downed.has(id) || Math.hypot(v.x, v.z) > 0.05 || now - Number(gdp(e, "war:ordt") ?? -99999) < 40) { idleEnd(e); continue; }
+      if (I.act === 4 && now % 20 === 0) {
+        const h = headLoc(e), f = fwdFromYaw(e.getRotation().y);
+        if (I.smoke) e.dimension.spawnParticle("minecraft:basic_smoke_particle", { x: h.x + f.x * 0.3, y: h.y - 0.1, z: h.z + f.z * 0.3 });
+        else if (Math.random() < 0.5) e.dimension.playSound("random.eat", e.location, { volume: 0.3 });
+      }
+    } catch { IDLE.delete(id); }
+  }
+}, 10);
+system.runInterval(() => {
+  if (!PLAYER_POS.length || perfLevel() === "low") return;
+  const now = tick();
+  for (const e of allOf(SOLDIER)) {
+    try {
+      const id = e.id;
+      if (IDLE.has(id) || Math.random() > 0.05) continue;
+      const l = e.location;
+      if (!PLAYER_POS.some((p) => p.d === e.dimension.id && Math.abs(p.x - l.x) < 24 && Math.abs(p.z - l.z) < 24)) continue;
+      const d = sd(e);
+      if (downed.has(id) || pows.has(id) || d.surr || SLEEP.has(id) || personal.has(id) || gliders.has(id) || isRiding(e) || perc.get(id)?.threat || squads.get(squadKey(e, d))?.known?.size || P(e, "war:sit")) continue;
+      if (now - Number(gdp(e, "war:ordt") ?? -99999) < 200 || ["charge", "escort", "follow"].includes(d.func) || d.div === "guard") continue;
+      const v = e.getVelocity(); if (Math.hypot(v.x, v.z) > 0.03) continue;
+      let act = IDLE_ACTS[Math.floor(Math.random() * IDLE_ACTS.length)];
+      if (act === 1 && !GUNS.includes(d.weapon)) act = 2;
+      if (act === 5) {   // a mate standing close who's free too
+        const m = nearSnap(e.dimension.id, l, 3.5).find((c) => c.type === SOLDIER && c.id !== id && !c.down && c.f === d.faction && c.e.isValid && !IDLE.has(c.id) && !personal.has(c.id) && !perc.get(c.id)?.threat);
+        if (!m) act = 3;
+        else {
+          const until = now + 100 + Math.floor(Math.random() * 80);
+          for (const [a, b] of [[e, m.e], [m.e, e]]) {
+            IDLE.set(a.id, { act: 5, until }); setP(a, "war:idle", 5);
+            GLANCE.set(a.id, { yaw: (Math.atan2(-(b.location.x - a.location.x), b.location.z - a.location.z) * 180) / Math.PI, until, back: REST_YAW.get(a.id) ?? a.getRotation().y });
+          }
+          if (Math.random() < 0.5) callout(e, "IDLE");
+          continue;
+        }
+      }
+      const I = { act, until: now + 60 + Math.floor(Math.random() * 80) };
+      if (act >= 2 && act <= 4 && P(e, "war:gun")) { I.gun = true; setP(e, "war:gun", 0); }   // (the rifle slung for it)
+      if (act === 4) I.smoke = setting("smoking", false) === true && Math.random() < 0.5;
+      IDLE.set(id, I); setP(e, "war:idle", act);
+    } catch {}
+  }
+}, 40);
+// ---- v9.19: sentries walk a short beat: a few steps one way along their post, a look round, back, the other way
+const BEAT = new Map();   // id -> which way next (1 / -1)
+system.runInterval(() => {
+  const now = tick();
+  for (const e of allOf(SOLDIER)) {
+    try {
+      const d = sd(e); if (d.func !== "sentry" || Math.random() > 0.45) continue;
+      if (downed.has(e.id) || personal.has(e.id) || SLEEP.has(e.id) || IDLE.has(e.id) || perc.get(e.id)?.threat || squads.get(squadKey(e, d))?.known?.size) continue;
+      const an = marker(Number(gdp(e, "war:goal") ?? 0)); if (!an) continue;
+      const side = BEAT.get(e.id) ?? 1; BEAT.set(e.id, -side);
+      const yaw = (Number(gdp(e, "war:nseed") ?? 0) % 4) * 90 + 45, f = fwdFromYaw(yaw), k = Math.min(6, Math.max(3, (d.radius ?? 8) / 2)) * side;   // (his own line, the same each time)
+      const to = walkableNear(e.dimension, an.location.x + f.x * k, an.location.z + f.z * k, an.location.y);
+      if (to && Math.abs(to.y - an.location.y) < 2) { planPersonalTo(e, "patrol", to, now); note(e, "walking his beat"); }
+    } catch {}
+  }
+  if (now % 6000 < 100) { const live = new Set(allOf(SOLDIER).map((q) => q.id)); for (const id of [...BEAT.keys()]) if (!live.has(id)) BEAT.delete(id); }
+}, 100);
