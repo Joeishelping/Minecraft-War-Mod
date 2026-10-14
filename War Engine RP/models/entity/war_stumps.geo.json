@@ -1,0 +1,191 @@
+{
+  "format_version": "1.12.0",
+  "minecraft:geometry": [
+    {
+      "description": {
+        "identifier": "geometry.war_stumps",
+        "texture_width": 64,
+        "texture_height": 64,
+        "visible_bounds_width": 5,
+        "visible_bounds_height": 4,
+        "visible_bounds_offset": [
+          0,
+          0,
+          0
+        ]
+      },
+      "bones": [
+        {
+          "name": "root",
+          "pivot": [
+            0,
+            0,
+            0
+          ]
+        },
+        {
+          "name": "t_a",
+          "parent": "root",
+          "pivot": [
+            0,
+            0,
+            0
+          ]
+        },
+        {
+          "name": "t_b",
+          "parent": "t_a",
+          "pivot": [
+            0,
+            0,
+            0
+          ]
+        },
+        {
+          "name": "t_g",
+          "parent": "t_b",
+          "pivot": [
+            0,
+            0,
+            0
+          ]
+        },
+        {
+          "name": "stump_h",
+          "parent": "t_g",
+          "pivot": [
+            0,
+            12,
+            0
+          ],
+          "cubes": [
+            {
+              "origin": [
+                -2.5,
+                12,
+                -1.5
+              ],
+              "size": [
+                5,
+                0.6,
+                3
+              ],
+              "uv": [
+                0,
+                0
+              ]
+            }
+          ]
+        },
+        {
+          "name": "stump_ra",
+          "parent": "t_g",
+          "pivot": [
+            -4,
+            10,
+            0
+          ],
+          "cubes": [
+            {
+              "origin": [
+                -4.6,
+                8.4,
+                -1.6
+              ],
+              "size": [
+                0.6,
+                3.2,
+                3.2
+              ],
+              "uv": [
+                0,
+                0
+              ]
+            }
+          ]
+        },
+        {
+          "name": "stump_la",
+          "parent": "t_g",
+          "pivot": [
+            4,
+            10,
+            0
+          ],
+          "cubes": [
+            {
+              "origin": [
+                4.0,
+                8.4,
+                -1.6
+              ],
+              "size": [
+                0.6,
+                3.2,
+                3.2
+              ],
+              "uv": [
+                0,
+                0
+              ]
+            }
+          ]
+        },
+        {
+          "name": "stump_rl",
+          "parent": "t_g",
+          "pivot": [
+            -1.9,
+            0,
+            0
+          ],
+          "cubes": [
+            {
+              "origin": [
+                -3.7,
+                -0.6,
+                -1.6
+              ],
+              "size": [
+                3.4,
+                0.6,
+                3.2
+              ],
+              "uv": [
+                0,
+                0
+              ]
+            }
+          ]
+        },
+        {
+          "name": "stump_ll",
+          "parent": "t_g",
+          "pivot": [
+            1.9,
+            0,
+            0
+          ],
+          "cubes": [
+            {
+              "origin": [
+                0.3,
+                -0.6,
+                -1.6
+              ],
+              "size": [
+                3.4,
+                0.6,
+                3.2
+              ],
+              "uv": [
+                0,
+                0
+              ]
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}

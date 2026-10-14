@@ -866,6 +866,40 @@
           ]
         }
       }
+    },
+    "animation.war.idle_huddle": {
+      "loop": true,
+      "animation_length": 4.0,
+      "bones": {
+        "head": {
+          "rotation": [
+            "30 - this*0.3",
+            0,
+            0
+          ]
+        },
+        "body": {
+          "rotation": [
+            8,
+            0,
+            0
+          ]
+        },
+        "rightArm": {
+          "rotation": [
+            "-40 - this",
+            "-35",
+            "-4 - this"
+          ]
+        },
+        "leftArm": {
+          "rotation": [
+            "-40 - this",
+            "35",
+            "4 - this"
+          ]
+        }
+      }
     }
   }
 }

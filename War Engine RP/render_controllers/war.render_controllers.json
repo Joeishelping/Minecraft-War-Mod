@@ -1346,6 +1346,37 @@
           "medal3": "!q.property('war:hide') && math.mod(math.floor(q.property('war:medals') / 4), 2) == 1"
         }
       ]
+    },
+    "controller.render.war_stumps": {
+      "geometry": "Geometry.stumps",
+      "materials": [
+        {
+          "*": "Material.default"
+        }
+      ],
+      "textures": [
+        "Texture.stumps"
+      ],
+      "part_visibility": [
+        {
+          "*": false
+        },
+        {
+          "stump_h": "!q.property('war:gib') && math.mod(math.floor(q.property('war:limb') / 1), 2) == 1"
+        },
+        {
+          "stump_ra": "!q.property('war:gib') && math.mod(math.floor(q.property('war:limb') / 2), 2) == 1"
+        },
+        {
+          "stump_la": "!q.property('war:gib') && math.mod(math.floor(q.property('war:limb') / 4), 2) == 1"
+        },
+        {
+          "stump_rl": "!q.property('war:gib') && math.mod(math.floor(q.property('war:limb') / 8), 2) == 1"
+        },
+        {
+          "stump_ll": "!q.property('war:gib') && math.mod(math.floor(q.property('war:limb') / 16), 2) == 1"
+        }
+      ]
     }
   }
 }

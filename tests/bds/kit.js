@@ -2145,3 +2145,19 @@ KS.waves = async (o, ox, oz) => {
   MISSION = undefined; globalThis.__fakeLeader = undefined;
   return { seen: seen.join(" "), distToPlayer: near };
 };
+KS.wallbody = async (o, ox, oz) => {
+  floorAt(ox - 15, oz - 15, ox + 15, oz + 15);
+  kfill(ox - 3, Y, oz + 2, ox + 3, Y + 3, oz + 2, "stone");
+  const res = {};
+  for (const [name, at] of [["wall", { x: ox + 0.5, y: Y, z: oz + 1.3 }], ["open", { x: ox + 8.5, y: Y, z: oz - 8.5 }]]) {
+    const e = kitSoldier(1, at, "rifle", "hold"); await kitWait(10);
+    const before = new Set(CORPSES.map((q) => q.id));
+    killHow.set(e.id, { limb: 0, dir: { x: 0, y: 0, z: 1 }, power: 0.3 }); killReal(e);
+    await kitWait(120);
+    const c = CORPSES.find((q) => !before.has(q.id)), st = c && RD.get(c.id);
+    res.n = allOf(SOLDIER).length; res.lod = lodOn(); res.perf = perfLevel();
+    res[name] = st ? { t: st.t, headUp: +(st.pts[4].p.y - Y).toFixed(2), hipUp: +(((st.pts[0].p.y + st.pts[1].p.y) / 2) - Y).toFixed(2) } : "no body state";
+  }
+  kfill(ox - 3, Y, oz + 2, ox + 3, Y + 3, oz + 2, "air");
+  return res;
+};

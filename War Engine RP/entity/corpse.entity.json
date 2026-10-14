@@ -229,7 +229,8 @@
         "a_iron1": "textures/models/armor/iron_1",
         "a_iron2": "textures/models/armor/iron_2",
         "a_netherite1": "textures/models/armor/netherite_1",
-        "a_netherite2": "textures/models/armor/netherite_2"
+        "a_netherite2": "textures/models/armor/netherite_2",
+        "stumps": "textures/entity/war_soldier/stumps"
       },
       "geometry": {
         "default": "geometry.war_ragdoll",
@@ -240,7 +241,8 @@
         "gib_rleg": "geometry.war_gib2_rleg",
         "gib_lleg": "geometry.war_gib2_lleg",
         "armor1": "geometry.war_ragdoll_armor1",
-        "armor2": "geometry.war_ragdoll_armor2"
+        "armor2": "geometry.war_ragdoll_armor2",
+        "stumps": "geometry.war_stumps"
       },
       "animations": {
         "rag": "animation.war.rag",
@@ -287,7 +289,10 @@
       "render_controllers": [
         "controller.render.war_corpse",
         "controller.render.war_corpse_armor1",
-        "controller.render.war_corpse_armor2"
+        "controller.render.war_corpse_armor2",
+        {
+          "controller.render.war_stumps": "!q.property('war:gib') && q.property('war:limb') > 0"
+        }
       ]
     }
   }

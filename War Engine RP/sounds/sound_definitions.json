@@ -4617,6 +4617,72 @@
           "load_on_low_memory": true
         }
       ]
+    },
+    "war.crack": {
+      "category": "hostile",
+      "min_distance": 1.0,
+      "max_distance": 10.0,
+      "sounds": [
+        {
+          "name": "sounds/war_fx/crack1",
+          "volume": 1.0,
+          "load_on_low_memory": true
+        },
+        {
+          "name": "sounds/war_fx/crack2",
+          "volume": 1.0,
+          "load_on_low_memory": true
+        },
+        {
+          "name": "sounds/war_fx/crack3",
+          "volume": 1.0,
+          "load_on_low_memory": true
+        }
+      ]
+    },
+    "war.rumble": {
+      "category": "ambient",
+      "min_distance": 8.0,
+      "max_distance": 64.0,
+      "sounds": [
+        {
+          "name": "sounds/war_fx/rumble1",
+          "volume": 0.7,
+          "load_on_low_memory": true
+        },
+        {
+          "name": "sounds/war_fx/rumble2",
+          "volume": 0.7,
+          "load_on_low_memory": true
+        }
+      ]
+    },
+    "war.hitmark": {
+      "category": "ui",
+      "sounds": [
+        {
+          "name": "sounds/war_fx/hitmark",
+          "volume": 0.6,
+          "load_on_low_memory": true
+        }
+      ]
+    },
+    "war.casing": {
+      "category": "neutral",
+      "min_distance": 1.0,
+      "max_distance": 10.0,
+      "sounds": [
+        {
+          "name": "sounds/war_fx/casing1",
+          "volume": 0.35,
+          "load_on_low_memory": true
+        },
+        {
+          "name": "sounds/war_fx/casing2",
+          "volume": 0.35,
+          "load_on_low_memory": true
+        }
+      ]
     }
   }
 }

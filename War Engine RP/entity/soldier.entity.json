@@ -607,6 +607,9 @@
           },
           {
             "idle_talk": "q.property('war:idle') == 5 && !q.property('war:down') && !q.is_riding && !q.property('war:sleep')"
+          },
+          {
+            "idle_huddle": "q.property('war:idle') == 6 && !q.property('war:down') && !q.is_riding && !q.property('war:sleep')"
           }
         ]
       },
@@ -720,7 +723,8 @@
         "idle_stretch": "animation.war.idle_stretch",
         "idle_map": "animation.war.idle_map",
         "idle_eat": "animation.war.idle_eat",
-        "idle_talk": "animation.war.idle_talk"
+        "idle_talk": "animation.war.idle_talk",
+        "idle_huddle": "animation.war.idle_huddle"
       },
       "enable_attachables": true
     }

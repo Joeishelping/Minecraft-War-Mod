@@ -1302,6 +1302,7 @@ function gunSound(owner, m) {
   }
 }
 // the bang, the flash and the firing pose of one shot (v8.0: also for precise hits, which spawn no bullet)
+const FX_T = new Map();   // v9.19: id -> tick of his last smoke puff (one every few shots in a burst)
 function shotFx(owner) {
     try {
       const d = sd(owner);
@@ -1315,6 +1316,16 @@ function shotFx(owner) {
         const h = headLoc(owner), v = owner.getViewDirection();
         owner.dimension.spawnParticle("ww:flash", { x: h.x + v.x * 1.3, y: h.y - 0.25 + v.y * 1.3, z: h.z + v.z * 1.3 });
         if (NIGHT && setting("nightfx", true)) owner.dimension.spawnParticle("war:muzzle", { x: h.x + v.x * 1.4, y: h.y - 0.25 + v.y * 1.4, z: h.z + v.z * 1.4 });   // (v9.15: a flash you see across the field at night)
+        // v9.19: a puff of smoke at the muzzle and a brass casing thrown out (only where a player can see it)
+        const now = tick();
+        if (perfLevel() !== "low" && now - (FX_T.get(owner.id) ?? -99) >= 4 && playerNearAt(owner.dimension.id, owner.location, 32)) {
+          FX_T.set(owner.id, now);
+          owner.dimension.spawnParticle("war:gunsmoke", { x: h.x + v.x * 1.5, y: h.y - 0.25 + v.y * 1.5, z: h.z + v.z * 1.5 });
+          if (!["at", "shotgun"].includes(d.weapon)) {
+            owner.dimension.spawnParticle("war:casing", { x: h.x - v.z * 0.35 + v.x * 0.4, y: h.y - 0.35, z: h.z + v.x * 0.35 + v.z * 0.4 });
+            if (Math.random() < 0.25) { const l = owner.location, dm = owner.dimension; system.runTimeout(() => { try { dm.playSound("war.casing", { x: l.x - v.z * 0.8, y: l.y, z: l.z + v.x * 0.8 }, { volume: 0.5, pitch: 0.9 + Math.random() * 0.2 }); } catch {} }, 12); }
+          }
+        }
       } catch {}
     } catch {}
 }
@@ -1555,11 +1566,13 @@ function rdStep(s) {
     const q = s.pts[i], r = s.rad[i];
     let vx = (q.p.x - q.o.x) * 0.99, vy = (q.p.y - q.o.y) * 0.99 - RD_G, vz = (q.p.z - q.o.z) * 0.99;
     let x = q.p.x, y = q.p.y, z = q.p.z, ground = false;
+    // v9.19: a wall holds what leans on it (friction): a man dying against a wall slumps down it, he doesn't drop flat
+    if (vy < 0 && !s.gib && (rdSolid(s, x + r + 0.06, y, z) || rdSolid(s, x - r - 0.06, y, z) || rdSolid(s, x, y, z + r + 0.06) || rdSolid(s, x, y, z - r - 0.06))) vy = vy < -0.2 ? vy * 0.4 : vy * 0.03;
     if (vy < 0 && rdSolid(s, x, y + vy - r, z)) { y = Math.floor(y + vy - r) + 1 + r; vy = vy < -0.2 ? -vy * 0.15 : 0; ground = true; }
     else if (vy > 0 && rdSolid(s, x, y + vy + r, z)) { vy = -vy * 0.2; }
     else y += vy;
-    if (vx && rdSolid(s, x + vx + Math.sign(vx) * r, y, z)) vx = -vx * 0.2; else x += vx;
-    if (vz && rdSolid(s, x, y, z + vz + Math.sign(vz) * r)) vz = -vz * 0.2; else z += vz;
+    if (vx && rdSolid(s, x + vx + Math.sign(vx) * r, y, z)) vx = s.gib ? -vx * 0.2 : 0; else x += vx;   // (v9.19: a body stops against a wall, it doesn't bounce off it)
+    if (vz && rdSolid(s, x, y, z + vz + Math.sign(vz) * r)) vz = s.gib ? -vz * 0.2 : 0; else z += vz;
     if (ground || rdSolid(s, x, y - r - 0.03, z)) { vx *= 0.55; vz *= 0.55; }                   // (dragging on the ground)
     q.o = V3(x - vx, y - vy, z - vz); q.p = V3(x, y, z);
   }
@@ -4155,6 +4168,7 @@ function hitscan(e, spec, from, dir, range, weapon) {
     if (!hit && end < range) dim.spawnParticle("minecraft:basic_smoke_particle", { x: from.x + u.x * end, y: from.y + u.y * end, z: from.z + u.z * end });
   } catch {}
   shotFx(e); if (diagOn()) diagOurs++;
+  try { bulletCrack(dim, from, u, end, hit?.entity, e); } catch {}
   try { noise(dim, e.location, e); } catch {}
   try { globalThis.__warShot?.({ from: { ...from }, dir: u, owner: e, hit: !!hit, hitId: hit?.entity?.id, block: !hit && end < range, blockD: end, typeId: spec.bullet, end: { x: from.x + u.x * end, y: from.y + u.y * end, z: from.z + u.z * end } }); } catch {}
   return !!hit;
@@ -10779,6 +10793,7 @@ system.runInterval(() => {
       if (!standAt(v.dimension, Math.floor(p.x), Math.floor(p.y), Math.floor(p.z))) { p.x = a.x; p.z = a.z; }
       downPos.set(vid, p);
       v.teleport(p);
+      if (gore() && tick() % 20 < 2) try { v.dimension.spawnParticle("war:bsplat", { x: p.x, y: p.y + 0.05, z: p.z }); } catch {}   // (v9.19: a trail where he's dragged)
     } catch {}
   }
 }, 2);
@@ -13215,6 +13230,7 @@ system.runInterval(() => {
       if (now - Number(gdp(e, "war:ordt") ?? -99999) < 200 || ["charge", "escort", "follow"].includes(d.func) || d.div === "guard") continue;
       const v = e.getVelocity(); if (Math.hypot(v.x, v.z) > 0.03) continue;
       let act = IDLE_ACTS[Math.floor(Math.random() * IDLE_ACTS.length)];
+      if (WEATHER_K < 1 && !isIndoors(e) && Math.random() < 0.75) act = 6;              // (v9.19: rain: head down, hunched against it)
       if (act === 1 && !GUNS.includes(d.weapon)) act = 2;
       if (act === 5) {   // a mate standing close who's free too
         const m = nearSnap(e.dimension.id, l, 3.5).find((c) => c.type === SOLDIER && c.id !== id && !c.down && c.f === d.faction && c.e.isValid && !IDLE.has(c.id) && !personal.has(c.id) && !perc.get(c.id)?.threat);
@@ -13230,7 +13246,8 @@ system.runInterval(() => {
         }
       }
       const I = { act, until: now + 60 + Math.floor(Math.random() * 80) };
-      if (act >= 2 && act <= 4 && P(e, "war:gun")) { I.gun = true; setP(e, "war:gun", 0); }   // (the rifle slung for it)
+      if (((act >= 2 && act <= 4) || act === 6) && P(e, "war:gun")) { I.gun = true; setP(e, "war:gun", 0); }   // (the rifle slung for it)
+      if (act === 6) I.until += 120;
       if (act === 4) I.smoke = setting("smoking", false) === true && Math.random() < 0.5;
       IDLE.set(id, I); setP(e, "war:idle", act);
     } catch {}
@@ -13574,5 +13591,62 @@ world.afterEvents.entityDie.subscribe((ev) => {
     const M0 = MISSION; if (!M0) return;
     if (M0.type === "wave" && ev.deadEntity?.id === M0.pid) msEnd(`§cYou fell on wave ${M0.wave}`, `you held out ${mmss(tick() - M0.t0)}`);
     if (M0.type === "esc" && ev.deadEntity?.id === M0.vip?.id) msEnd("§cThe VIP is dead", "mission failed");
+  } catch {}
+});
+
+// ---- v9.19: sound and sight of a battle for the player
+// the crack of a round passing close by (within ~2.5 blocks of your head, from 10+ blocks off)
+const CRACK_T = new Map();
+function bulletCrack(dim, from, u, end, hitE, shooter) {
+  if (!PLAYERS_LIST.length) return;
+  const now = tick();
+  for (const p of PLAYERS_LIST) {
+    try {
+      if (!p.isValid || p.dimension.id !== dim.id || p === hitE || now - (CRACK_T.get(p.id) ?? -99) < 4) continue;
+      const h = { x: p.location.x, y: p.location.y + 1.6, z: p.location.z }, wx = h.x - from.x, wy = h.y - from.y, wz = h.z - from.z;
+      const t = wx * u.x + wy * u.y + wz * u.z; if (t < 10 || t > end + 1) continue;
+      const cx = from.x + u.x * t - h.x, cy = from.y + u.y * t - h.y, cz = from.z + u.z * t - h.z, dd = Math.hypot(cx, cy, cz);
+      if (dd > 2.5) continue;
+      CRACK_T.set(p.id, now);
+      p.playSound("war.crack", { location: { x: h.x + cx, y: h.y + cy, z: h.z + cz }, volume: 0.9 - dd * 0.2, pitch: 0.9 + Math.random() * 0.25 });
+    } catch {}
+  }
+}
+// the rumble of a fight out of sight: lots of shooting 80-300 blocks from you
+const RUMBLE_T = new Map();
+system.runInterval(() => {
+  if (!SHOTS.length) return;
+  const now = tick();
+  for (const p of PLAYERS_LIST) {
+    try {
+      if (!p.isValid || now - (RUMBLE_T.get(p.id) ?? -999) < 70) continue;
+      const l = p.location; let n = 0, near = 0, sx = 0, sz = 0;
+      for (const sh of SHOTS) { if (now - sh.t > 60) continue; const dd = Math.hypot(sh.x - l.x, sh.z - l.z); if (dd < 80) near++; else if (dd < 300) { n++; sx += sh.x; sz += sh.z; } }
+      if (n < 6 || near > 2) continue;
+      RUMBLE_T.set(p.id, now);
+      const dx = sx / n - l.x, dz = sz / n - l.z, L = Math.hypot(dx, dz) || 1;   // (from the battle's direction)
+      p.playSound("war.rumble", { location: { x: l.x + (dx / L) * 12, y: l.y + 2, z: l.z + (dz / L) * 12 }, volume: Math.min(0.9, 0.25 + n / 60), pitch: 0.85 + Math.random() * 0.2 });
+    } catch {}
+  }
+}, 20);
+// dust kicked up by men running (near a player)
+system.runInterval(() => {
+  if (!PLAYER_POS.length || perfLevel() === "low" || WEATHER_K < 1) return;
+  for (const e of allOf(SOLDIER)) {
+    try {
+      const l = e.location;
+      if (!PLAYER_POS.some((p) => p.d === e.dimension.id && Math.abs(p.x - l.x) < 24 && Math.abs(p.z - l.z) < 24)) continue;
+      if (downed.has(e.id) || isRiding(e)) continue;
+      const v = e.getVelocity(); if (Math.hypot(v.x, v.z) < 0.2 || Math.abs(v.y) > 0.1) continue;
+      e.dimension.spawnParticle("war:dust", { x: l.x, y: l.y + 0.05, z: l.z });
+    } catch {}
+  }
+}, 6);
+// a tick in your ear when your shot or blow lands on a soldier or a war dog
+world.afterEvents.entityHurt.subscribe((ev) => {
+  try {
+    const v = ev.hurtEntity; if (v?.typeId !== SOLDIER && v?.typeId !== HOUND) return;
+    const a = ev.damageSource?.damagingEntity; if (a?.typeId !== "minecraft:player") return;
+    a.playSound("war.hitmark", { volume: downed.has(v.id) ? 0.9 : 0.6, pitch: downed.has(v.id) ? 0.8 : 1.15 });
   } catch {}
 });
