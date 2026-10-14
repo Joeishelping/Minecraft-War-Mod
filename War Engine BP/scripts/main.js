@@ -4884,7 +4884,8 @@ function engagement(e, d, now, orderGoal, melee) {
   const t = s.threat;
   if (t && t.isValid) {
     if (stance === "holdfire" && !isProvoker(d.faction, t, now)) return undefined; // hold fire until someone of ours is attacked
-    { const gt = gunState.get(e.id)?.target; turnTo(e, (gt?.isValid && !downed.has(gt.id) ? gt : t).location); }   // (v9.19: one place to look: the man his gun is on, else his threat; two disagreeing turned his head back and forth)
+    { const gt = gunState.get(e.id)?.target; const look = gt?.isValid && !downed.has(gt.id) ? gt : t;
+      if (!(MELEE_W.includes(d.weapon) || OUT_OF.has(e.id)) || dist(look.location, e.location) > 5) turnTo(e, look.location); }   // (v9.19: a man in a sword fight is faced by his own swing; two of us turning him made him twitch)   // (v9.19: one place to look: the man his gun is on, else his threat; two disagreeing turned his head back and forth)
     const dd = dist(t.location, e.location);
     if (anchor && flat(t.location, anchor.location) > leash) {        // fight from the post
       // v6.4: ...from the best spot of it: no shot from where he stands (behind a merlon, back from a window) -> the
@@ -7252,7 +7253,7 @@ function callout(e, text, opt = {}) {
     let vol = 1; try { if (NIGHT && !perc.get(e.id)?.threat && squads.get(squadKey(e, sd(e)))?.known?.size && !["hit", "medic", "man_down", "grenade"].includes(key)) vol = 0.35; } catch {}
     playLine(e.dimension, headLoc(e), lang, key, pitch, { label: `${factionLabel(f)}§7 ${e.typeId === SOLDIER ? soldierName(e) : squadName(f, sd(e).squad)}${vol < 1 ? " §8(quietly)" : ""}`, forceSubs: opt.subs, vol });
     // v9.19: the men round him look at whoever's talking (out of a fight)
-    if (!perc.get(e.id)?.threat) for (const c of nearSnap(did, l, 6)) {
+    if (!perc.get(e.id)?.threat && !squads.get(squadKey(e, sd(e)))?.known?.size && IDLE_LINES.includes(key)) for (const c of nearSnap(did, l, 6)) {   // (v9.19: only off duty, only chatter: never mid-fight)
       if (c.type !== SOLDIER || c.id === e.id || c.down || c.f !== f || !c.e.isValid || GLANCE.has(c.id) || perc.get(c.id)?.threat || personal.has(c.id)) continue;
       try { const cur = c.e.getRotation().y; GLANCE.set(c.id, { yaw: (Math.atan2(-(l.x - c.e.location.x), l.z - c.e.location.z) * 180) / Math.PI, until: now + 40 + Math.floor(Math.random() * 30), back: REST_YAW.get(c.id) ?? cur }); } catch {}
     }
@@ -11926,7 +11927,7 @@ system.runInterval(() => {
   const now = tick();
   for (const [id, g] of [...GLANCE]) {
     const e = world.getEntity(id);
-    if (!e?.isValid || downed.has(id) || perc.get(id)?.threat || gliders.has(id) || personal.has(id)) { GLANCE.delete(id); continue; }
+    if (!e?.isValid || downed.has(id) || perc.get(id)?.threat || gunState.get(id)?.target || gliders.has(id) || personal.has(id)) { GLANCE.delete(id); continue; }
     try {
       const v = e.getVelocity(); if (Math.hypot(v.x, v.z) > 0.03) { GLANCE.delete(id); continue; }
       const want = now < g.until ? g.yaw : g.back, cur = e.getRotation().y;
@@ -11952,7 +11953,7 @@ system.runInterval(() => {
       const r = e.getRotation();
       if (Math.abs(r.x) <= 20) continue;
       const th = perc.get(e.id)?.threat ?? gunState.get(e.id)?.target;
-      if (th?.isValid && Math.abs(th.location.y - l.y) > 2) continue;                    // (aiming up or down at a real man: fine)
+      if (th?.isValid && (Math.abs(th.location.y - l.y) > 2 || flat(th.location, l) < 6)) continue;   // (aiming up or down at a real man, or one right in front of him: fine)
       e.setRotation({ x: 0, y: r.y });
     } catch {}
   }

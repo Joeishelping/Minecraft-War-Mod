@@ -1990,18 +1990,21 @@ KS.brainy = async (o, ox, oz) => {
 // who turns a man: every setRotation / teleport-with-rotation on him, with the line that did it
 KS.whoturns = async (o, ox, oz) => {
   floorAt(ox - 40, oz - 40, ox + 40, oz + 40);
-  const m = [...Array(4).keys()].map((i) => kitSoldier(1, { x: ox - 30 + i * 2 + 0.5, y: Y, z: oz + 0.5 }, "rifle", "hold"));
+  const m = [...Array(4).keys()].map((i) => kitSoldier(1, { x: (o.fight ? ox - 3 : ox - 30) + i * 2 + 0.5, y: Y, z: oz + 0.5 }, o.w ?? "rifle", "hold"));
   await kitWait(20);
   const P0 = Object.getPrototypeOf(m[0]), ids = new Set(m.map((e) => e.id)), by = {};
   const line = () => (String(new Error().stack).split("\n").map((l) => Number((l.match(/main\.js:(\d+)/) ?? [])[1] ?? 0)).filter((n) => n > 40).slice(0, 2).join(">"));
   const oS = P0.setRotation, oT = P0.teleport;
   P0.setRotation = function (r) { if (ids.has(this.id)) { const k = `rot@${line()}`; by[k] = (by[k] ?? 0) + 1; } return oS.call(this, r); };
   P0.teleport = function (l, opt) { if (ids.has(this.id) && opt?.rotation) { const k = `tp@${line()}`; by[k] = (by[k] ?? 0) + 1; } return oT.call(this, l, opt); };
-  if (o.fight) { setRelPair(1, 2, "1", true); const b = [...Array(4).keys()].map((i) => kitSoldier(2, { x: ox - 3 + i * 2 + 0.5, y: Y, z: oz + 25.5 }, "rifle", "hold")); for (const e of [...m, ...b]) e.addEffect("resistance", 3000, { amplifier: 3, showParticles: false }); }
+  const oK = P0.applyKnockback, oI = P0.applyImpulse;
+  P0.applyKnockback = function (...a) { if (ids.has(this.id)) { const k = `kb@${line()}`; by[k] = (by[k] ?? 0) + 1; } return oK.apply(this, a); };
+  P0.applyImpulse = function (...a) { if (ids.has(this.id)) { const k = `imp@${line()}`; by[k] = (by[k] ?? 0) + 1; } return oI.apply(this, a); };
+  if (o.fight) { setRelPair(1, 2, "1", true); const b = [...Array(4).keys()].map((i) => kitSoldier(2, { x: ox - 3 + i * 2 + 0.5, y: Y, z: oz + (o.w ? 8.5 : 25.5) }, o.w ?? "rifle", "hold")); for (const e of [...m, ...b]) e.addEffect("resistance", 3000, { amplifier: 3, showParticles: false }); }
   else await kitOrder(1, { x: ox + 30.5, y: Y, z: oz + 0.5 }, "hold");
   const tr = []; let last = m[0].getRotation().y;
   const c = await churn(m, 200);
-  P0.setRotation = oS; P0.teleport = oT;
+  P0.setRotation = oS; P0.teleport = oT; P0.applyKnockback = oK; P0.applyImpulse = oI;
   return { churn: c, by };
 };
 KS.yawser = async (o, ox, oz) => {
@@ -2027,4 +2030,31 @@ KS.mktrace = async (o, ox, oz) => {
   }
   for (const e of m) try { e.remove(); } catch {}
   return { tr };
+};
+KS.brainy2 = async (o, ox, oz) => {
+  floorAt(ox - 40, oz - 40, ox + 40, oz + 40);
+  const res = {};
+  setRelPair(1, 2, "1", true);
+  const a = [...Array(5).keys()].map((i) => kitSoldier(1, { x: ox - 6 + i * 3 + 0.5, y: Y, z: oz - 8.5 }, i % 2 ? "sword" : "spear", "hold"));
+  const b = [...Array(5).keys()].map((i) => kitSoldier(2, { x: ox - 6 + i * 3 + 0.5, y: Y, z: oz + 8.5 }, i % 2 ? "sword" : "spear", "hold"));
+  for (const e of [...a, ...b]) try { e.addEffect("resistance", 3000, { amplifier: 3, showParticles: false }); e.addEffect("regeneration", 3000, { amplifier: 3, showParticles: false }); } catch {}
+  res.melee = await churn([...a, ...b], 400);
+  for (const e of [...a, ...b]) try { e.remove(); } catch {}
+  // guards round a walking principal
+  const pr = ow().spawnEntity("minecraft:armor_stand", { x: ox + 20.5, y: Y, z: oz - 20.5 });
+  globalThis.__fakeLeader = (id) => (id === pr.id ? pr : undefined);
+  const gs = [0, 1, 2, 3].map((i) => { const e = ow().spawnEntity(SOLDIER, { x: ox + 18.5 + i, y: Y, z: oz - 23.5 }, { spawnEvent: "war:init" }); const ne = setupSoldier(e, { faction: 1, squad: 3, weapon: i % 2 ? "sword" : "rifle", ranged: !!(i % 2 === 0), div: "guard", radius: 8, func: "__none", owner: pr.id }, KIT_PLAYER) ?? e; giveFunction(ne, "escort", pr); return ne; });
+  await kitWait(60);
+  const walker = (async () => { for (let k = 0; k < 300; k++) { const l = pr.location; const ph = Math.floor(k / 75) % 4; pr.teleport({ x: l.x + [0.15, 0, -0.15, 0][ph], y: Y, z: l.z + [0, 0.15, 0, -0.15][ph] }); await kitWait(1); } })();
+  res.guard = await churn(gs, 300); await walker;
+  globalThis.__fakeLeader = undefined; try { pr.remove(); } catch {} for (const e of gs) try { e.remove(); } catch {}
+  // a squad following a walking leader
+  const ld = ow().spawnEntity("minecraft:armor_stand", { x: ox - 20.5, y: Y, z: oz + 20.5 });
+  globalThis.__fakeLeader = (id) => (id === ld.id ? ld : undefined);
+  const fs = [0, 1, 2, 3, 4].map((i) => { const e = kitSoldier(1, { x: ox - 22.5 + i, y: Y, z: oz + 17.5 }, "rifle", "hold"); giveFunction(e, "follow", ld); return e; });
+  await kitWait(60);
+  const w2 = (async () => { for (let k = 0; k < 300; k++) { const l = ld.location; ld.teleport({ x: l.x + 0.12, y: Y, z: l.z + (k % 150 < 75 ? 0.05 : -0.05) }); await kitWait(1); } })();
+  res.follow = await churn(fs, 300); await w2;
+  globalThis.__fakeLeader = undefined; try { ld.remove(); } catch {} for (const e of fs) try { e.remove(); } catch {}
+  return res;
 };
