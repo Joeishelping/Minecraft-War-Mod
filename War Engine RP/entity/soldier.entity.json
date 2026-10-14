@@ -574,6 +574,21 @@
           },
           {
             "shield_up": "q.property('war:block') && !q.property('war:down') && !q.property('war:cav')"
+          },
+          {
+            "flinch": "q.property('war:react') == 1 && !q.property('war:down')"
+          },
+          {
+            "stagger": "q.property('war:react') == 2 && !q.property('war:down')"
+          },
+          {
+            "limp": "q.property('war:limp') && !q.property('war:down') && !q.is_riding && q.property('war:pose') == 0"
+          },
+          {
+            "hands_up": "q.property('war:hands') && !q.property('war:down')"
+          },
+          {
+            "cower": "q.property('war:pose') == 3 && !q.property('war:down') && !q.is_riding"
           }
         ]
       },
@@ -676,7 +691,12 @@
         "prone": "animation.war.prone",
         "sit": "animation.war.sit",
         "crawl": "animation.war.crawl",
-        "shield_up": "animation.war.shield_up"
+        "shield_up": "animation.war.shield_up",
+        "flinch": "animation.war.flinch",
+        "stagger": "animation.war.stagger",
+        "limp": "animation.war.limp",
+        "hands_up": "animation.war.hands_up",
+        "cower": "animation.war.cower"
       },
       "enable_attachables": true
     }

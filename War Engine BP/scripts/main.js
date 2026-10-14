@@ -756,6 +756,7 @@ function surrender(e, captor) {
   setGoal(e, slot);
   sdp(e, "war:home", slot);
   equip(e, "air");
+  setP(e, "war:hands", true);                                    // (v9.19: hands up)
   applyRelations(e);
   setGroups(e, { w: "w_none", t: "t_off", g: "g_post", s: "s_1", d: "d_off", r: "r_off" });
 }
@@ -763,6 +764,7 @@ function resume(e) {
   try { sdDrop(e); } catch {}
   if (!gdp(e, "war:surr")) return;
   sdp(e, "war:surr", 0);
+  setP(e, "war:hands", false);
   equip(e, weaponItem(e));
   applyRelations(e);
   const prev = String(gdp(e, "war:prevfunc") ?? "hold");
@@ -1139,13 +1141,14 @@ function grenade(e, d, now) {
   const dd = dist(t.location, e.location), err = Math.min(2.5, dd / 9);
   const at = { x: t.location.x + (Math.random() - 0.5) * err * 2, y: t.location.y, z: t.location.z + (Math.random() - 0.5) * err * 2 };
   const dim = e.dimension, from = headLoc(e), T = Math.round(12 + dd * 0.9), g = walkableNear(dim, at.x, at.z, at.y) ?? at, by = e;
+  const cook = vetTier(e) >= 2 || traitOf(e) === "brave" ? 10 + Math.floor(Math.random() * 10) : 0;   // (v9.19: an old hand cooks it: no time to throw it back)
   try { dim.playSound("random.bow", from, { volume: 0.6, pitch: 0.6 }); } catch {}
   for (let k = 1; k <= T; k += 2) system.runTimeout(() => {
     try { const u = k / T, h = Math.max(3, dd * 0.35); dim.spawnParticle("minecraft:basic_smoke_particle", { x: from.x + (g.x - from.x) * u, y: from.y + (g.y + 0.3 - from.y) * u + 4 * h * u * (1 - u), z: from.z + (g.z - from.z) * u }); } catch {}
   }, k);
   system.runTimeout(() => {
     try { dim.playSound("random.fuse", g, { volume: 0.8, pitch: 1.4 }); } catch {}
-    liveNades.push({ dim, at: { x: g.x, y: g.y, z: g.z }, boom: tick() + NADE.fuse, by });
+    liveNades.push({ dim, at: { x: g.x, y: g.y, z: g.z }, boom: tick() + NADE.fuse - cook, by });
     try { const w = nearSnap(dim.id, g, 7).find((c) => c.type === SOLDIER && !c.down && c.id !== by?.id && c.e.isValid); if (w) callout(w.e, "Grenade!"); } catch {}   // (v6.8: the warning)
   }, T);
 }
@@ -1168,6 +1171,7 @@ system.runInterval(() => {
         G.seen ??= new Map();                                            // (v9.2: each man needs a moment to notice it: 0.3-0.8 s)
         if (!G.seen.has(c.id)) G.seen.set(c.id, now + 6 + Math.floor(Math.random() * 11));
         if (now < G.seen.get(c.id)) continue;
+        if (!G.back && c.dd < 2.4 && G.boom - now > 18 && throwBack(G, c.e, now)) break;   // (v9.19: he grabs it and throws it back)
         fleeFire.set(c.id, now);
         const l = c.e.location, dx = l.x - G.at.x, dz = l.z - G.at.z, L = Math.hypot(dx, dz) || 1;
         // (v9.2: a dive first: the route below takes a moment, and a grenade doesn't wait; before, most men hadn't
@@ -3779,7 +3783,7 @@ function mobMid(o) {
   if (m === undefined) { m = 1.2; try { const h = o.getHeadLocation().y - o.location.y; if (h > 0.05 && h < 6) m = Math.max(0.25, Math.min(1.2, h * 0.75)); } catch {} if (o.hasComponent?.("minecraft:is_baby")) return m * 0.6; MOB_MID.set(o.typeId, m); }
   return m;
 }
-function chest(o) { const l = o.location, t = o.typeId; const ps = t === SOLDIER ? (poseOf.get(o.id) ?? 0) : 0; return { x: l.x, y: l.y + (t === "war:tank" ? 1.0 : t === HOUND ? 0.5 : t === SOLDIER ? (ps === 2 ? 0.35 : ps === 1 ? 0.85 : 1.2) : t === "minecraft:player" ? 1.2 : VEHICLES.includes(t) ? 1.2 : mobMid(o)), z: l.z }; }
+function chest(o) { const l = o.location, t = o.typeId; const ps = t === SOLDIER ? (poseOf.get(o.id) ?? 0) : 0; return { x: l.x, y: l.y + (t === "war:tank" ? 1.0 : t === HOUND ? 0.5 : t === SOLDIER ? (ps === 2 ? 0.35 : ps === 3 ? 0.7 : ps === 1 ? 0.85 : 1.2) : t === "minecraft:player" ? 1.2 : VEHICLES.includes(t) ? 1.2 : mobMid(o)), z: l.z }; }
 // v8.1: THE "SEEING THROUGH WALLS" BUG. Bedrock's block ray counts its maxDistance in block CELLS stepped through
 // (about |dx|+|dy|+|dz| on a diagonal), not in straight-line distance. Every line-of-sight check asked for the
 // straight-line length, so on any slanted line (up to a window, across a courtyard) the ray gave up BEFORE it reached
@@ -4026,7 +4030,7 @@ function hitscan(e, spec, from, dir, range, weapon) {
   if (hit) {
     const dmg = HIT_DMG[weapon] ?? 5;
     try { SHOT_BY.set(hit.entity.id, { id: e.id, t: tick() }); } catch {}
-    try { const he = hit.entity; if (he.typeId === SOLDIER) lastHit.set(he.id, { t: tick(), head: from.y + u.y * hit.distance - he.location.y > 1.42, weapon, dd: hit.distance, dir: u }); } catch {}   // (v9.7: where it hit him)
+    try { const he = hit.entity; if (he.typeId === SOLDIER) { const hy = from.y + u.y * hit.distance - he.location.y; lastHit.set(he.id, { t: tick(), head: hy > 1.42, leg: hy < 0.72, weapon, dd: hit.distance, dir: u, by: e.id }); } } catch {}   // (v9.7: where it hit him)
     // v9.13: a player is hit like any mob would hit him: his armor counts and the game's short pause between hits holds, so a
     // squad's fire can't empty a full set of netherite in a second. (Soldiers on soldiers stay as they were: armor counts there
     // already, and a man in netherite lasts about three times as long as one in none.)
@@ -4319,7 +4323,7 @@ function gunTick(e, now) {
   if (turnTo(e, t.location, 20) > 25) { st.next = now + 2; return; } // still turning toward him
   const aim = aimAt(e, t);
   if (!aim) { st.next = now + 6; st.target = undefined; return; } // the shot would hit the terrain: don't waste it
-  const shaky = ((suppB.get(e.id) ?? 0) > 8 ? 1.8 : 1) * woundK(e) * vetAim(e);  // pinned down / badly wounded: shaky aim (v9.18: veterans steadier)
+  const shaky = ((suppB.get(e.id) ?? 0) > 8 ? 1.8 : 1) * woundK(e) * vetAim(e) * ((ARM_HIT.get(e.id) ?? 0) > now ? 1.7 : 1) * ((poseOf.get(e.id) ?? 0) === 3 ? 2.5 : 1);   // (v9.19: a wounded arm; firing blind from cover)  // pinned down / badly wounded: shaky aim (v9.18: veterans steadier)
   const fired = st.wild > 0 ? fireGun(e, { ...spec, spread: spec.spread * 3 * shaky }, t, aim) : fireGun(e, shaky === 1 ? spec : { ...spec, spread: spec.spread * shaky }, t, aim);
   if (!fired) { st.next = now + 4; aimMemo.delete(`${e.id}>${t.id}`); return; }   // (v6.9.2: no open line this instant: hold fire)
   if (st.wild > 0) st.wild--;
@@ -7280,6 +7284,7 @@ system.runInterval(() => {
 }, 100);
 function goDown(e, killer) {
   const now = tick();
+  try { callMedic(e); } catch {}
   try { logTo(WOUNDS, e.id, now); const k = killer?.typeId === SOLDIER ? killer : lastAttacker(e, now); if (k?.typeId === SOLDIER && k.id !== e.id) giveXp(k, 2); } catch {}   // (v9.18)
   try {                                                          // (v6.5) the man who dropped him calls it
     let ke = killer?.isValid ? killer : undefined;
@@ -7595,7 +7600,7 @@ function makePow(e, captor) {
   updateName(e);
 }
 function freePow(e, rearm) {
-  pows.delete(e.id); sdp(e, "war:pow", undefined);
+  pows.delete(e.id); sdp(e, "war:pow", undefined); setP(e, "war:hands", false);
   if (rearm) equip(e, weaponItem(e));
   updateName(e);
 }
@@ -9239,6 +9244,9 @@ const poseSeen = new Map(); // id -> { x, z, t } where he last stood still from
 function wantPose(e, now) {
   if (downed.has(e.id) || pows.has(e.id) || isRiding(e) || climbing.has(e.id) || inWater(e) || personal.has(e.id)) return 0;
   const d = sd(e);
+  { const v = e.getVelocity(), still = Math.hypot(v.x, v.z) < 0.03;                      // (v9.19)
+    if (d.surr) return still ? 1 : 0;                                                    // hands up, on his knees
+    if (still && (suppB.get(e.id) ?? 0) > 14 && now - (gunState.get(e.id)?.lastShot ?? -999) > 25 && d.div !== "cavalier") return 3; }   // pinned: head down behind cover
   if (d.surr || d.div === "cavalier" || d.div === "medic" || !GUNS.includes(d.weapon) || !P(e, "war:gun")) return 0;
   const l = e.location, ps = poseSeen.get(e.id);
   if (!ps || Math.hypot(l.x - ps.x, l.z - ps.z) > 0.35) { poseSeen.set(e.id, { x: l.x, z: l.z, t: now }); return 0; }   // moving: on his feet
@@ -11912,3 +11920,124 @@ system.runInterval(() => {
     } catch {}
   }
 }, 40);
+
+// ================================================================ v9.19: men who feel it
+// Hit reactions (a flinch; a leg hit staggers him and he limps; an arm hit spoils his aim), pinned men keep their heads
+// down and fire blind, a beaten squad of green troops can break and run until their sergeant rallies them, the badly
+// wounded limp and call their medic by name, surrender is hands up on their knees (a white flag when a squad gives up),
+// and a live grenade at a man's feet may come straight back.
+const ARM_HIT = new Map();   // id -> tick his arm's better
+const LIMP = new Map();      // id -> tick a leg wound eases
+const REACT_T = new Map();   // id -> tick the reaction ends
+world.afterEvents.entityHurt.subscribe((ev) => {
+  try {
+    const v = ev.hurtEntity; if (v?.typeId !== SOLDIER || !v.isValid || downed.has(v.id) || ev.damage < 1) return;
+    const now = tick(), lh = lastHit.get(v.id), fresh = lh && now - lh.t <= 1;
+    let kind = 1;
+    if (fresh && lh.leg) { kind = 2; LIMP.set(v.id, now + 600); }
+    else if (fresh && !lh.head && Math.random() < 0.22) { ARM_HIT.set(v.id, now + 300); }
+    setP(v, "war:react", 0); system.run(() => { try { if (v.isValid) setP(v, "war:react", kind); } catch {} });   // (restarted each hit)
+    REACT_T.set(v.id, now + (kind === 2 ? 12 : 7));
+    if (!isRiding(v)) { const dir = fresh ? lh.dir : hitDir(v, ev.damageSource?.damagingEntity); if (dir) try { v.applyImpulse({ x: dir.x * (kind === 2 ? 0.16 : 0.08), y: 0, z: dir.z * (kind === 2 ? 0.16 : 0.08) }); } catch {} }   // (knocked back a step)
+  } catch {}
+});
+system.runInterval(() => {
+  const now = tick();
+  for (const [id, t] of [...REACT_T]) if (now >= t) { REACT_T.delete(id); const e = world.getEntity(id); if (e?.isValid) setP(e, "war:react", 0); }
+}, 2);
+// limping: a leg wound, or simply badly hurt; it eases as he heals
+system.runInterval(() => {
+  for (const e of allOf(SOLDIER)) {
+    try {
+      const h = e.getComponent("minecraft:health"), r = h ? h.currentValue / h.effectiveMax : 1;
+      if (LIMP.has(e.id) && (r > 0.95 || tick() > LIMP.get(e.id))) LIMP.delete(e.id);   // (a leg wound: ~30 s, or till he's mended)
+      const want = !downed.has(e.id) && !isRiding(e) && (LIMP.has(e.id) || r < 0.35);
+      if (!!P(e, "war:limp") !== want) setP(e, "war:limp", want);
+      if (want) e.addEffect("slowness", 30, { amplifier: LIMP.has(e.id) ? 1 : 0, showParticles: false });
+    } catch {}
+  }
+  for (const m of [ARM_HIT, LIMP]) for (const id of [...m.keys()]) if (!world.getEntity(id)) m.delete(id);
+}, 20);
+// calling his medic by name
+function callMedic(e) {
+  try {
+    const f = Number(P(e, "war:faction") ?? 0);
+    const m = nearSnap(e.dimension.id, e.location, 40).find((c) => c.type === SOLDIER && !c.down && c.f === f && c.e.isValid && sd(c.e).div === "medic");
+    if (m && Math.random() < 0.5) radio(e, `${soldierName(e)}: Medic! ${surname(m.e)}, over here!`, "story");
+  } catch {}
+}
+// ---- breaking as a squad, and the rally
+function breakNow(e, d, now) {
+  if (shaken.has(e.id)) return false;
+  const t = perc.get(e.id)?.threat, p = e.location;
+  let spot;
+  const rally = nearestFlag(e.dimension, p, (f) => !!P(f, "war:rally") && isFriendly(d.faction, Number(P(f, "war:faction"))), 64);
+  if (rally) spot = walkableNear(e.dimension, rally.location.x, rally.location.z, rally.location.y);
+  if (!spot && t?.isValid) { const dx = p.x - t.location.x, dz = p.z - t.location.z, L = Math.hypot(dx, dz) || 1; spot = walkableNear(e.dimension, p.x + (dx / L) * 25, p.z + (dz / L) * 25, p.y); }
+  if (!spot) return false;
+  const slot = makeWaypoint(e.dimension, spot); if (!slot) return false;
+  shaken.set(e.id, { slot, at: spot, until: now + 400, key: breakKey(e, d) });
+  note(e, "shaken: running");
+  return true;
+}
+system.runInterval(() => {
+  const now = tick();
+  for (const S of squads.values()) {
+    try {
+      if (!S.ours?.length || now - S.t > 40) continue;
+      const ours = S.ours.filter((o) => o.isValid && !downed.has(o.id) && !sd(o).surr);
+      // rout: a squad that's lost half its men and is still losing, with no veterans to steady it
+      if (S.known?.size && S.contactT >= 0 && S.routFor !== S.contactT && (S.startN ?? 0) >= 4 && ours.length <= S.startN / 2 && (S.ratio ?? 1) < 0.8) {
+        const green = ours.filter((o) => vetTier(o) < 2 && traitOf(o) !== "brave" && !OFFICER_IDS.has(o.id) && sd(o).func !== "post" && sd(o).div !== "guard");   // (the sergeant holds)
+        if (green.length >= Math.ceil(ours.length / 2) && Math.random() < 0.35) {
+          S.routT = now; S.routFor = S.contactT; S.rallied = false; let n = 0;
+          for (const o of green) if (breakNow(o, sd(o), now)) n++;
+          if (n) { callout(green[0], "Fall back!", { event: true }); radio(green[0], `${squadName(sd(green[0]).faction, sd(green[0]).squad)} is breaking!`, "story"); v9stat("rout"); }
+        }
+      }
+      // the rally: their sergeant, still standing, calls them back to him
+      if (S.routT && S.routFor === S.contactT && now - S.routT > 80 && !S.rallied) {
+        const off = ours.find((o) => OFFICER_IDS.has(o.id) && !shaken.has(o.id)) ?? ours.find((o) => (vetTier(o) >= 2 || traitOf(o) === "brave") && !shaken.has(o.id));
+        if (off) {
+          S.rallied = true; let n = 0;
+          for (const o of ours) { const sk = shaken.get(o.id); if (sk && dist(o.location, off.location) < 32) { sk.recoverUntil = now + 10 + Math.floor(Math.random() * 30); n++; } }
+          if (n) { callout(off, "Follow me!", { event: true }); radio(off, `${soldierName(off)} rallies the squad`, "story"); v9stat("rally"); }
+        }
+      }
+      if (!S.known?.size) { S.routT = undefined; S.rallied = undefined; S.routFor = undefined; S.whiteFor = undefined; }
+      // the white flag: a few men left, hurt, heavily outnumbered and nobody coming
+      if (S.known?.size && setting("isosurr", true) && S.whiteFor !== S.contactT && ours.length && ours.length <= 3 && S.known.size >= ours.length * 3) {
+        const hr = ours.reduce((t, o) => { const h = o.getComponent("minecraft:health"); return t + (h ? h.currentValue / h.effectiveMax : 1); }, 0) / ours.length;
+        if (hr < 0.55 && !ours.some((o) => traitOf(o) === "brave" && vetTier(o) >= 2) && Math.random() < 0.3) {
+          S.whiteFor = S.contactT;
+          let near; for (const q of S.known.values()) if (q.ent?.isValid) { near = q.ent; break; }
+          const fac = near ? factionOf(near) : 0;
+          ours.forEach((o, i) => { isoSurrender(o, fac); if (i === 0) system.runTimeout(() => { try { if (o.isValid) equip(o, "banner 1 15"); } catch {} }, 3); });
+          radio(ours[0], `${squadName(sd(ours[0]).faction, sd(ours[0]).squad)} raised a white flag`, "story"); v9stat("whiteFlag");
+        }
+      }
+    } catch {}
+  }
+}, 40);
+// ---- a grenade thrown back: the arc goes from him to the man who threw it, the fuse keeps burning
+function throwBack(G, e, now) {
+  try {
+    if (!e?.isValid || isRiding(e) || shaken.has(e.id)) return false;
+    G.tried ??= new Set(); if (G.tried.has(e.id)) return false; G.tried.add(e.id);
+    const ef = Number(P(e, "war:faction") ?? 0), bf = G.by?.isValid ? factionOf(G.by) : 0;
+    if (!bf || !isHostile(ef, bf)) return false;
+    const chance = 0.18 + vetTier(e) * 0.1 + (traitOf(e) === "brave" ? 0.12 : traitOf(e) === "cautious" ? -0.08 : 0);
+    if (Math.random() > chance) return false;
+    const to = G.by.location, from = headLoc(e), dd = dist(to, e.location);
+    if (dd < 6 || dd > 28) return false;
+    const g = walkableNear(G.dim, to.x + (Math.random() - 0.5) * 2, to.z + (Math.random() - 0.5) * 2, to.y) ?? to;
+    const T = Math.round(8 + dd * 0.6);
+    turnTo(e, to, 180);
+    G.back = true; G.at = { x: g.x, y: g.y, z: g.z }; G.by = e; G.seen = new Map();
+    G.boom = Math.max(G.boom, now + T + 4);
+    for (let k = 1; k <= T; k += 2) system.runTimeout(() => { try { const u = k / T, h = Math.max(2.5, dd * 0.3); G.dim.spawnParticle("minecraft:basic_smoke_particle", { x: from.x + (g.x - from.x) * u, y: from.y + (g.y + 0.3 - from.y) * u + 4 * h * u * (1 - u), z: from.z + (g.z - from.z) * u }); } catch {} }, k);
+    callout(e, "Grenade!", { event: true });
+    radio(e, `${soldierName(e)} threw a grenade back!`, "story"); v9stat("nadeBack");
+    return true;
+  } catch { return false; }
+}

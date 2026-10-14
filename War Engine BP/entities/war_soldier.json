@@ -72,7 +72,7 @@
           "type": "int",
           "range": [
             0,
-            2
+            3
           ],
           "default": 0,
           "client_sync": true
@@ -132,6 +132,25 @@
             7
           ],
           "default": 0,
+          "client_sync": true
+        },
+        "war:react": {
+          "type": "int",
+          "range": [
+            0,
+            2
+          ],
+          "default": 0,
+          "client_sync": true
+        },
+        "war:limp": {
+          "type": "bool",
+          "default": false,
+          "client_sync": true
+        },
+        "war:hands": {
+          "type": "bool",
+          "default": false,
           "client_sync": true
         }
       }

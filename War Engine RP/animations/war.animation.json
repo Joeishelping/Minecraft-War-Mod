@@ -510,6 +510,191 @@
           ]
         }
       }
+    },
+    "animation.war.flinch": {
+      "loop": false,
+      "animation_length": 0.35,
+      "bones": {
+        "body": {
+          "rotation": {
+            "0.0": [
+              0,
+              0,
+              0
+            ],
+            "0.07": [
+              -9,
+              0,
+              3
+            ],
+            "0.35": [
+              0,
+              0,
+              0
+            ]
+          }
+        },
+        "head": {
+          "rotation": {
+            "0.0": [
+              0,
+              0,
+              0
+            ],
+            "0.07": [
+              -16,
+              0,
+              4
+            ],
+            "0.35": [
+              0,
+              0,
+              0
+            ]
+          }
+        }
+      }
+    },
+    "animation.war.stagger": {
+      "loop": false,
+      "animation_length": 0.6,
+      "bones": {
+        "body": {
+          "rotation": {
+            "0.0": [
+              0,
+              0,
+              0
+            ],
+            "0.12": [
+              10,
+              0,
+              -9
+            ],
+            "0.6": [
+              0,
+              0,
+              0
+            ]
+          }
+        },
+        "rightLeg": {
+          "rotation": {
+            "0.0": [
+              0,
+              0,
+              0
+            ],
+            "0.12": [
+              -25,
+              0,
+              6
+            ],
+            "0.6": [
+              0,
+              0,
+              0
+            ]
+          }
+        },
+        "leftLeg": {
+          "rotation": {
+            "0.0": [
+              0,
+              0,
+              0
+            ],
+            "0.12": [
+              12,
+              0,
+              0
+            ],
+            "0.6": [
+              0,
+              0,
+              0
+            ]
+          }
+        }
+      }
+    },
+    "animation.war.limp": {
+      "loop": true,
+      "bones": {
+        "body": {
+          "rotation": [
+            0,
+            0,
+            "math.sin(q.anim_time * 400) * 5 * math.min(1, q.modified_move_speed * 4)"
+          ]
+        },
+        "rightLeg": {
+          "rotation": [
+            "math.max(0, math.sin(q.anim_time * 400)) * 10 * math.min(1, q.modified_move_speed * 4)",
+            0,
+            0
+          ]
+        }
+      }
+    },
+    "animation.war.hands_up": {
+      "loop": true,
+      "bones": {
+        "rightArm": {
+          "rotation": [
+            "-170 - this",
+            0,
+            "-12 - this"
+          ]
+        },
+        "leftArm": {
+          "rotation": [
+            "-170 - this",
+            0,
+            "12 - this"
+          ]
+        }
+      }
+    },
+    "animation.war.cower": {
+      "loop": true,
+      "bones": {
+        "root": {
+          "position": [
+            0,
+            -5,
+            0
+          ]
+        },
+        "body": {
+          "rotation": [
+            24,
+            0,
+            0
+          ]
+        },
+        "head": {
+          "rotation": [
+            26,
+            0,
+            0
+          ]
+        },
+        "rightLeg": {
+          "rotation": [
+            -80,
+            8,
+            0
+          ]
+        },
+        "leftLeg": {
+          "rotation": [
+            -8,
+            -6,
+            0
+          ]
+        }
+      }
     }
   }
 }

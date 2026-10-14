@@ -1530,3 +1530,42 @@ KS.identity = async (o, ox, oz) => {
   setJSON(world, "war:vlang", keep);
   return { names, buddies, enemiesLeft: left, after, haitian };
 };
+// v9.19: reactions, limping, cowering, rout and rally, white flag, grenade thrown back
+KS.human = async (o, ox, oz) => {
+  floorAt(ox - 30, oz - 30, ox + 30, oz + 30);
+  setRelPair(1, 2, "0", false);
+  const r = {};
+  // leg hit -> stagger + limp; arm/body -> flinch
+  const a = kitSoldier(1, { x: ox + 0.5, y: Y, z: oz + 0.5 }, "rifle", "hold"), sh = kitSoldier(1, { x: ox + 0.5, y: Y, z: oz + 8.5 }, "rifle", "hold");
+  await kitWait(20);
+  lastHit.set(a.id, { t: tick(), leg: true, head: false, dir: { x: 0, y: 0, z: -1 }, by: sh.id }); a.applyDamage(3);
+  await kitWait(2); r.legReact = a.getProperty("war:react"); await kitWait(25); r.limp = a.getProperty("war:limp"); r.reactAfter = a.getProperty("war:react");
+  // pinned: cowers
+  suppB.set(a.id, 25); await kitWait(25); r.cowerPose = a.getProperty("war:pose"); suppB.delete(a.id);
+  // surrender: hands up, kneeling
+  surrender(a, 2); await kitWait(25); r.hands = a.getProperty("war:hands"); r.surrPose = a.getProperty("war:pose");
+  resume(a); await kitWait(3); r.handsAfter = a.getProperty("war:hands");
+  for (const e of [a, sh]) try { e.remove(); } catch {}
+  // grenade thrown back (forced chance)
+  setRelPair(1, 2, "1", true);
+  const thrower = kitSoldier(2, { x: ox + 0.5, y: Y, z: oz + 14.5 }, "rifle", "hold"), vet = kitSoldier(1, { x: ox + 0.5, y: Y, z: oz + 0.5 }, "rifle", "hold");
+  sdp(vet, "war:xp", 30); sdp(vet, "war:trait", "brave");
+  await kitWait(10);
+  const G = { dim: ow(), at: { x: ox + 1.5, y: Y, z: oz + 0.5 }, boom: tick() + 40, by: thrower }; liveNades.push(G);
+  const keep = Math.random; Math.random = () => 0.01; await kitWait(20); Math.random = keep;
+  r.thrownBack = !!G.back; r.nadeNow = G.at ? Math.round(dist(G.at, thrower.location)) : -1;
+  await kitWait(40);
+  for (const e of [thrower, vet]) try { e.remove(); } catch {}
+  return r;
+};
+KS.rout = async (o, ox, oz) => {
+  floorAt(ox - 40, oz - 40, ox + 40, oz + 40);
+  setRelPair(1, 2, "1", true);
+  const a = [...Array(6).keys()].map((i) => { const e = kitSoldier(1, { x: ox - 6 + i * 2 + 0.5, y: Y, z: oz - 10.5 }, "rifle", "hold"); sdp(e, "war:trait", "steady"); return e; });
+  const b = [...Array(12).keys()].map((i) => kitSoldier(2, { x: ox - 12 + i * 2 + 0.5, y: Y, z: oz + 14.5 }, i % 2 ? "smg" : "rifle", "hold"));
+  for (const e of b) try { e.addEffect("resistance", 4000, { amplifier: 3, showParticles: false }); } catch {}
+  let shakenMax = 0;
+  const tr = [];
+  for (let k = 0; k < 45; k++) { await kitWait(20); shakenMax = Math.max(shakenMax, a.filter((e) => e.isValid && shaken.has(e.id)).length); const q = a.find((e) => e.isValid); const S = q ? squads.get(squadKey(q, sd(q))) : undefined; if (S && k % 3 === 0) tr.push(`${a.filter((e) => e.isValid && !downed.has(e.id)).length}/${S.startN}/${S.ratio?.toFixed?.(2)}/${S.known?.size}/${S.contactT >= 0 ? "c" : "-"}${S.routT ? "R" : ""}`); }
+  return { tr: tr.join(" "), shakenMax, surrendered: a.filter((e) => e.isValid && sd(e).surr).length, alive: a.filter((e) => e.isValid).length };
+};
