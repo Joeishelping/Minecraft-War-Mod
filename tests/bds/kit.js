@@ -2104,3 +2104,44 @@ KS.watch = async (o, ox, oz) => {
   for (const e of men) try { e.remove(); } catch {}
   return r;
 };
+// v9.19: missions, driven the way the menu sets them up
+KS.missions = async (o, ox, oz) => {
+  floorAt(ox - 60, oz - 60, ox + 60, oz + 60);
+  globalThis.__fakeLeader = (id) => (id === KIT_PLAYER.id ? KIT_PLAYER : undefined);
+  const r = {}, dim = ow();
+  // attack / defend
+  setRelPair(1, 2, "1", true);
+  const obj = { x: ox + 0.5, y: Y, z: oz + 0.5 };
+  const defs = msSpawn(KIT_PLAYER, dim, obj, 1, 6, "rifle", "hold", MS_SQ.def, 5);
+  const atts = msSpawn(KIT_PLAYER, dim, { x: ox + 0.5, y: Y, z: oz - 45.5 }, 2, 10, "mixguns", "hold", MS_SQ.att, 3);
+  await kitWait(40); msMarch(KIT_PLAYER, atts, 2, MS_SQ.att, obj);
+  MISSION = { kind: "Attack / Defend", type: "ad", dim: dim.id, obj, defs, atts, df: 1, af: 2, end: tick() + (o.t ?? 1600), t0: tick() };
+  let k = 0; while (MISSION && k < 90) { await kitWait(20); k++; }
+  r.ad = { over: !MISSION, secs: k, defLeft: msUp(defs).length, attLeft: msUp(atts).length };
+  MISSION = undefined;
+  for (const e of [...defs, ...atts]) try { e.remove(); } catch {}
+  // escort
+  const A = { x: ox - 40.5, y: Y, z: oz + 30.5 }, B = { x: ox + 40.5, y: Y, z: oz + 30.5 };
+  const vip = msSpawn(KIT_PLAYER, dim, A, 1, 1, "sword", "hold", MS_SQ.esc, 1)[0]; sdp(vip, "war:custom", "§6VIP");
+  const esc = msSpawn(KIT_PLAYER, dim, A, 1, 3, "rifle", "hold", MS_SQ.esc, 3);
+  await kitWait(30); msMarch(KIT_PLAYER, [vip, ...esc], 1, MS_SQ.esc, B);
+  MISSION = { kind: "Escort", type: "esc", dim: dim.id, vip, esc, ambs: [], B, vf: 1, ef: 2, t0: tick() };
+  k = 0; while (MISSION && k < 60) { await kitWait(20); k++; }
+  r.esc = { over: !MISSION, secs: k, vipTogo: vip.isValid ? Math.round(flat(vip.location, B)) : -1 };
+  MISSION = undefined;
+  for (const e of [vip, ...esc]) try { e.remove(); } catch {}
+  globalThis.__fakeLeader = undefined;
+  return r;
+};
+KS.waves = async (o, ox, oz) => {
+  floorAt(ox - 60, oz - 60, ox + 60, oz + 60);
+  globalThis.__fakeLeader = (id) => (id === KIT_PLAYER.id ? KIT_PLAYER : undefined);
+  setRelPair(1, 2, "1", true);
+  MISSION = { kind: "Wave survival", type: "wave", dim: "minecraft:overworld", pid: KIT_PLAYER.id, ef: 2, n0: 3, grow: 2, gap: 200, mix: "rifle", far: 40, wave: 0, next: tick() + 20, men: [], t0: tick(), kills: 0 };
+  const seen = [];
+  for (let k = 0; k < 25; k++) { await kitWait(20); seen.push(`${MISSION?.wave}:${MISSION ? msUp(MISSION.men).length : "-"}`); }
+  const near = MISSION ? msUp(MISSION.men).map((e) => Math.round(flat(e.location, KIT_PLAYER.location))) : [];
+  for (const e of MISSION?.men ?? []) try { e.remove(); } catch {}
+  MISSION = undefined; globalThis.__fakeLeader = undefined;
+  return { seen: seen.join(" "), distToPlayer: near };
+};

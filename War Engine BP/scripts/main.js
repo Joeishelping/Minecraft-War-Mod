@@ -3114,7 +3114,7 @@ async function placeFlag(player) {
 // ================================================================ War Table
 async function warTable(player, pre) {
   const af = new ActionFormData().title("War Table").body(`Your faction: ${factionLabel(playerFaction(player))}`)
-    .button("Join a faction").button("Leave my faction").button("Diplomacy").button("Name factions").button("Name squads").button("Settings").button("Coalitions").button("War archive").button("Test battle").button("Cleanup / repair").button("Neutral zones").button("Reinforcements").button("Save / load battles");
+    .button("Join a faction").button("Leave my faction").button("Diplomacy").button("Name factions").button("Name squads").button("Settings").button("Coalitions").button("War archive").button("Test battle").button("Cleanup / repair").button("Neutral zones").button("Reinforcements").button("Save / load battles").button("§eMissions§r\nattack/defend, wave survival, escort");
   const r = pre !== undefined ? { selection: pre, canceled: false } : await show(af, player);
   if (!r || r.canceled || r.selection === undefined) return;
   if (r.selection === 8) { await testBattle(player); return; }
@@ -3122,6 +3122,7 @@ async function warTable(player, pre) {
   if (r.selection === 10) { await zoneMenu(player); return; }
   if (r.selection === 11) { await reinfMenu(player); return; }               // (v9.21)
   if (r.selection === 12) { await battleSaveMenu(player); return; }          // (v9.22)
+  if (r.selection === 13) { await missionMenu(player); return; }             // (v9.19)
   const pickFaction = async (title) => {
     const jf = new ActionFormData().title(title);
     for (const l of factionList()) jf.button(l);
@@ -13438,4 +13439,140 @@ WarAPI.registerBehavior({
     if (now % 20 === 0) turnTo(e, { x: e.location.x + Math.cos(a) * 8, z: e.location.z + Math.sin(a) * 8 }, 8);
     return { g: "g_none", t: "t_long", urgent: false, note: "on watch" };
   },
+});
+
+// ================================================================ v9.19: missions (War Table > Missions)
+// Attack / Defend: one side holds a spot, the other comes for it, against the clock.
+// Wave survival: waves of the enemy, bigger each time, come at you from all sides until you fall.
+// Escort: get a VIP across the map alive; the enemy waits along the way.
+let MISSION;   // { kind, ... } (one at a time; a reload ends it)
+const MS_SQ = { att: 8, def: 7, wave: 9, esc: 6, amb: 5 };
+function msSpawn(owner, dim, at, f, n, mix, func, squad, spread = 3) {
+  const out = [];
+  for (let k = 0; k < n; k++) {
+    try {
+      const a = (k / Math.max(1, n)) * Math.PI * 2 + Math.random() * 0.4, rr = 1.5 + (k % 4) * spread * 0.5;
+      const pos = walkableNear(dim, at.x + Math.cos(a) * rr, at.z + Math.sin(a) * rr, at.y) ?? at;
+      const MIXG = ["rifle", "smg", "semi", "mg", "rifle"], MIXM = ["sword", "crossbow"];
+      const w = mix === "mixguns" ? MIXG[k % MIXG.length] : mix === "mixmelee" ? MIXM[k % 2] : mix;
+      const e = dim.spawnEntity(SOLDIER, { x: pos.x, y: pos.y, z: pos.z }, { spawnEvent: "war:init" });
+      const fin = setupSoldier(e, { faction: f, squad, weapon: w, ranged: isRangedW(w), div: "foot", radius: 8, func: "__none", owner: owner.id, skin: reinfSkin({ f }) || undefined }, owner) ?? e;
+      giveFunction(fin, func, owner, ANCHORED.includes(func) ? makeWaypoint(dim, pos) : undefined);
+      out.push(fin);
+    } catch {}
+  }
+  return out;
+}
+function msMarch(owner, pool, f, squad, to) {
+  try { giveOrderInner(owner, { faction: f, order: ORDERS.findIndex((o) => o[0] === "charge"), squad, count: 0, radius: 600, stance: "aggressive", ao: 100, free: true, target: 5, cx: Math.floor(to.x), cz: Math.floor(to.z), cy: to.y, then: "hold" }, pool.filter((q) => q.isValid)); } catch {}
+}
+const msUp = (list) => list.filter((e) => { try { return e.isValid && !downed.has(e.id) && !pows.has(e.id) && !sd(e).surr; } catch { return false; } });
+function msHud(text, at, dimId) { for (const p of world.getAllPlayers()) { try { if (p.dimension.id === dimId && dist(p.location, at) < 250) p.onScreenDisplay.setActionBar(text); } catch {} } }
+function msEnd(title, sub) {
+  const M0 = MISSION; MISSION = undefined; if (!M0) return;
+  for (const p of world.getAllPlayers()) { try { if (p.dimension.id === M0.dim) p.onScreenDisplay.setTitle(title, { subtitle: sub, fadeInDuration: 10, stayDuration: 80, fadeOutDuration: 20 }); } catch {} }
+  chronLog(`Mission over: ${title.replace(/§./g, "")} (${sub.replace(/§./g, "")})`);
+}
+const mmss = (t) => `${Math.floor(t / 1200)}:${String(Math.floor((t % 1200) / 20)).padStart(2, "0")}`;
+const DIRS = [["North", 0, -1], ["East", 1, 0], ["South", 0, 1], ["West", -1, 0]];
+async function missionMenu(p) {
+  if (MISSION) {
+    const r0 = await show(new ActionFormData().title("Missions").body(`A mission is on: ${MISSION.kind}.`).button("§cStop it").button("Leave it running"), p);
+    if (r0?.selection === 0) msEnd("§7Mission stopped", ""); return;
+  }
+  const r = await show(new ActionFormData().title("Missions").button("Attack / Defend\n§8one side holds a spot, the other takes it").button("Wave survival\n§8waves come at you, bigger each time").button("Escort\n§8get a VIP across alive"), p);
+  if (!r || r.canceled || r.selection === undefined) return;
+  const look = lookedSpot(p, 150) ?? p.location, mixes = REINF_MIX.map((m) => m[1]), fl = factionList(), pf = Math.max(0, (playerFaction(p) || 1) - 1);
+  if (r.selection === 0) {
+    const f = new ModalFormData().title("Attack / Defend").dropdown("Defenders", fl, { defaultValueIndex: pf }).slider("Defenders: how many", 4, 60, { valueStep: 2, defaultValue: 10 })
+      .dropdown("Attackers", fl, { defaultValueIndex: pf === 0 ? 1 : 0 }).slider("Attackers: how many", 4, 80, { valueStep: 2, defaultValue: 16 })
+      .dropdown("Weapons", mixes, { defaultValueIndex: 0 }).dropdown("Attackers come from", [...DIRS.map((d) => d[0]), "Anywhere"], { defaultValueIndex: 4 })
+      .slider("From how far (blocks)", 30, 150, { valueStep: 10, defaultValue: 60 }).slider("Time limit (minutes)", 2, 20, { valueStep: 1, defaultValue: 6 });
+    const fr = await show(f, p); if (!fr || fr.canceled || !fr.formValues) return;
+    const v = fr.formValues.map(Number), df = v[0] + 1, af = v[2] + 1;
+    if (df === af) { p.sendMessage("§cPick two different factions."); return; }
+    setRelPair(df, af, "1", true);
+    const dim = p.dimension, obj = { x: look.x, y: look.y, z: look.z };
+    const dir = v[5] < 4 ? DIRS[v[5]] : DIRS[Math.floor(Math.random() * 4)], from = walkableNear(dim, obj.x + dir[1] * v[6], obj.z + dir[2] * v[6], obj.y) ?? { x: obj.x + dir[1] * v[6], y: obj.y, z: obj.z + dir[2] * v[6] };
+    const defs = msSpawn(p, dim, obj, df, v[1], REINF_MIX[v[4]][0], "hold", MS_SQ.def, 5);
+    const atts = msSpawn(p, dim, from, af, v[3], REINF_MIX[v[4]][0], "hold", MS_SQ.att, 3);
+    system.runTimeout(() => msMarch(p, atts, af, MS_SQ.att, obj), 40);
+    MISSION = { kind: "Attack / Defend", type: "ad", dim: dim.id, obj, defs, atts, df, af, end: tick() + v[7] * 1200, t0: tick() };
+    say(`§e${factionLabel(af)}§e attacks, ${factionLabel(df)}§e defends: ${v[7]} minutes. Go!`);
+  } else if (r.selection === 1) {
+    const f = new ModalFormData().title("Wave survival").dropdown("The enemy", fl, { defaultValueIndex: pf === 0 ? 1 : 0 }).slider("First wave", 2, 20, { valueStep: 1, defaultValue: 4 })
+      .slider("More each wave", 1, 10, { valueStep: 1, defaultValue: 2 }).slider("Seconds between waves", 20, 180, { valueStep: 10, defaultValue: 60 }).dropdown("Weapons", mixes, { defaultValueIndex: 0 })
+      .slider("They come from (blocks away)", 25, 80, { valueStep: 5, defaultValue: 45 });
+    const fr = await show(f, p); if (!fr || fr.canceled || !fr.formValues) return;
+    const v = fr.formValues.map(Number), ef = v[0] + 1;
+    if (playerFaction(p) && playerFaction(p) !== ef) setRelPair(playerFaction(p), ef, "1", true);
+    MISSION = { kind: "Wave survival", type: "wave", dim: p.dimension.id, pid: p.id, ef, n0: v[1], grow: v[2], gap: v[3] * 20, mix: REINF_MIX[v[4]][0], far: v[5], wave: 0, next: tick() + 100, men: [], t0: tick(), kills: 0 };
+    say(`§e${p.name} §eholds out against ${factionLabel(ef)}§e. First wave in 5 seconds.`);
+  } else {
+    const f = new ModalFormData().title("Escort: the VIP walks to where you're looking").dropdown("The VIP's side", fl, { defaultValueIndex: pf }).slider("Escorts", 0, 20, { valueStep: 1, defaultValue: 6 })
+      .dropdown("The enemy", fl, { defaultValueIndex: pf === 0 ? 1 : 0 }).slider("Ambushes along the way", 1, 4, { valueStep: 1, defaultValue: 2 }).slider("Men in each ambush", 2, 16, { valueStep: 1, defaultValue: 5 }).dropdown("Weapons", mixes, { defaultValueIndex: 0 });
+    const fr = await show(f, p); if (!fr || fr.canceled || !fr.formValues) return;
+    const v = fr.formValues.map(Number), vf = v[0] + 1, ef = v[2] + 1;
+    if (vf === ef) { p.sendMessage("§cPick two different factions."); return; }
+    const dim = p.dimension, A = { ...p.location }, B = { x: look.x, y: look.y, z: look.z }, L = flat(A, B);
+    if (L < 40) { p.sendMessage("§cLook at a spot at least 40 blocks away: that's where the VIP has to get to."); return; }
+    setRelPair(vf, ef, "1", true);
+    const vip = msSpawn(p, dim, A, vf, 1, "sword", "hold", MS_SQ.esc, 1)[0];
+    if (!vip) return;
+    try { sdp(vip, "war:custom", "§6VIP"); vip.triggerEvent("war:hp_60"); updateName(vip); } catch {}
+    const esc = msSpawn(p, dim, A, vf, v[1], REINF_MIX[v[5]][0], "hold", MS_SQ.esc, 3);
+    const ambs = [];
+    for (let i = 1; i <= v[3]; i++) {
+      const t = i / (v[3] + 1), side = i % 2 ? 1 : -1, ux = (B.x - A.x) / L, uz = (B.z - A.z) / L;
+      ambs.push({ at: { x: A.x + (B.x - A.x) * t - uz * side * 14, y: A.y, z: A.z + (B.z - A.z) * t + ux * side * 14 }, road: { x: A.x + (B.x - A.x) * t, y: A.y, z: A.z + (B.z - A.z) * t }, n: v[4], done: false });
+    }
+    for (const am of ambs) { const g = walkableNear(dim, am.at.x, am.at.z, am.at.y); if (g) am.at = g; am.men = msSpawn(p, dim, am.at, ef, am.n, REINF_MIX[v[5]][0], "hold", MS_SQ.amb, 3); }
+    system.runTimeout(() => msMarch(p, [vip, ...esc], vf, MS_SQ.esc, B), 40);
+    MISSION = { kind: "Escort", type: "esc", dim: dim.id, vip, esc, ambs, B, vf, ef, t0: tick() };
+    say(`§eEscort: get the VIP to (${Math.round(B.x)}, ${Math.round(B.z)}) alive. ${v[3]} ambush${v[3] > 1 ? "es" : ""} wait along the way.`);
+  }
+}
+system.runInterval(() => {
+  const M0 = MISSION; if (!M0) return;
+  const now = tick();
+  try {
+    if (M0.type === "ad") {
+      const d = msUp(M0.defs), a = msUp(M0.atts), dNear = d.filter((e) => flat(e.location, M0.obj) < 20).length, aNear = a.filter((e) => flat(e.location, M0.obj) < 15).length, left = M0.end - now;
+      msHud(`§e${factionLabel(M0.af)}§e attack: §f${a.length}§7  ·  ${factionLabel(M0.df)}§e hold: §f${d.length}§7  ·  §f${mmss(Math.max(0, left))}${aNear ? `  §c${aNear} at the objective` : ""}`, M0.obj, M0.dim);
+      if (!a.length) msEnd(`§a${factionLabel(M0.df)}§a held!`, "every attacker is down");
+      else if (!dNear && aNear) msEnd(`§c${factionLabel(M0.af)}§c took it!`, `in ${mmss(now - M0.t0)}`);
+      else if (left <= 0) msEnd(`§a${factionLabel(M0.df)}§a held!`, "the time ran out for the attack");
+    } else if (M0.type === "wave") {
+      const p = findPlayer(M0.pid);
+      if (!p?.isValid) { msEnd("§7Wave survival over", "the player left"); return; }
+      const alive = msUp(M0.men);
+      if (now >= M0.next && alive.length < M0.n0 + M0.grow * M0.wave + 6) {
+        M0.wave++; M0.next = now + M0.gap;
+        const n = M0.n0 + M0.grow * (M0.wave - 1), a = Math.random() * Math.PI * 2, dim = p.dimension, pl = p.location;
+        const at = walkableNear(dim, pl.x + Math.cos(a) * M0.far, pl.z + Math.sin(a) * M0.far, pl.y) ?? { x: pl.x + Math.cos(a) * M0.far, y: pl.y, z: pl.z + Math.sin(a) * M0.far };
+        const men = msSpawn(p, dim, at, M0.ef, n, M0.mix, "hold", MS_SQ.wave, 3); M0.men.push(...men);
+        system.runTimeout(() => msMarch(p, men, M0.ef, MS_SQ.wave, { ...p.location }), 30);
+        try { p.onScreenDisplay.setTitle(`§cWave ${M0.wave}`, { subtitle: `${n} coming from the ${["east", "south", "west", "north"][Math.floor(((a + Math.PI / 4) % (Math.PI * 2)) / (Math.PI / 2)) % 4]}`, fadeInDuration: 5, stayDuration: 40, fadeOutDuration: 10 }); } catch {}
+      }
+      if (now % 200 === 0 && alive.length) msMarch(p, alive.filter((e) => flat(e.location, p.location) > 20), M0.ef, MS_SQ.wave, { ...p.location });   // (they keep coming for you)
+      M0.men = M0.men.filter((e) => e.isValid);
+      msHud(`§cWave ${M0.wave}§7  ·  enemies left: §f${alive.length}§7  ·  next wave: §f${Math.max(0, Math.ceil((M0.next - now) / 20))}s`, p.location, p.dimension.id);
+    } else if (M0.type === "esc") {
+      const vip = M0.vip;
+      if (!vip?.isValid) { msEnd("§cThe VIP is dead", "mission failed"); return; }
+      const vl = vip.location, togo = Math.round(flat(vl, M0.B));
+      for (const am of M0.ambs) {
+        if (!am.done && flat(vl, am.road) < 32) { am.done = true; const p = findPlayer(world.getAllPlayers()[0]?.id) ?? world.getAllPlayers()[0]; if (p) msMarch(p, msUp(am.men), M0.ef, MS_SQ.amb, { ...vl }); }
+      }
+      msHud(`§6VIP§7: §f${togo}§7 blocks to go  ·  escorts: §f${msUp(M0.esc).length}${downed.has(vip.id) ? "  §c§lVIP DOWN: get a medic or first aid to him!" : ""}`, vl, M0.dim);
+      if (togo < 6) msEnd("§aThe VIP made it!", `in ${mmss(now - M0.t0)}`);
+    }
+  } catch (err) { oops("mission", err); }
+}, 20);
+world.afterEvents.entityDie.subscribe((ev) => {
+  try {
+    const M0 = MISSION; if (!M0) return;
+    if (M0.type === "wave" && ev.deadEntity?.id === M0.pid) msEnd(`§cYou fell on wave ${M0.wave}`, `you held out ${mmss(tick() - M0.t0)}`);
+    if (M0.type === "esc" && ev.deadEntity?.id === M0.vip?.id) msEnd("§cThe VIP is dead", "mission failed");
+  } catch {}
 });
