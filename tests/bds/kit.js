@@ -1874,6 +1874,7 @@ KS.combat2 = async (o, ox, oz) => {
 };
 KS.glass = async (o, ox, oz) => {
   floorAt(ox - 10, oz - 10, ox + 10, oz + 15);
+  const keepBuild = gdp(world, "war:set_build"); sdp(world, "war:set_build", false);   // (no window-breaking: this is about rounds)
   setRelPair(1, 2, "1", true);
   kfill(ox - 4, Y, oz + 5, ox + 4, Y + 3, oz + 5, o.b ?? "glass_pane"); await kitWait(10);
   const behind = kitSoldier(2, { x: ox + 0.5, y: Y, z: oz + 8.5 }, "rifle", "hold"); behind.addEffect("regeneration", 3000, { amplifier: 5, showParticles: false });
@@ -1888,7 +1889,8 @@ KS.glass = async (o, ox, oz) => {
   const dv = (() => { const dx = c.x - h.x, dy = c.y - h.y, dz = c.z - h.z, L = Math.hypot(dx, dy, dz); return { x: dx / L, y: dy / L, z: dz / L }; })();
   let ents = []; try { ents = ow().getEntitiesFromRay(h, dv, { maxDistance: 30 }).map((q) => `${q.entity.typeId}@${Math.round(q.distance)}:${hittable(q.entity, gunner)}`); } catch (err) { ents = [String(err)]; }
   const at = ow().getBlock({ x: Math.floor(h.x + dv.x * 7.95), y: Math.floor(h.y + dv.y * 7.95), z: Math.floor(h.z + dv.z * 7.95) })?.typeId;
-  return { first: rh?.hb?.block?.typeId, loc: rh?.hb?.block?.location, d: rh?.d, at, ents, h, c, out };
+  sdp(world, "war:set_build", keepBuild);
+  return { perr: globalThis.__pierceErr, first: rh?.hb?.block?.typeId, loc: rh?.hb?.block?.location, d: rh?.d, at, ents, h, c, out };
 };
 KS.reinfskin = async (o, ox, oz) => {
   floorAt(ox - 20, oz - 20, ox + 20, oz + 20);
@@ -2174,4 +2176,12 @@ KS.idrec = async (o, ox, oz) => {
   const code = settingsCode(); sdp(world, "war:set_vfreq", 2); const n = loadSettingsCode(code); r.codeLen = code.length; r.loaded = n; r.vfreqBack = setting("vfreq", 1);
   try { e.remove(); } catch {}
   return r;
+};
+KS.raytype = async (o, ox, oz) => {
+  floorAt(ox - 10, oz - 10, ox + 10, oz + 15);
+  kfill(ox - 4, Y, oz + 5, ox + 4, Y + 3, oz + 5, o.b ?? "oak_planks"); await kitWait(10);
+  const h = { x: ox + 0.5, y: Y + 1.62, z: oz - 2.5 }, u = { x: 0, y: -0.04, z: 1 }; const L = Math.hypot(u.x, u.y, u.z); u.x /= L; u.y /= L; u.z /= L;
+  const hb = ow().getBlockFromRay(h, u, { maxDistance: 30, includeLiquidBlocks: false, includePassableBlocks: false });
+  const rh = rayHit(ow(), h, u, 30);
+  return { direct: ow().getBlock({ x: ox, y: Y + 1, z: oz + 5 })?.typeId, rayBlock: hb?.block?.typeId, rayLoc: hb?.block?.location, rhType: rh?.hb?.block?.typeId, pierce: rh ? pierces(rh.hb.block.typeId) : null };
 };

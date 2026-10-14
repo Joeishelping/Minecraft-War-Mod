@@ -4144,7 +4144,7 @@ function hitscan(e, spec, from, dir, range, weapon) {
     if (rh) {
       blockD = rh.d; stopId = rh.hb.block.typeId;
       if (pierces(stopId) && spec.bullet !== "ww:nbazooka_projectile") {            // through it, once
-        const bl = rh.hb.block.location; let t = rh.d;
+        const bl = rh.hb.block.location; let t = rh.d + 0.03;                       // (just inside it: the hit point sits on the face)
         for (let k = 0; k < 14; k++, t += 0.15) { const q = { x: from.x + u.x * t, y: from.y + u.y * t, z: from.z + u.z * t }; if (Math.floor(q.x) !== bl.x || Math.floor(q.y) !== bl.y || Math.floor(q.z) !== bl.z) break; }
         const back = { x: from.x + u.x * (t + 0.05), y: from.y + u.y * (t + 0.05), z: from.z + u.z * (t + 0.05) };
         const rh2 = rayHit(dim, back, u, Math.max(0, range - t));
