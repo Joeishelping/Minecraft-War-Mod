@@ -1,5 +1,68 @@
 # War Engine changelog
 
+## v9.19 (Signal flag, real names, quieter camps, prisoners spared)
+
+Every item below was tested on a real server.
+
+### Fixes you reported
+- **Prisoners are no longer killed.** Taking a prisoner used to give him back his "enemy" status, so the men around
+  cut him down. A prisoner or a man with his hands up is now nobody's target: squads forget him as an enemy and a
+  soldier's or hound's blow on him does nothing. (Test: 3 prisoners taken in the middle of a fight, all 3 alive.)
+- **Names follow the faction's language.** A faction set to Greek ("Petropolis") gets Greek names and ranks, e.g.
+  "Stratiotis Grigoris Petropoulos". Names change as soon as you save the language.
+- **Reinforcements wear your skin.** A wave wears the skin most of that faction's men wear (one you gave with the
+  Unit Wand), or one you pick in the new Skin option when you set the point up.
+- **No more whole squads lying down.** At night at most a third of a squad sleeps, beds first, never out in the rain,
+  spread out at different angles, rifles put away and taken back on waking. Anything happening wakes them.
+- **Bodies stay.** Bodies were being removed after a minute even while you watched. Now a body is never taken away
+  while a player can see it; out of sight the oldest go first, and only if there are far too many in view do the
+  oldest sink slowly into the ground. The dying man disappears the same instant his body appears (no double).
+- **Hand signals without a menu.** The new **Signal Flag** item: hold it, sneak and scroll to pick a signal (suppress,
+  attack, take cover, fall back, hold fire, open fire, follow me, regroup on me, spread out), use it to give it.
+
+### Names
+- 90-210 surnames and 35-70 first names per language (Korean, Chinese and Maya have fewer because those cultures
+  have fewer surnames). Ranks always in the faction's own language.
+- The unit card (crouch and look at a soldier) shows his first name too: "Pvt. Miguel Garcia".
+- No two men in the same squad share a surname.
+- Earned nicknames: "Doc" (three rescues), "Lucky" (back up three times), "Deadeye", "Hawkeye", "Buzzsaw", "Mad Dog"...
+- New callout language **American (US English + AAVE, mixed)**: each man is one or the other for good, his voice and
+  his name together. (Ready for a future skin for Black soldiers of American divisions.)
+- Setting (Callouts > How often they talk / subtitles / names): Mixed heritage names, about 1 man in 7 with a surname
+  from another culture.
+
+### New items and blocks
+- **First Aid Kit**: use it on a soldier to patch him up or get a downed man back on his feet; with nobody there, on yourself.
+- **Barbed Wire**: slows and scratches whoever walks into it; soldiers route round it.
+- **Ammo Crate**: soldiers refill next to it, and a man out of ammo walks over to one.
+
+### Soldiers' life
+- Off duty, near a player: men check their rifles, stretch, read a map, eat (smoking: Settings), or two of them face
+  each other and talk. Men turn to look at whoever is talking.
+- Sentries walk a short beat along their post.
+- At night with the enemy about, callouts are said quietly.
+
+### In the fight
+- A wounded man is dragged a short way under fire, carried over the shoulder for longer distances.
+- Medics and first-aiders kneel while they treat. Enemies bandage and take more wounded prisoners.
+- Men out of ammo take rounds off the dead.
+- An explosion nearby: men flinch, slow down and are slower to fire for a few seconds.
+- More smoke when a squad pulls back or breaks.
+- After a fight the sergeant gives a head count on the radio and stragglers close up on him.
+- MG gunners take a moment to set up after moving. Kneeling steadies the aim, running spoils it. Long MG and SMG
+  bursts climb.
+- Rounds go through glass, leaves, wool and thin wood (weaker), and stop on stone, brick and metal, with sparks.
+- Helmets sometimes turn a round aside ("ping"); armour that takes many hits loses its helmet.
+- Swordsmen and spearmen parry, sometimes with an instant riposte. A shield bash breaks the other man's guard.
+- Spearmen facing a charging horse stop it dead and may unseat the rider. A rider at the gallop hits harder. A
+  horse that's hit shies and stops.
+- The unit card shows how suppressed a man is.
+
+### Performance
+- Glances and the off-duty animations are skipped on the Low performance setting and when no player is near.
+- A per-soldier check that read saved data every few ticks now does the cheap checks first.
+- A 90 v 90 battle in the test simulator stays under its 500-calls-a-tick budget (about 480).
+
 ## v9.18 (Soldiers with names, nerves and a war around them)
 
 Every item below was tested on a real server; the numbers are from those tests.
