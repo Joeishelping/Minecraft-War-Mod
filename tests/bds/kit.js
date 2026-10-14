@@ -1016,7 +1016,7 @@ system.afterEvents.scriptEventReceive.subscribe((ev) => {
     try {
       for (const e of [...allOf(SOLDIER), ...allOf(WAYPOINT), ...allOf(HOUND)]) { try { e.remove(); } catch {} }   // (leftovers of an interrupted run)
       kcmd("tickingarea remove_all"); kcmd("time set noon"); kcmd("gamerule dodaylightcycle false"); await kitWait(40);
-       const r = name === "castle" ? [ox - 60, oz - 20, ox + 100, oz + 150] : name === "probe" || name === "rayprobe" ? [ox - 20, oz - 20, ox + 20, oz + 20] : name === "trip" && o.mode === "flat" ? [ox - 60, oz - 330, ox + 60, oz + 20] : name === "big" || name === "load" || name === "dpidle" || name === "dpmove" ? [ox - 60, oz - 90, ox + 60, oz + 90] : [ox - 30, oz - 180, ox + 80, oz + 50];
+       const r = name === "castle" ? [ox - 60, oz - 20, ox + 100, oz + 150] : name === "probe" || name === "rayprobe" ? [ox - 20, oz - 20, ox + 20, oz + 20] : name === "trip" && o.mode === "flat" ? [ox - 60, oz - 330, ox + 60, oz + 20] : name === "big" || name === "loopprof" || name === "load" || name === "dpidle" || name === "dpmove" ? [ox - 60, oz - 90, ox + 60, oz + 90] : [ox - 30, oz - 180, ox + 80, oz + 50];
       // (a ticking area keeps the land loaded and its mobs moving with no player near; at most ~100 chunks each)
       const w = r[2] - r[0], h = r[3] - r[1];
       const parts = Math.max(1, Math.ceil((Math.ceil(w / 16) + 1) * (Math.ceil(h / 16) + 1) / 90));
@@ -1647,6 +1647,7 @@ KS.worldlife = async (o, ox, oz) => {
   await kitWait(500);
   r.night = NIGHT; r.asleep = sq.filter((e) => SLEEP.has(e.id)).length; r.watch = [...(WATCH.values())].map((w) => w.ids.size);
   r.sleepProp = sq.filter((e) => e.getProperty("war:sleep")).length;
+  r.gunHidden = sq.filter((e) => SLEEP.has(e.id) && !e.getProperty("war:gun")).length;
   const en = kitSoldier(2, { x: ox + 0.5, y: Y, z: oz + 25.5 }, "rifle", "hold"); en.addEffect("resistance", 2000, { amplifier: 255, showParticles: false });
   for (const e of sq) e.addEffect("resistance", 2000, { amplifier: 255, showParticles: false });
   await kitWait(80); r.asleepAfterContact = sq.filter((e) => SLEEP.has(e.id)).length;
@@ -1686,4 +1687,23 @@ KS.bsave = async (o, ox, oz) => {
   const after = allOf(SOLDIER).filter((e) => dist(e.location, { x: ox, y: Y, z: oz }) < 10).sort((a, b) => a.location.x - b.location.x).map((e) => `${soldierName(e)}|${traitOf(e)}|${sd(e).weapon}|${Math.round(e.location.x - ox)}|${e.getProperty("war:medals")}`);
   for (let i = 0; i < 40; i++) world.setDynamicProperty(`war:bsave5_${i}`, undefined);
   return { saved: n, loaded: n2, before, after };
+};
+// v9.23: which loops cost the most in a big battle (ms over the run, by where each loop is made)
+KS.loopprof = async (o, ox, oz) => {
+  globalThis.__loopProf = {};
+  const r = await KS.big({ n: o.n ?? 90 }, ox, oz);
+  const P0 = globalThis.__loopProf; globalThis.__loopProf = undefined;
+  const top = Object.entries(P0).sort((a, b) => b[1] - a[1]).slice(0, 25).map(([k, v]) => `${k}:${v}`);
+  return { tps: r.tps, top };
+};
+KS.namefollow = async (o, ox, oz) => {
+  floorAt(ox - 10, oz - 10, ox + 10, oz + 10);
+  const keep = getJSON(world, "war:vlang", {});
+  setJSON(world, "war:vlang", { ...keep, 1: "en_us" });
+  const men = [0, 1, 2].map((i) => kitSoldier(1, { x: ox + i * 2 + 0.5, y: Y, z: oz + 0.5 }, "rifle", "hold"));
+  await kitWait(120); const before = men.map((e) => strip(e.nameTag).split("\n")[0]);
+  setJSON(world, "war:vlang", { ...keep, 1: "greek" });
+  await kitWait(130); const after = men.map((e) => strip(e.nameTag).split("\n")[0]);
+  setJSON(world, "war:vlang", keep);
+  return { before, after };
 };

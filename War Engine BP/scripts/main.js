@@ -20,7 +20,10 @@ function oops(sys, err) {
     ERRS.set(sys, r);
   } catch {}
 }
-{ const ri = system.runInterval.bind(system); system.runInterval = (f, n) => ri(() => { try { f(); } catch (err) { oops("loop", err); } }, n); }
+{ const ri = system.runInterval.bind(system); system.runInterval = (f, n) => {
+  const site = (String(new Error().stack).split("\n").map((l) => Number((l.match(/main\.js:(\d+)/) ?? [])[1] ?? 0)).find((n) => n > 40) ?? "?");   // (v9.23: where the loop was made, for the loop profiler: test servers only)
+  return ri(() => { const P0 = globalThis.__loopProf; if (P0) { const t = Date.now(); try { f(); } catch (err) { oops("loop", err); } const k = `${site}/${n}`; P0[k] = (P0[k] ?? 0) + Date.now() - t; } else { try { f(); } catch (err) { oops("loop", err); } } }, n);
+}; }
 import "./extensions/index.js";
 // v8.1: the current tick, read from the game ONCE per tick. Asking the game (system.currentTick) is a call into the
 // engine, and the add-on asked millions of times a battle: on a real server that alone was 45% of all its work in a
@@ -7214,7 +7217,8 @@ async function voiceMenu(player) {
   if (!r || r.canceled || !r.formValues) return;
   r.formValues.forEach((v, i) => { all[FO[i]] = VOICE_KEYS[Number(v)]; });
   setJSON(world, "war:vlang", all);
-  player.sendMessage("§aCallout languages saved.");
+  for (const e of allOf(SOLDIER)) { try { updateName(e); NAME_KEY.delete(e.id); } catch {} }   // (v9.23: their names change with the language, now)
+  player.sendMessage("§aCallout languages saved. Soldiers' names now follow each faction's language.");
 }
 
 // ---- test battle: two balanced squads in front of you, ordered to fight
@@ -11652,7 +11656,14 @@ system.runInterval(() => {
     }
   }
   const was = OFFICER_IDS; OFFICER_IDS = officers;
-  for (const e of allOf(SOLDIER)) { try { const want = officers.has(e.id); if (!!P(e, "war:officer") !== want) setP(e, "war:officer", want); if (was.has(e.id) !== want) updateName(e); } catch {} }
+  for (const e of allOf(SOLDIER)) {
+    try {
+      const want = officers.has(e.id); if (!!P(e, "war:officer") !== want) setP(e, "war:officer", want);
+      const key = `${voiceOf(Number(P(e, "war:faction") ?? 0))}|${rankTier(e)}`;   // (v9.23: a name tag made before the language or rank changed is redone)
+      if (NAME_KEY.get(e.id) !== key || was.has(e.id) !== want) { NAME_KEY.set(e.id, key); updateName(e); }
+    } catch {}
+  }
+  if (now % 6000 < 100) { const live = new Set(allOf(SOLDIER).map((q) => q.id)); for (const id of [...NAME_KEY.keys()]) if (!live.has(id)) NAME_KEY.delete(id); }
 }, 100);
 
 // ================================================================ v9.15: night battles: illumination flares
@@ -11815,6 +11826,7 @@ function idSeed(e) { let s = gdp(e, "war:nseed"); if (s === undefined) { s = Mat
 const xpOf = (e) => Number(gdp(e, "war:xp") ?? 0);
 function vetTier(e) { const x = xpOf(e); return x >= RANK_XP[3] ? 3 : x >= RANK_XP[2] ? 2 : x >= RANK_XP[1] ? 1 : 0; }
 let OFFICER_IDS = new Set();
+const NAME_KEY = new Map();   // id -> the language and rank his name tag was made with
 function rankTier(e) { const v = vetTier(e); return OFFICER_IDS.has(e.id) ? (v >= 3 ? 4 : 3) : v; }
 function surname(e) { const c = cultureOf(Number(P(e, "war:faction") ?? 0)); return c.names[idSeed(e) % c.names.length]; }
 function soldierName(e) { try { const c = cultureOf(Number(P(e, "war:faction") ?? 0)); return `${c.ranks[rankTier(e)]} ${c.names[idSeed(e) % c.names.length]}`; } catch { return "Soldier"; } }
@@ -12415,7 +12427,28 @@ system.runTimeout(() => { try { setWeatherK(world.getDimension("overworld").getW
 // they take turns). The watch shouts at anything; a shot, a hit, an order or daylight and everybody's up.
 const SLEEP = new Map();     // id -> tick he lay down
 const WATCH = new Map();     // squad key -> { ids: Set, t }
-function wake(e) { if (!SLEEP.has(e.id)) return; SLEEP.delete(e.id); try { setP(e, "war:sleep", false); } catch {} }
+function wake(e) { if (!SLEEP.has(e.id)) return; const b = SLEEP.get(e.id)?.bed; SLEEP.delete(e.id); if (b) BEDS_TAKEN.delete(b); try { setP(e, "war:sleep", false); if (!pows.has(e.id) && !sd(e).surr) equip(e, weaponItem(e)); } catch {} }   // (v9.23: he picks his rifle back up)
+const BEDS_TAKEN = new Set();   // "x,y,z" of beds a man is sleeping in or walking to
+const GOING_TO_BED = new Map(); // id -> { at, key, t }
+function lieDown(o, now, bed) {
+  SLEEP.set(o.id, { t: now, bed: bed?.key });
+  setP(o, "war:sleep", true); setP(o, "war:gun", 0);                                 // (the rifle laid down beside him, not sticking up out of him)
+  try { const at = bed ? { x: bed.x + 0.5, y: bed.y + 0.56, z: bed.z + 0.5 } : o.location; o.teleport(at, { rotation: { x: 0, y: Math.random() * 360 } }); } catch {}   // (each his own way: not lined up)
+  note(o, bed ? "asleep in a bed" : "asleep");
+}
+function findBed(o) {
+  const l = o.location;
+  for (let dx = -10; dx <= 10; dx++) for (let dz = -10; dz <= 10; dz++) for (const dy of [0, 1, -1]) {
+    try {
+      const b = o.dimension.getBlock({ x: Math.floor(l.x) + dx, y: Math.floor(l.y) + dy, z: Math.floor(l.z) + dz });
+      if (!b || b.typeId !== "minecraft:bed") continue;
+      const key = `${b.location.x},${b.location.y},${b.location.z}`;
+      if (BEDS_TAKEN.has(key)) continue;
+      return { x: b.location.x, y: b.location.y, z: b.location.z, key };
+    } catch {}
+  }
+  return undefined;
+}
 system.runInterval(() => {
   const now = tick();
   if (!NIGHT) { for (const id of [...SLEEP.keys()]) { const e = world.getEntity(id); if (e?.isValid) wake(e); else SLEEP.delete(id); } return; }
@@ -12429,13 +12462,22 @@ system.runInterval(() => {
       // the watch: a third of them, rotating every ~2 minutes
       let W = WATCH.get(k);
       if (!W || now - W.t > 2400) { const off = W?.ids ?? new Set(); const pool = men.filter((o) => !off.has(o.id)); const n = Math.max(1, Math.ceil(men.length / 3)); W = { ids: new Set((pool.length >= n ? pool : men).slice(0, n).map((o) => o.id)), t: now }; WATCH.set(k, W); for (const id of W.ids) { const o = world.getEntity(id); if (o?.isValid) { wake(o); note(o, "on watch"); } } }
+      // (v9.23: a third of them at most asleep at once, a third on watch, the rest awake about the camp)
+      const maxAsleep = Math.max(1, Math.floor(men.length / 3));
+      let asleep = men.filter((o) => SLEEP.has(o.id) || GOING_TO_BED.has(o.id)).length;
       for (const o of men) {
-        if (W.ids.has(o.id) || SLEEP.has(o.id)) continue;
+        if (asleep >= maxAsleep) break;
+        if (W.ids.has(o.id) || SLEEP.has(o.id) || GOING_TO_BED.has(o.id)) continue;
         const d = sd(o); if (d.retreat || d.surr || seated.has(o.id) || personal.has(o.id) || now - Number(gdp(o, "war:ordt") ?? -99999) < 600 || now - Number(gdp(o, "war:hurt") ?? -99999) < 600) continue;
         if (["charge", "follow", "escort", "patrol"].includes(d.func) || d.div === "guard") continue;
-        const v = o.getVelocity(); if (Math.hypot(v.x, v.z) > 0.02 || Math.random() > 0.25) continue;
+        const v = o.getVelocity(); if (Math.hypot(v.x, v.z) > 0.02 || Math.random() > 0.2) continue;
         if (!PLAYER_POS.some((p) => p.d === o.dimension.id && Math.abs(p.x - o.location.x) < 64 && Math.abs(p.z - o.location.z) < 64)) continue;   // (nobody to see it: why bother)
-        SLEEP.set(o.id, now); setP(o, "war:sleep", true); note(o, "asleep");
+        // a bed close by: he goes to it. Otherwise only under a roof, or out in the open on a dry night, never on top of another man
+        const bed = findBed(o);
+        if (bed) { BEDS_TAKEN.add(bed.key); GOING_TO_BED.set(o.id, { at: bed, key: bed.key, t: now }); planPersonalTo(o, "settle", { x: bed.x + 0.5, y: bed.y, z: bed.z + 0.5 }, now); note(o, "turning in"); asleep++; continue; }
+        if (WEATHER_K < 1 && !isIndoors(o)) continue;                                  // (raining: nobody lies down in the wet)
+        if (men.some((q) => q.id !== o.id && SLEEP.has(q.id) && flat(q.location, o.location) < 1.8)) continue;
+        lieDown(o, now); asleep++;
       }
     } catch {}
   }
@@ -12443,6 +12485,12 @@ system.runInterval(() => {
 // woken by a shot fired near, a hit, an order
 world.afterEvents.entityHurt.subscribe((ev) => { try { const v = ev.hurtEntity; if (v?.typeId === SOLDIER && SLEEP.has(v.id)) wake(v); } catch {} });
 system.runInterval(() => {
+  const now0b = tick();
+  for (const [id, G] of [...GOING_TO_BED]) {
+    const e = world.getEntity(id);
+    if (!e?.isValid || !NIGHT || now0b - G.t > 600 || perc.get(id)?.threat) { BEDS_TAKEN.delete(G.key); GOING_TO_BED.delete(id); continue; }
+    if (flat(e.location, { x: G.at.x + 0.5, z: G.at.z + 0.5 }) < 1.6) { GOING_TO_BED.delete(id); personal.delete(id); lieDown(e, now0b, G.at); }
+  }
   if (!SLEEP.size) return;
   const now = tick();
   for (const [id] of [...SLEEP]) {
