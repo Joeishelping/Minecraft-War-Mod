@@ -193,6 +193,7 @@ export class Player extends Entity {
   constructor(loc, dim) { super("minecraft:player", loc, dim); this.isPlayer = true; this.name = "Tester"; this.onScreenDisplay = { setActionBar: (t) => SIM.log.push(`[bar] ${t}`), setTitle() {} }; this.camera = { setCamera() {}, clear() {} }; this.hp = 20; this.maxHp = 20; }
   sendMessage(m) { SIM.log.push(`[msg] ${m}`); }
   playSound() {}
+  spawnParticle(id) { count("spawnParticle"); if (id === "war:far") SIM.farDrawn = (SIM.farDrawn ?? 0) + 1; }
 }
 function damage(v, amount, src, cause) {
   if (!v._valid || v.static) return false;

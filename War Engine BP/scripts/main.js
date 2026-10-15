@@ -4314,32 +4314,6 @@ function flightClear(dim, p, v, L, B) {
   for (let i = 2; i < pts.length; i += 2) { if (!openNow(dim, a, pts[i])) return false; a = pts[i]; }
   return a === pts[pts.length - 1] || openNow(dim, a, pts[pts.length - 1]);
 }
-// v9.21.5: Bedrock draws a mob for a player only inside the game's Simulation Distance (world settings), whatever the
-// render distance, and no add-on can change that. So a soldier shoots at a player only from where the game is drawing
-// him: within 56 blocks always (the smallest setting), farther only while the game is simulating him (the same tiny
-// nudge test as the out-of-range march; frozen men don't budge). A sniper still watches from up to 250 blocks.
-// Simulation Distance 12 lets you see, and be shot from, about 190 blocks.
-const SIM_SEEN = new Map(); // id -> { t, ok, probe }
-function playerSeesHim(e, p, now) {
-  const l = e.location, pl = p.location;
-  if (Math.abs(pl.x - l.x) <= 56 && Math.abs(pl.z - l.z) <= 56) return true;
-  if (isRemote(e)) return false;
-  let s = SIM_SEEN.get(e.id);
-  if (!s) { if (SIM_SEEN.size > 2000) SIM_SEEN.clear(); s = { t: -999, ok: false }; SIM_SEEN.set(e.id, s); }
-  let who = e;
-  try { const on = e.getComponent("minecraft:riding")?.entityRidingOn; if (on) who = on; } catch {}
-  if (s.probe) {
-    if (now - s.probe.t < 4) return s.ok;
-    let w = l; try { w = s.probe.who.location; } catch {}
-    s.ok = Math.hypot(w.x - s.probe.x, w.z - s.probe.z) > 0.004 || Math.abs(w.y - s.probe.y) > 0.004;
-    s.probe = undefined; s.t = now;
-    return s.ok;
-  }
-  if (now - s.t < (s.ok ? 100 : 40) || gliders.has(e.id) || climbing.has(e.id)) return s.ok;
-  const w = who.location; s.probe = { t: now, who, x: w.x, y: w.y, z: w.z };
-  try { who.applyImpulse({ x: (Math.random() - 0.5) * 0.06, y: 0.02, z: (Math.random() - 0.5) * 0.06 }); } catch {}
-  return s.ok;
-}
 function fireGun(e, spec, t, aim) {
   const h = headLoc(e), c0 = aim ?? chest(t);
   let c = c0;
@@ -4547,7 +4521,6 @@ function gunTick(e, now) {
   const t = st.target;
   if (ambushHold(e, d, t, now)) { st.next = now + 2; return; }          // v9.0: an ambush: nobody fires until it's sprung
   if (!t.isValid || downed.has(t.id) || pows.has(t.id)) { st.target = undefined; st.check = now; return; }   // (v7.1: down or surrendered: no more rounds into him, or past him into the wall)
-  if (t.typeId === "minecraft:player" && !playerSeesHim(e, t, now)) { st.next = now + 10; return; }   // v9.21.5: never from where the game isn't drawing him
   if (!shotAt(e, d, t, now)) return;                                    // beyond the gun's useful range, or a head too far to hit: close in first (v5.4)
   if (arm?.arm === "blade" || (arm?.jamUntil ?? 0) > now && arm.arm === "main") return;   // (v9.2: sword out / clearing a jam)
   if (d.weapon === "at" && !VEHICLES.includes(t.typeId) && dist(t.location, e.location) < 6) { st.next = now + 6; return; }   // (v6.9.1: no rocket at a man this close: the blast would take him too)
@@ -9477,6 +9450,70 @@ function settle(e, slot, m) {
   planPersonalTo(e, "settle", { x: at.x, y: at.y, z: at.z }, now);                // a short real route onto it (never a straight line off a stair)
   note(e, "taking his spot");
 }
+// v9.21.6: far sight. Bedrock stops drawing mobs about 64 blocks from you (a fixed limit: no setting raises it, and no
+// add-on can), while a sniper sees 250. Particles, though, are drawn at any distance. So past 62 blocks, out to 250,
+// every soldier is drawn for each player as a small picture of himself: his own uniform (cut from his own skin),
+// facing you, lit by the light where he stands, gliding with him between updates, kneeling or lying as he does.
+// Walls, hills and fog hide it just like the man himself. Riders inside vehicles aren't drawn (they're inside).
+const FAR_IN = 62, FAR_OUT = 250, FAR_EVERY = 4;
+const farMemo = new Map(); // id -> { x, y, z, t (last drawn), i (sprite), it (when the sprite was read) }
+let farCur = 0;
+function farSprite(e, m, now) {
+  if (m.i !== undefined && now - m.it < 200) return m.i;
+  let i = -1;
+  try {
+    if (!e.getProperty("war:hide")) {
+      const f = Math.max(1, Math.min(40, Number(e.getProperty("war:faction") ?? 1) || 1)), sk = Number(e.getProperty("war:skin") ?? 0);
+      i = sk > 0 && sk <= 64 ? 39 + sk : e.getProperty("war:medic") ? 104 + (f - 1) : f - 1;   // (the same pick as the soldier's own render controller; a rider wears his foot uniform)
+    }
+  } catch {}
+  m.i = i; m.it = now;
+  return i;
+}
+system.runInterval(() => {
+  let ps; try { ps = world.getAllPlayers(); } catch { return; }
+  if (!ps.length) return;
+  const eyes = [];
+  for (const p of ps) { try { eyes.push({ p, d: p.dimension.id, l: p.getHeadLocation() }); } catch {} }
+  let all; try { all = allOf(SOLDIER); } catch { return; }
+  const n = all.length; if (!n || !eyes.length) return;
+  const now = tick(), per = Math.ceil(n / FAR_EVERY);
+  if (farCur >= n) farCur = 0;
+  for (let k = 0; k < per; k++) {
+    const e = all[(farCur + k) % n];
+    try {
+      if (!e.isValid) continue;
+      const l = e.location, did = e.dimension.id;
+      let to;
+      for (const v of eyes) {
+        if (v.d !== did) continue;
+        const dd = Math.hypot(l.x - v.l.x, l.y - v.l.y, l.z - v.l.z);
+        if (dd > FAR_IN && dd <= FAR_OUT) (to ??= []).push(v.p);
+      }
+      let m = farMemo.get(e.id);
+      if (!m) { m = { x: l.x, y: l.y, z: l.z, t: now }; farMemo.set(e.id, m); }
+      const gap = Math.max(1, now - m.t), vx = (l.x - m.x) / gap, vz = (l.z - m.z) / gap;
+      m.x = l.x; m.y = l.y; m.z = l.z; m.t = now;
+      if (!to) continue;
+      const ri = rideInfo(e);
+      if (ri.v && VEHICLES.includes(ri.on)) continue;
+      const i = farSprite(e, m, now);
+      if (i < 0) continue;
+      const down = downed.has(e.id), kneel = !down && poseOf.get(e.id) === 1;
+      const sp = Math.hypot(vx, vz), move = sp > 0.01 && sp < 0.8;   // (blocks a tick; a teleport isn't walking)
+      const mv = new MolangVariableMap();
+      mv.setFloat("variable.u", (i % 16) * 16); mv.setFloat("variable.v", Math.floor(i / 16) * 32);
+      mv.setFloat("variable.w", 0.46); mv.setFloat("variable.h", kneel ? 0.7 : 0.92);
+      mv.setFloat("variable.rot", down ? 90 : 0);
+      mv.setFloat("variable.spd", move ? sp * 20 : 0); mv.setFloat("variable.dx", move ? vx / sp : 0); mv.setFloat("variable.dz", move ? vz / sp : 0);
+      mv.setFloat("variable.life", (FAR_EVERY * 2 + 1) / 20);   // (outlasts one missed update: never a flicker)
+      const at = { x: l.x, y: l.y + (down ? 0.3 : kneel ? 0.7 : 0.92), z: l.z };
+      for (const p of to) { try { p.spawnParticle("war:far", at, mv); } catch {} }
+    } catch {}
+  }
+  farCur = (farCur + per) % n;
+  if (farMemo.size > 4000) farMemo.clear();
+}, 1);
 const stepping = new Set(); // soldiers following a route of their own right now (the edge guard watches only them)
 // v6.2: out of range. Beyond the game's simulation distance (4 chunks by default, ~64 blocks from every player) the land
 // is still loaded but mobs don't move at all: their own walking simply doesn't run. A squad sent far away used to walk

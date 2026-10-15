@@ -1,5 +1,14 @@
 # War Engine changelog
 
+## v9.21.6 (Far sight: see them as far as a sniper does)
+
+- Bedrock stops drawing mobs about 64 blocks from you. It's a fixed limit: no setting raises it (Simulation Distance
+  doesn't, as v9.21.5 wrongly said) and no add-on can. Particles are drawn at any distance, so past 62 blocks, out to
+  250 (a sniper's sight), every soldier is now drawn for you as a small picture of himself: his own uniform (cut from
+  his own skin, medics and custom skins included), facing you, lit by the light where he stands, moving with him,
+  kneeling or lying as he does. Walls, hills and fog hide him the same as up close. Crews inside vehicles aren't drawn.
+- With that, v9.21.5's rule is gone: soldiers fire from their full range again, because you can see them there.
+
 ## v9.21.5 (They can't shoot you from where you can't see them)
 
 - Bedrock draws a mob for you only inside the world's Simulation Distance (world settings), whatever your render
