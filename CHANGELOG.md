@@ -1,5 +1,15 @@
 # War Engine changelog
 
+## v9.21.5 (They can't shoot you from where you can't see them)
+
+- Bedrock draws a mob for you only inside the world's Simulation Distance (world settings), whatever your render
+  distance, and an add-on can't change that. A sniper sees 250 blocks, so he could hit you from well past where the
+  game draws him. Soldiers now shoot at a player only from where the game is drawing them: always within 56 blocks,
+  and farther only while the game is simulating them (checked with a nudge you can't see). They still watch and spot
+  from their full range.
+- To see soldiers farther away, and fight them there, raise Simulation Distance (12 chunks is about 190 blocks) and
+  keep Render Distance at least that high.
+
 ## v9.21.4 (Ammo never runs out)
 
 - Soldiers no longer run out of ammo: the "Limited ammo" setting is gone (and from the Realistic / Cinematic

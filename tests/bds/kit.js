@@ -2485,6 +2485,23 @@ KS.powchain = async (o, ox, oz) => {
 };
 // v9.21.3: his own side all round him: a surrendered man is back in the fight, a prisoner is freed (guard or not);
 // not with only two of them, nor when the enemy round him outnumbers them
+// v9.21.5: the fair-sight gate: a man the game is simulating counts as seen by a far player (standing, walking, riding)
+KS.simsee = async (o, ox, oz) => {
+  floorAt(ox - 20, oz - 20, ox + 20, oz + 20);
+  const a = kitSoldier(1, { x: ox + 0.5, y: Y, z: oz + 0.5 }, "sniper", "hold");
+  const b = kitSoldier(1, { x: ox + 5.5, y: Y, z: oz + 0.5 }, "rifle", "hold");
+  await kitWait(40);
+  globalThis.__noThink = new Set([a.id]);
+  const far = { location: { x: ox + 200, y: Y, z: oz } }, near = { location: { x: ox + 20, y: Y, z: oz } };
+  const r = { near: playerSeesHim(a, near, tick()), first: playerSeesHim(a, far, tick()) };
+  await kitWait(6);
+  r.afterProbe = playerSeesHim(a, far, tick());
+  const l0 = a.location; await kitWait(20); const l1 = a.location;
+  r.nudge = Math.hypot(l1.x - l0.x, l1.z - l0.z).toFixed(3);
+  r.walker = playerSeesHim(b, far, tick()); await kitWait(6); r.walkerAfter = playerSeesHim(b, far, tick());
+  globalThis.__noThink = undefined;
+  return r;
+};
 KS.rejoin = async (o, ox, oz) => {
   floorAt(ox - 40, oz - 40, ox + 40, oz + 40);
   setRelPair(1, 2, "1", false);

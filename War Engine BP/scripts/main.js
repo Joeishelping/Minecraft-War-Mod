@@ -4314,6 +4314,32 @@ function flightClear(dim, p, v, L, B) {
   for (let i = 2; i < pts.length; i += 2) { if (!openNow(dim, a, pts[i])) return false; a = pts[i]; }
   return a === pts[pts.length - 1] || openNow(dim, a, pts[pts.length - 1]);
 }
+// v9.21.5: Bedrock draws a mob for a player only inside the game's Simulation Distance (world settings), whatever the
+// render distance, and no add-on can change that. So a soldier shoots at a player only from where the game is drawing
+// him: within 56 blocks always (the smallest setting), farther only while the game is simulating him (the same tiny
+// nudge test as the out-of-range march; frozen men don't budge). A sniper still watches from up to 250 blocks.
+// Simulation Distance 12 lets you see, and be shot from, about 190 blocks.
+const SIM_SEEN = new Map(); // id -> { t, ok, probe }
+function playerSeesHim(e, p, now) {
+  const l = e.location, pl = p.location;
+  if (Math.abs(pl.x - l.x) <= 56 && Math.abs(pl.z - l.z) <= 56) return true;
+  if (isRemote(e)) return false;
+  let s = SIM_SEEN.get(e.id);
+  if (!s) { if (SIM_SEEN.size > 2000) SIM_SEEN.clear(); s = { t: -999, ok: false }; SIM_SEEN.set(e.id, s); }
+  let who = e;
+  try { const on = e.getComponent("minecraft:riding")?.entityRidingOn; if (on) who = on; } catch {}
+  if (s.probe) {
+    if (now - s.probe.t < 4) return s.ok;
+    let w = l; try { w = s.probe.who.location; } catch {}
+    s.ok = Math.hypot(w.x - s.probe.x, w.z - s.probe.z) > 0.004 || Math.abs(w.y - s.probe.y) > 0.004;
+    s.probe = undefined; s.t = now;
+    return s.ok;
+  }
+  if (now - s.t < (s.ok ? 100 : 40) || gliders.has(e.id) || climbing.has(e.id)) return s.ok;
+  const w = who.location; s.probe = { t: now, who, x: w.x, y: w.y, z: w.z };
+  try { who.applyImpulse({ x: (Math.random() - 0.5) * 0.06, y: 0.02, z: (Math.random() - 0.5) * 0.06 }); } catch {}
+  return s.ok;
+}
 function fireGun(e, spec, t, aim) {
   const h = headLoc(e), c0 = aim ?? chest(t);
   let c = c0;
@@ -4521,6 +4547,7 @@ function gunTick(e, now) {
   const t = st.target;
   if (ambushHold(e, d, t, now)) { st.next = now + 2; return; }          // v9.0: an ambush: nobody fires until it's sprung
   if (!t.isValid || downed.has(t.id) || pows.has(t.id)) { st.target = undefined; st.check = now; return; }   // (v7.1: down or surrendered: no more rounds into him, or past him into the wall)
+  if (t.typeId === "minecraft:player" && !playerSeesHim(e, t, now)) { st.next = now + 10; return; }   // v9.21.5: never from where the game isn't drawing him
   if (!shotAt(e, d, t, now)) return;                                    // beyond the gun's useful range, or a head too far to hit: close in first (v5.4)
   if (arm?.arm === "blade" || (arm?.jamUntil ?? 0) > now && arm.arm === "main") return;   // (v9.2: sword out / clearing a jam)
   if (d.weapon === "at" && !VEHICLES.includes(t.typeId) && dist(t.location, e.location) < 6) { st.next = now + 6; return; }   // (v6.9.1: no rocket at a man this close: the blast would take him too)
