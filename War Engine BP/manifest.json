@@ -1,14 +1,10 @@
 {
   "format_version": 2,
   "header": {
-    "name": "War Engine BP v9.20.2",
+    "name": "War Engine BP v9.21",
     "description": "Faction NPC war framework",
     "uuid": "67b58306-3e4b-4c5d-9066-5f8fc72ff122",
-    "version": [
-      9,
-      20,
-      2
-    ],
+    "version": [9, 21, 0],
     "min_engine_version": [
       1,
       21,
@@ -19,32 +15,20 @@
     {
       "type": "data",
       "uuid": "80231c78-4972-48b4-8e13-f48b681db89c",
-      "version": [
-      9,
-      20,
-      2
-    ]
+      "version": [9, 21, 0]
     },
     {
       "type": "script",
       "language": "javascript",
       "uuid": "40ad0003-5999-4d1e-9b81-2bc04b250030",
-      "version": [
-      9,
-      20,
-      2
-    ],
+      "version": [9, 21, 0],
       "entry": "scripts/main.js"
     }
   ],
   "dependencies": [
     {
       "uuid": "55a51bdd-64f6-4305-b2b3-e50c47ade70a",
-      "version": [
-      9,
-      20,
-      2
-    ]
+      "version": [9, 21, 0]
     },
     {
       "module_name": "@minecraft/server",

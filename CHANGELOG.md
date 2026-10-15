@@ -41,6 +41,9 @@ Riders, crews, medics, patrols
 - The machine gunner's move to the squad's flank is kept until he gets there (it was dropped half a second after he
   set off, eight times a fight); the flank point no longer shifts every 10 s.
 - A squad holding a house keeps its spare men inside it, covering the rooms, instead of sending them out of the door.
+- The watch reaches its posts (men stood 5 blocks out "going on watch"); a man out of ammo takes a dead man's rounds
+  reliably; a march's scout turns back as soon as he's gone as far as he can, instead of standing out there for 25 s.
+- Escort mission: a message if the VIP can't be placed where you stand (it silently did nothing).
 
 Measured with the battle simulator against v9.20.2: 10/10 acceptance checks; storming a building, the attackers
 reach the upper floor in 3 of 4 runs (was 0 of 4) on less than half the script work; castle defenders stay on their

@@ -12802,7 +12802,7 @@ system.runInterval(() => {
     if (!e?.isValid || downed.has(id) || !S) { SCOUTS.delete(id); if (e?.isValid === false || !e) v9stat("scoutLost"); continue; }
     try {
       const home = S.ourC ?? e.location;
-      if (sc.phase === "out" && (flat(e.location, sc.to) < 3 || now - sc.t > 500)) { sc.phase = "back"; sc.t = now; }
+      if (sc.phase === "out" && (flat(e.location, sc.to) < 4 || (!personal.has(id) && now - sc.t > 40) || now - sc.t > 500)) { sc.phase = "back"; sc.t = now; }   // (v9.20.3: as far as his way goes: back now, not after 25 s standing out there)
       if (sc.phase === "back") {
         if (flat(e.location, home) < 10) {
           for (const [oid, q] of sc.intel) S.known.set(oid, { ...q, t: now });
@@ -13262,7 +13262,7 @@ system.runInterval(() => {
       for (const [cid, b] of BODY_KIT) { if (b.dim !== e.dimension.id || Math.abs(b.at.y - e.location.y) > 3) continue; const dd = flat(b.at, e.location); if (dd < bd) { bd = dd; best = cid; } }
       if (!best) continue;
       const b = BODY_KIT.get(best);
-      if (bd < 2.2) {
+      if (bd < 3.2) {                                                               // (v9.20.3: 3, not 2: the walking there stops 3 short, and he stood over the body without taking anything)
         const w = sd(e).weapon, n = b.w === w ? b.n : Math.ceil(b.n / 2);   // (another kind of gun: what fits, or near enough)
         BODY_KIT.delete(best); giveAmmo(e, n); KNEEL.set(e.id, now + 30);
         note(e, "took ammo off the dead"); v9stat("scavenged"); continue;
@@ -13720,8 +13720,7 @@ WarAPI.registerBehavior({
     const want = walkableNear(e.dimension, c.x + Math.cos(a) * 6, c.z + Math.sin(a) * 6, c.y);
     if (!want || Math.abs(want.y - c.y) > 2) return undefined;
     const gap = flat(want, e.location);
-    if (gap > 4) { const slot = myMarker(e, want, "war:mymk", 0.8); return slot ? { g: "g_wp", slot, t: "t_mid", urgent: false, note: "going on watch" } : undefined; }
-    if (gap > 0.8) { const L = gap || 1; push(e, { x: ((want.x - e.location.x) / L) * 0.22, y: 0, z: ((want.z - e.location.z) / L) * 0.22 }, 2); return { g: "g_none", t: "t_mid", urgent: false, note: "going on watch" }; }   // (the last steps: the game's following stops 3 short)
+    if (gap > 1.3) { const slot = myMarker(e, want, "war:mymk", 0.5); return slot ? { g: gap > 6 ? "g_wp" : "g_post", slot, t: "t_mid", urgent: false, note: "going on watch" } : undefined; }   // (v9.20.3: the last blocks with the walking that stops at a block, not 3: pushed the last steps, he stood 5 blocks out "going on watch")
     if (now % 20 === 0) turnTo(e, { x: e.location.x + Math.cos(a) * 8, z: e.location.z + Math.sin(a) * 8 }, 8);
     return { g: "g_none", t: "t_long", urgent: false, note: "on watch" };
   },
@@ -13804,7 +13803,7 @@ async function missionMenu(p) {
     if (L < 40) { p.sendMessage("§cLook at a spot at least 40 blocks away: that's where the VIP has to get to."); return; }
     setRelPair(vf, ef, "1", true);
     const vip = msSpawn(p, dim, A, vf, 1, "sword", "hold", MS_SQ.esc, 1)[0];
-    if (!vip) return;
+    if (!vip) { p.sendMessage("§cCouldn't place the VIP where you're standing. Try open ground."); return; }
     try { sdp(vip, "war:custom", "§6VIP"); vip.triggerEvent("war:hp_60"); updateName(vip); } catch {}
     const esc = msSpawn(p, dim, A, vf, v[1], REINF_MIX[v[5]][0], "hold", MS_SQ.esc, 3);
     const ambs = [];

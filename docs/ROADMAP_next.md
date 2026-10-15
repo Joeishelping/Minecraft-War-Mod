@@ -40,3 +40,12 @@ Numbers are from the 100-item list. "Done" items were tested on a real server un
 91 split main.js: started (names.js, voices.js, guide.js); the rest of main.js is still one file
 93 shared cache layer: the health-component cache; the rest is as before
 94 dead code: the old cavalry body's client checks removed; MG-nest code is still used by vehicle gun seats
+
+## v9.21: hesitation audit (after the roadmap)
+A real-server audit of every kind of NPC (kit scenario `audit`: stalls, dithering, head flicks, decision flips) and
+the fixes it led to: prisoners following their captor, followers keeping up and going round walls, men facing their
+path while walking, cavalry and vehicle-seat heads, medics, patrols, scouts, the MG flank move, holding a house.
+Known and left as is: the game's own walking takes a random 0.2-3 s to set off after a man is given somewhere new to
+go (a per-tick script start was tried and dropped: it cost too much in big battles and didn't measurably help);
+in the kit's 8-on-8 house siege the attackers never reach the defenders' floor (same before; in the simulator's
+assault they now do, 3 of 4 runs); acceptance check 4 fails about one run in three, the same as v9.20.2.

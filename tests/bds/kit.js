@@ -2446,6 +2446,7 @@ KS.homeorder = async (o, ox, oz) => {
   await giveOrderInner(KIT_PLAYER, { faction: 1, order: ORDERS.findIndex((x) => x[0] === "home"), squad: 0, count: 0, radius: 400, stance: "aggressive", ao: 100, free: true }, men);
   await kitWait(500);
   r.distToHq = men.map((e) => Math.round(flat(e.location, fl.location)));
+  r.who = men.map((e) => { const d = sd(e), pr = personal.get(e.id); return `${d.func}/${notes.get(e.id)?.text ?? ""}/${pr ? pr.kind : "-"}/scout${SCOUTS.has(e.id) ? 1 : 0}/watch${[...DAYWATCH.values()].some((W) => W.ids.includes(e.id)) ? 1 : 0}/${getJSON(e, "war:st", {}).g}`; });
   // healing at the HQ
   const h = men[0].getComponent("minecraft:health"); h.setCurrentValue(8); await kitWait(400); r.healedTo = Math.round(h.currentValue);
   for (const e of men) try { e.remove(); } catch {} try { fl.remove(); } catch {}
@@ -2481,7 +2482,7 @@ KS.missions = async (o, ox, oz) => {
   for (const e of [...defs, ...atts]) try { e.remove(); } catch {}
   // escort
   const A = { x: ox - 40.5, y: Y, z: oz + 30.5 }, B = { x: ox + 40.5, y: Y, z: oz + 30.5 };
-  const vip = msSpawn(KIT_PLAYER, dim, A, 1, 1, "sword", "hold", MS_SQ.esc, 1)[0]; sdp(vip, "war:custom", "§6VIP");
+  const vip = msSpawn(KIT_PLAYER, dim, A, 1, 1, "sword", "hold", MS_SQ.esc, 1)[0]; if (!vip) { globalThis.__fakeLeader = undefined; r.esc = "VIP not placed (unloaded ground?)"; return r; } sdp(vip, "war:custom", "§6VIP");
   const esc = msSpawn(KIT_PLAYER, dim, A, 1, 3, "rifle", "hold", MS_SQ.esc, 3);
   await kitWait(30); msMarch(KIT_PLAYER, [vip, ...esc], 1, MS_SQ.esc, B);
   MISSION = { kind: "Escort", type: "esc", dim: dim.id, vip, esc, ambs: [], B, vf: 1, ef: 2, t0: tick() };
