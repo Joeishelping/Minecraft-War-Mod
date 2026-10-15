@@ -14,6 +14,7 @@ const kcmd = (c) => { try { return ow().runCommand(c); } catch (err) { console.w
 function kfill(x0, y0, z0, x1, y1, z1, b) {
   const [ax, bx] = [Math.min(x0, x1), Math.max(x0, x1)], [ay, by] = [Math.min(y0, y1), Math.max(y0, y1)], [az, bz] = [Math.min(z0, z1), Math.max(z0, z1)];
   for (let x = ax; x <= bx; x += 32) for (let z = az; z <= bz; z += 32) for (let y = ay; y <= by; y += 30) kcmd(`fill ${x} ${y} ${z} ${Math.min(bx, x + 31)} ${Math.min(by, y + 29)} ${Math.min(bz, z + 31)} ${b}`);
+  try { terrainForget(); } catch {}
 }
 const kset = (x, y, z, b) => { const r = kcmd(`setblock ${x} ${y} ${z} ${b}`); try { terrainChanged(ow().id, x, y, z); } catch {} return r; };   // (like a player placing it: the soldiers notice)
 const STAIR = (dir) => `oak_stairs ["weirdo_direction"=${{ "+x": 0, "-x": 1, "+z": 2, "-z": 3 }[dir]}]`;
@@ -1942,7 +1943,7 @@ KS.skinmix = async (o, ox, oz) => {
 // v9.19: second-guessing meter: decision changes, flip-flops (A->B->A within 3 s) and which pairs flip, movement
 // reversals, yaw flicks, target switches, goal-group changes (the game's own movement switching)
 async function churn(list, T) {
-  const st = new Map(), pairs = {}; let acts = 0, flips = 0, tsw = 0, gsw = 0, rev = 0, moves = 0, flick = 0, turns = 0, samples = 0, bigFlick = 0;
+  const st = new Map(), pairs = {}, ditherWhat = {}, stallWhat = {}; let want = 0, stall = 0, dither = 0, acts = 0, flips = 0, tsw = 0, gsw = 0, rev = 0, moves = 0, flick = 0, turns = 0, samples = 0, bigFlick = 0;
   for (let k = 0; k < T; k++) {
     await kitWait(1);
     const now = tick();
@@ -1962,10 +1963,18 @@ async function churn(list, T) {
       if (S.v) { const sp = Math.hypot(v.x, v.z), lsp = Math.hypot(S.v.x, S.v.z); if (sp > 0.04 && lsp > 0.04) { moves++; if ((v.x * S.v.x + v.z * S.v.z) / (sp * lsp) < -0.3) rev++; } }
       if (S.y !== undefined) { const dy = ((r.y - S.y + 540) % 360) - 180; if (Math.abs(dy) > 3) { turns++; if (S.dy && Math.sign(dy) !== Math.sign(S.dy)) { flick++; if (Math.abs(dy) > 12 && Math.abs(S.dy) > 12 && now - (S.dyT ?? -99) < 10) bigFlick++; } S.dy = dy; S.dyT = now; } }
       S.act = act; S.g = g; S.tg = tg; S.v = v; S.y = r.y;
+      // v9.20.3: hesitation (meant to be going somewhere, standing still a second or more) and dithering (lots of walking,
+      // little getting anywhere, over 3 s)
+      const l = e.location, gm = marker(Number(gdp(e, "war:goal") ?? 0));
+      const wants = (g === "g_wp" || g === "g_owner") && !downed.has(e.id) && (!gm || flat(gm.location, l) > 3.2) && !isRiding(e);
+      if (wants) { want++; if (Math.hypot(v.x, v.z) < 0.015 && (!S.lp || flat(S.lp, l) < 0.02)) { S.still = (S.still ?? 0) + 1; if (S.still > 20) { stall++; const nt = (notes.get(e.id)?.text ?? "?").slice(0, 26) + "/" + (act || "-"); stallWhat[nt] = (stallWhat[nt] ?? 0) + 1; } } else S.still = 0; } else S.still = 0;
+      if (S.lp) S.path = (S.path ?? 0) + flat(S.lp, l);
+      S.lp = { x: l.x, y: l.y, z: l.z };
+      if (!S.w0 || now - S.w0.t >= 60) { if (S.w0 && S.path > 3 && flat(S.w0, l) < S.path * 0.35) { dither++; if (S.ditherAct === undefined) S.ditherAct = act || g; ditherWhat[act || g] = (ditherWhat[act || g] ?? 0) + 1; } S.w0 = { x: l.x, z: l.z, t: now }; S.path = 0; }
     }
   }
   const perMin = (n) => +((n / Math.max(1, list.length)) * (1200 / T)).toFixed(1);
-  return { actsPerMin: perMin(acts), flipsPerMin: perMin(flips), groupSwPerMin: perMin(gsw), targetSwPerMin: perMin(tsw), revPct: +(100 * rev / Math.max(1, moves)).toFixed(1), flickPerTurn: +(flick / Math.max(1, turns)).toFixed(2), bigFlickPerMin: perMin(bigFlick), topFlips: Object.entries(pairs).sort((a, b) => b[1] - a[1]).slice(0, 8).map(([k, v]) => `${k}:${v}`) };
+  return { actsPerMin: perMin(acts), flipsPerMin: perMin(flips), groupSwPerMin: perMin(gsw), targetSwPerMin: perMin(tsw), revPct: +(100 * rev / Math.max(1, moves)).toFixed(1), flickPerTurn: +(flick / Math.max(1, turns)).toFixed(2), bigFlickPerMin: perMin(bigFlick), stallPct: +(100 * stall / Math.max(1, want)).toFixed(1), ditherPerMin: perMin(dither * 1), stallWhat: Object.entries(stallWhat).sort((a, b) => b[1] - a[1]).slice(0, 5).map(([k, v]) => `${k}:${v}`), ditherWhat: Object.entries(ditherWhat).sort((a, b) => b[1] - a[1]).slice(0, 5).map(([k, v]) => `${k}:${v}`), topFlips: Object.entries(pairs).sort((a, b) => b[1] - a[1]).slice(0, 8).map(([k, v]) => `${k}:${v}`) };
 }
 KS.brainy = async (o, ox, oz) => {
   floorAt(ox - 40, oz - 40, ox + 40, oz + 40);
@@ -2153,6 +2162,140 @@ KS.walldbg = async (o, ox, oz) => {
   await new Promise((res) => planRoute(dim, from, to, (pts, partial) => { r.plan = pts ? `${pts.length}${partial ? " PARTIAL" : ""} ` + pts.map((p) => `${Math.round(p.x - ox)},${p.y - Y},${Math.round(p.z - oz)}`).join(" ") : "none"; res(); }, { max: 6000, maxRadius: 50 }));
   for (let x = ox - 10; x <= ox + 30; x++) for (let y = Y; y < Y + 3; y++) kset(x, y, oz + 12, "air");
   return r;
+};
+// v9.20.3: the audit: every kind of NPC through the hesitation / jitter meter. o.only=<name> runs one part.
+KS.audit = async (o, ox, oz) => {
+  const res = {}, run = (k) => !o.only || String(o.only).split(",").includes(k);
+  const tough = (list) => { for (const e of list) try { e.addEffect("resistance", 3000, { amplifier: 3, showParticles: false }); e.addEffect("regeneration", 3000, { amplifier: 2, showParticles: false }); } catch {} };
+  const clear = (list) => { for (const e of list) try { e.remove(); } catch {} };
+  const T = Number(o.t ?? 500);
+  setRelPair(1, 2, "1", true);
+  if (run("cover")) {                                              // an open fight with a line of half walls on each side
+    floorAt(ox - 40, oz - 40, ox + 40, oz + 40);
+    for (const z of [oz - 8, oz + 8]) for (let x = ox - 12; x <= ox + 12; x += 4) { kset(x, Y, z, "cobblestone_wall"); kset(x + 1, Y, z, "cobblestone_wall"); }
+    const a = [...Array(6).keys()].map((i) => kitSoldier(1, { x: ox - 10 + i * 3 + 0.5, y: Y, z: oz - 16.5 }, ["rifle", "smg", "rifle", "semi", "mg", "rifle"][i], "hold"));
+    const b = [...Array(6).keys()].map((i) => kitSoldier(2, { x: ox - 10 + i * 3 + 0.5, y: Y, z: oz + 16.5 }, ["rifle", "smg", "rifle", "semi", "mg", "rifle"][i], "hold"));
+    tough([...a, ...b]); await kitWait(40);
+    // arrival: every move to a spot (cover, a firing position, a new position): how close he got, and how long it took
+    const mv = new Map(), done = []; let astop = false;
+    (async () => { while (!astop) { const now = tick(); for (const e of [...a, ...b]) { if (!e.isValid) continue; const B = brain.get(e.id), act = B?.act, tg = B?.target;
+      const cur = mv.get(e.id), key = act && tg && ["cover", "position", "relocate", "mgpos", "peek"].includes(act) ? `${act}@${Math.round(tg.x)},${Math.round(tg.z)}` : undefined;
+      if (cur && cur.key !== key) { done.push({ act: cur.act, min: +cur.min.toFixed(2), secs: +((now - cur.t0) / 20).toFixed(1) }); mv.delete(e.id); }
+      if (key) { const c = mv.get(e.id) ?? { key, act, min: 99, t0: now }; c.min = Math.min(c.min, flat(tg, e.location)); mv.set(e.id, c); } } await kitWait(2); } })();
+    res.cover = await churn([...a, ...b], T); astop = true;
+    const by = {}; for (const d0 of done) { const q = by[d0.act] ??= { n: 0, reached: 0, minSum: 0, secs: 0 }; q.n++; if (d0.min < 1.2) q.reached++; q.minSum += d0.min; q.secs += d0.secs; }
+    res.coverArrive = Object.fromEntries(Object.entries(by).map(([k, q]) => [k, `${q.reached}/${q.n} reached, avg closest ${(q.minSum / q.n).toFixed(1)}, avg ${(q.secs / q.n).toFixed(1)}s`]));
+    clear([...a, ...b]);
+  }
+  if (run("house")) {                                              // a house held upstairs, stormed
+    floorAt(ox - 20, oz - 40, ox + 40, oz + 30);
+    const B = (x0, y0, z0, x1, y1, z1, bl) => kfill(ox + x0, Y + y0, oz + z0, ox + x1, Y + y1, oz + z1, bl);
+    B(0, 0, 0, 15, 9, 11, "stone_bricks"); B(1, 0, 1, 14, 8, 10, "air"); B(1, 4, 1, 14, 4, 10, "oak_planks");
+    for (let i = 0; i < 4; i++) kset(ox + 2, Y + i, oz + 3 + i, STAIR("+z")); B(2, 4, 3, 2, 4, 7, "air");
+    B(7, 0, 0, 8, 1, 0, "air"); for (const x of [4, 11]) B(x, 6, 0, x, 6, 0, "air");
+    const d = [...Array(4).keys()].map((i) => kitSoldier(2, { x: ox + 6 + i * 1.5 + 0.5, y: Y + 5, z: oz + 6.5 }, ["rifle", "smg", "semi", "rifle"][i], "hold"));
+    const a = [...Array(6).keys()].map((i) => kitSoldier(1, { x: ox + 3 + i * 2 + 0.5, y: Y, z: oz - 25.5 }, ["rifle", "smg", "semi", "rifle", "smg", "mg"][i], "hold"));
+    tough([...a, ...d]); await kitWait(30); await kitOrder(1, { x: ox + 8, y: Y + 5, z: oz + 7 });
+    const htr = []; const snap = () => htr.push([...a, ...d].map((e) => { if (!e.isValid) return "x"; const l = e.location, pr = personal.get(e.id); return `${Math.round(l.x - ox)},${Math.round(l.y - Y)},${Math.round(l.z - oz)}${downed.has(e.id) ? "D" : ""}${pr ? ":" + pr.kind + (pr.planning ? "P" : pr.pts ? pr.idx + "/" + pr.pts.length : "-") : ""}{${brain.get(e.id)?.role?.job ?? ""}/${squads.get(squadKey(e, sd(e)))?.bplan?.kind ?? ""}}[${(notes.get(e.id)?.text ?? "").slice(0, 22)}]`; }).join(" "));
+    let hstop = false; if (o.tr) (async () => { while (!hstop) { snap(); await kitWait(40); } })();
+    res.house = { att: await churn(a, T + 300) }; hstop = true; res.house.def = { inside: d.filter((e) => e.isValid && e.location.y > Y + 4).length }; if (o.tr) res.house.trace = htr;
+    res.house.attUp = a.filter((e) => e.isValid && e.location.y > Y + 4).length;
+    clear([...a, ...d]);
+  }
+  if (run("hounds")) {
+    floorAt(ox - 40, oz - 40, ox + 40, oz + 40);
+    const ms = [kitSoldier(1, { x: ox - 15.5, y: Y, z: oz + 0.5 }, "rifle", "hold"), kitSoldier(2, { x: ox + 15.5, y: Y, z: oz + 0.5 }, "rifle", "hold")];
+    const hs = [];
+    for (const m of ms) for (let i = 0; i < 3; i++) { const h = ow().spawnEntity(HOUND, { x: m.location.x + i - 1, y: Y, z: m.location.z + 2 }); sdp(h, "war:master", m.id); setP(h, "war:faction", Number(P(m, "war:faction"))); applyRelations(h); hs.push(h); }
+    const foes = [0, 1, 2].map((i) => kitSoldier(2, { x: ox + 12.5, y: Y, z: oz - 4.5 + i * 4 }, "sword", "hold"));
+    tough([...ms, ...hs, ...foes]); await kitWait(20);
+    res.hounds = await churn(hs, T); res.hounds.alive = hs.filter((h) => h.isValid).length;
+    clear([...ms, ...hs, ...foes]);
+  }
+  if (run("cav")) {
+    floorAt(ox - 40, oz - 40, ox + 40, oz + 40);
+    for (const m of ow().getEntities({ type: "minecraft:horse", location: { x: ox, y: Y, z: oz }, maxDistance: 80 })) { try { m.remove(); } catch {} }
+    const r = [kitCav(1, { x: ox - 20.5, y: Y, z: oz - 4.5 }, "sword", "minecraft:horse"), kitCav(1, { x: ox - 20.5, y: Y, z: oz + 0.5 }, "smg", "minecraft:horse"), kitCav(1, { x: ox - 20.5, y: Y, z: oz + 4.5 }, "spear", "minecraft:horse")];
+    const f = [0, 1, 2, 3, 4].map((i) => kitSoldier(2, { x: ox + 12.5, y: Y, z: oz - 6.5 + i * 3 }, i % 2 ? "rifle" : "sword", "hold"));
+    tough([...r, ...f]); await kitWait(40);
+    const mounts = () => r.map((e) => e.getComponent("minecraft:riding")?.entityRidingOn).filter((m) => m?.isValid);
+    res.cav = { riders: await churn(r, T) }; res.cav.horses = await churn(mounts(), 200); res.cav.foot = await churn(f, 200);
+    for (const m of mounts()) try { m.remove(); } catch {}
+    clear([...r, ...f]);
+  }
+  if (run("patrol")) {                                             // no enemy about: patrol and roam
+    floorAt(ox - 40, oz - 40, ox + 40, oz + 40);
+    const p = [0, 1, 2, 3].map((i) => kitSoldier(1, { x: ox - 10.5 + i * 2, y: Y, z: oz + 0.5 }, "rifle", "patrol"));
+    const rm = [0, 1, 2, 3].map((i) => kitSoldier(1, { x: ox + 10.5 + i * 2, y: Y, z: oz + 0.5 }, "rifle", "roam"));
+    await kitWait(40);
+    const ptr = []; let pstop = false; if (o.tr) (async () => { while (!pstop) { ptr.push(p.map((e) => { const l = e.location, st = getJSON(e, "war:st", {}), gm = marker(Number(gdp(e, "war:goal") ?? 0)), v = e.getVelocity(); return `${Math.round(l.x - ox)},${Math.round(l.z - oz)} ${st.g ?? ""} gm${gm ? flat(gm.location, l).toFixed(1) : "-"} v${Math.hypot(v.x, v.z).toFixed(2)} [${(notes.get(e.id)?.text ?? "").slice(0, 18)}]`; }).join(" | ")); await kitWait(20); } })();
+    res.patrol = await churn(p, T); pstop = true; if (o.tr) res.patrol.trace = ptr; res.roam = await churn(rm, 200);
+    clear([...p, ...rm]);
+  }
+  if (run("followfight")) {                                        // following you when the enemy turns up
+    floorAt(ox - 40, oz - 40, ox + 40, oz + 40);
+    const ld = ow().spawnEntity("minecraft:armor_stand", { x: ox + 0.5, y: Y, z: oz + 0.5 });
+    globalThis.__fakeLeader = (id) => (id === ld.id ? ld : undefined);
+    const fs = [0, 1, 2, 3].map((i) => { const e = kitSoldier(1, { x: ox - 2.5 + i, y: Y, z: oz - 3.5 }, "rifle", "hold"); sdp(e, "war:squad", 0); giveFunction(e, "follow", ld); return e; });
+    await kitWait(60);
+    const en = [0, 1, 2].map((i) => kitSoldier(2, { x: ox - 3.5 + i * 3, y: Y, z: oz + 26.5 }, "rifle", "hold"));
+    tough([...fs, ...en]);
+    const ftr = []; let fstop = false; if (o.tr) (async () => { while (!fstop) { ftr.push(fs.map((e) => { const l = e.location, st = getJSON(e, "war:st", {}), gm = marker(Number(gdp(e, "war:goal") ?? 0)), v = e.getVelocity(), pr = personal.get(e.id); return `${Math.round(l.x - ox)},${Math.round(l.z - oz)} ${st.g ?? ""}/${st.s ?? ""} gm${gm ? flat(gm.location, l).toFixed(1) : "-"} v${Math.hypot(v.x, v.z).toFixed(2)} ${pr ? pr.kind + (pr.planning ? "P" : (pr.idx ?? 0) + "/" + (pr.pts?.length ?? 0)) : ""} {${brain.get(e.id)?.act ?? ""}} [${(notes.get(e.id)?.text ?? "").slice(0, 20)}]`; }).join(" | ")); await kitWait(20); } })();
+    res.followfight = await churn(fs, T); fstop = true; if (o.tr) res.followfight.trace = ftr;
+    res.followfight.stayed = fs.map((e) => Math.round(flat(e.location, ld.location)));
+    globalThis.__fakeLeader = undefined; clear([...fs, ...en, ld]);
+  }
+  if (run("medic")) {
+    floorAt(ox - 30, oz - 30, ox + 30, oz + 30);
+    const men = [0, 1, 2, 3].map((i) => kitSoldier(1, { x: ox - 4.5 + i * 3, y: Y, z: oz + 0.5 }, "rifle", "hold"));
+    const med = ow().spawnEntity(SOLDIER, { x: ox + 0.5, y: Y, z: oz - 8.5 }, { spawnEvent: "war:init" });
+    const mm = setupSoldier(med, { faction: 1, squad: 1, weapon: "rifle", ranged: true, div: "medic", radius: 8, func: "__none" }, KIT_PLAYER) ?? med; giveFunction(mm, "squad", KIT_PLAYER);
+    await kitWait(40); goDown(men[0]); goDown(men[2]);
+    const mtr = []; let mstop = false; if (o.tr) (async () => { while (!mstop) { const l = mm.location, pr = personal.get(mm.id), st = getJSON(mm, "war:st", {}); mtr.push(`${Math.round(l.x - ox)},${Math.round(l.z - oz)} ${st.g ?? ""}/${st.s ?? ""} ${pr ? pr.kind + (pr.planning ? "P" : (pr.idx ?? 0) + "/" + (pr.pts?.length ?? 0)) : ""} [${notes.get(mm.id)?.text ?? ""}] d0=${men[0].isValid ? flat(men[0].location, l).toFixed(1) + (downed.has(men[0].id) ? "D" : "") : "x"} d2=${men[2].isValid ? flat(men[2].location, l).toFixed(1) + (downed.has(men[2].id) ? "D" : "") : "x"}`); await kitWait(20); } })();
+    const c = await churn([mm], 400); mstop = true;
+    res.medic = { ...c, stillDown: [men[0], men[2]].filter((e) => e.isValid && downed.has(e.id)).length }; if (o.tr) res.medic.trace = mtr;
+    clear([...men, mm]);
+  }
+  return res;
+};
+KS.cavtrace = async (o, ox, oz) => {
+  floorAt(ox - 40, oz - 40, ox + 40, oz + 40);
+  for (const m of ow().getEntities({ type: "minecraft:horse", location: { x: ox, y: Y, z: oz }, maxDistance: 80 })) { try { m.remove(); } catch {} }
+  setRelPair(1, 2, "1", true);
+  const r = [kitCav(1, { x: ox - 20.5, y: Y, z: oz - 4.5 }, "sword", "minecraft:horse"), kitCav(1, { x: ox - 20.5, y: Y, z: oz + 0.5 }, "smg", "minecraft:horse"), kitCav(1, { x: ox - 20.5, y: Y, z: oz + 4.5 }, "spear", "minecraft:horse")];
+  const f = [0, 1, 2, 3, 4].map((i) => kitSoldier(2, { x: ox + 12.5, y: Y, z: oz - 6.5 + i * 3 }, i % 2 ? "rifle" : "sword", "hold"));
+  for (const e of [...r, ...f]) try { e.addEffect("resistance", 3000, { amplifier: 3, showParticles: false }); e.addEffect("regeneration", 3000, { amplifier: 2, showParticles: false }); } catch {}
+  await kitWait(40);
+  const w = r[Number(o.i ?? 0)], tr = []; let last = "";
+  for (let k = 0; k < Number(o.t ?? 200); k++) {
+    await kitWait(1);
+    const m = w.getComponent("minecraft:riding")?.entityRidingOn; if (!m) { tr.push(`${k}:off`); continue; }
+    const v = m.getVelocity(), sp = Math.hypot(v.x, v.z), rr = w.getRotation();
+    const s0 = `h${Math.round(m.getRotation().y)} r${Math.round(rr.y)}/${Math.round(rr.x)} sp${sp.toFixed(2)} ${getJSON(w, "war:st", {}).w ?? ""} ${notes.get(w.id)?.text ?? ""}`;
+    if (s0 !== last) tr.push(`${k}:${s0}`); last = s0;
+  }
+  for (const e of [...r, ...f]) { try { e.getComponent("minecraft:riding")?.entityRidingOn?.remove(); } catch {} try { e.remove(); } catch {} }
+  return { tr };
+};
+KS.pattrace = async (o, ox, oz) => {
+  floorAt(ox - 40, oz - 40, ox + 40, oz + 40);
+  const p = [0, 1, 2, 3].map((i) => kitSoldier(1, { x: ox - 10.5 + i * 2, y: Y, z: oz + 0.5 }, "rifle", "patrol"));
+  await kitWait(40);
+  const tr = [], last = new Map(); let still = 0, want = 0;
+  for (let k = 0; k < Number(o.t ?? 400); k++) {
+    await kitWait(1);
+    p.forEach((e, i) => {
+      const l = e.location, v = e.getVelocity(), st = getJSON(e, "war:st", {}), gl = Number(gdp(e, "war:goal") ?? 0), gm = marker(gl), sp = Math.hypot(v.x, v.z);
+      const tags = e.getTags().filter((t) => t.startsWith("war_gr") || t.startsWith("war_gc")).join(",");
+      const mt = gm ? gm.getTags().filter((t) => t.startsWith("war_wr") || t.startsWith("war_wc")).join(",") : "";
+      const gd = gm ? flat(gm.location, l) : -1;
+      if (st.g === "g_wp" && gd > 3.2) { want++; if (sp < 0.015) still++; }
+      const s0 = `${st.g}/${st.s} slot${gl} d${gd.toFixed(0)} ${tags}|${mt} ${sp < 0.015 ? "STILL" : "mv"} [${notes.get(e.id)?.text ?? ""}]`;
+      if (last.get(i) !== s0) { tr.push(`${k} #${i} ${s0}`); last.set(i, s0); }
+    });
+  }
+  for (const e of p) try { e.remove(); } catch {}
+  return { stillPct: +(100 * still / Math.max(1, want)).toFixed(1), tr: tr.slice(0, 150) };
 };
 KS.homeorder = async (o, ox, oz) => {
   floorAt(ox - 40, oz - 40, ox + 40, oz + 40);
