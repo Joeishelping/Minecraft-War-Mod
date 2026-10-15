@@ -2437,6 +2437,28 @@ KS.mkpark = async (o, ox, oz) => {
   }
   return res;
 };
+// v9.21.1: bodies never stay forever: from an earlier load, unstamped (older versions), past 10 minutes, back in loaded ground
+KS.bodies = async (o, ox, oz) => {
+  floorAt(ox - 20, oz - 20, ox + 20, oz + 20);
+  const dim = ow(), r = { loadEvent: !!world.afterEvents.entityLoad };
+  const mk = (dx) => dim.spawnEntity("war:corpse", { x: ox + dx + 0.5, y: Y, z: oz + 0.5 });
+  const prev = mk(-6); prev.setDynamicProperty("war:bs", BODY_SESSION + 1); prev.setDynamicProperty("war:bt", tick());   // an earlier load's
+  const bare = mk(-3);                                                                                                // an older version's (no stamp)
+  const v = kitSoldier(1, { x: ox + 3.5, y: Y, z: oz + 0.5 }, "rifle", "hold"); await kitWait(10);
+  try { v.applyDamage(500); } catch {} await kitWait(60);
+  const fresh = dim.getEntities({ type: "war:corpse", location: { x: ox + 3.5, y: Y, z: oz + 0.5 }, maxDistance: 4 })[0];
+  r.freshStamped = !!fresh && fresh.getDynamicProperty("war:bs") === BODY_SESSION;
+  const n1 = sweepBodies(); await kitWait(5);
+  r.firstSweep = { cleared: n1, prevGone: !prev.isValid, bareGone: !bare.isValid, freshKept: !!fresh?.isValid };
+  // forgotten (as if it was unloaded and dropped from the list): counted again, not cleared
+  if (fresh?.isValid) { const i = CORPSES.findIndex((q) => q.id === fresh.id); if (i >= 0) CORPSES.splice(i, 1); }
+  sweepBodies(); r.recounted = !!fresh && CORPSES.some((q) => q.id === fresh.id);
+  // past 10 minutes
+  if (fresh?.isValid) fresh.setDynamicProperty("war:bt", tick() - BODY_LIFE - 20);
+  sweepBodies(); await kitWait(5); r.expiredGone = !fresh?.isValid;
+  for (const e of [prev, bare, fresh, v]) try { e?.remove(); } catch {}
+  return r;
+};
 KS.homeorder = async (o, ox, oz) => {
   floorAt(ox - 40, oz - 40, ox + 40, oz + 40);
   const fl = ow().spawnEntity(FLAG, { x: ox + 30.5, y: Y, z: oz + 0.5 }); setP(fl, "war:faction", 1); setP(fl, "war:rally", false); sdp(fl, "war:hq", true); claimSlot(fl);

@@ -1444,8 +1444,9 @@ system.runInterval(() => {
 
 // ================================================================ v9.7: bodies, blood, one-shot kills, (rare) dismemberment
 // A soldier who dies leaves a body (his own skin, lying as the wounded do) that the hit or blast throws a little and
-// that slides, falls and gets shoved like anything else; it stays a minute (never more than 24 at once: the oldest go
-// first) and has no brain, so it costs next to nothing. Not every lethal hit leaves a wounded man: a headshot from a
+// that slides, falls and gets shoved like anything else; it stays up to 10 minutes (16 / 32 / 48 at most by the
+// Performance setting: the oldest go first, out of sight; see pruneBodies and sweepBodies) and has no brain, so it
+// costs next to nothing. Not every lethal hit leaves a wounded man: a headshot from a
 // rifle or sniper, a shotgun blast at point blank, a big explosion, now and then a burst of MG fire kill outright.
 // Rarely (a grenade or shell, a sniper's headshot, a point-blank shotgun) a limb comes off: the body is missing it and
 // it lies a little way off. Blood sprays on every hit. War Table -> Settings: Gore (on by default) turns the blood
@@ -1758,6 +1759,7 @@ function spawnCorpse0(v, how) {
   const make = (at, gibIdx) => {
     const c = dim.spawnEntity("war:corpse", at);
     try { c.setProperty("war:faction", Math.max(0, Math.min(40, f))); c.setProperty("war:skin", Math.max(0, Math.min(64, sk))); c.setProperty("war:medic", med); try { c.setProperty("war:cav", cav); } catch {} try { c.setProperty("war:armor", Math.max(0, ARMOR.indexOf(String(gdp(v, "war:armor") ?? "none")))); } catch {} if (gibIdx) { c.setProperty("war:gib", true); c.setProperty("war:limb", gibIdx); } else c.setProperty("war:limb", mask); c.setRotation({ x: 0, y: 0 }); } catch {}
+    stampBody(c, now);
     if (!how?.fall) CORPSES.push({ id: c.id, t: now });
     return c;
   };
@@ -1828,9 +1830,12 @@ try {
       const b = BLASTS.find((q) => q.dim === dimId && now - q.t <= 3 && dist(q.at, at) <= q.power * 2 + 1); if (!b) return;
       const pr = {}; for (const k of ["war:faction", "war:skin", "war:medic", "war:limb", "war:gib", "war:ga", "war:gb", "war:cav", "war:armor", ...RD_BODY_PROPS]) { try { pr[k] = c.getProperty(k); } catch {} }
       const old = c.id, st = RD.get(old);
+      let bs, bt; try { bs = c.getDynamicProperty("war:bs"); bt = c.getDynamicProperty("war:bt"); } catch {}
+      if (bs !== BODY_SESSION) return;                                           // (a body from an earlier load: let it go)
       system.run(() => {
         try {
           const dim = world.getDimension(dimId), n = dim.spawnEntity("war:corpse", { x: at.x, y: at.y + 0.1, z: at.z });
+          stampBody(n, Number(bt ?? now));
           for (const k in pr) try { if (pr[k] !== undefined) n.setProperty(k, pr[k]); } catch {}
           try { n.setRotation({ x: 0, y: 0 }); } catch {}
           if (st) { RD.delete(old); st.c = n; st.sent = []; RD.set(n.id, st); st.act = true; st.still = 0; }
@@ -1846,7 +1851,56 @@ system.runInterval(() => {
   for (const [id, h] of [...lastHit]) if (now - h.t > 40) lastHit.delete(id);
   if (bloodT.size > 2000) bloodT.clear();
 }, 40);
-system.runTimeout(() => { try { for (const dim of DIMS.map((d) => world.getDimension(d))) for (const c of dim.getEntities({ type: "war:corpse" })) c.remove(); } catch {} }, 100);   // (bodies left from before a reload)
+system.runTimeout(() => { try { for (const dim of DIMS.map((d) => world.getDimension(d))) for (const c of dim.getEntities({ type: "war:corpse" })) clearBody(c); } catch {} }, 100);   // (bodies left from before a reload)
+// v9.21.1: bodies never stay forever. Each body carries the load (session) it was made in and when. A body from an
+// earlier load, or older than 10 minutes, is cleared whenever it turns up: when its ground is loaded again (walking
+// back to an old battlefield), or by a sweep every 30 s. Before, only bodies in loaded ground were cleared at startup,
+// and a body that was unloaded (you walked away) was forgotten and then stayed for good. One in a player's view sinks
+// into the ground over a few seconds instead of vanishing.
+const BODY_SESSION = 1 + Math.floor(Math.random() * 2e9);
+function stampBody(c, born) { try { c.setDynamicProperty("war:bs", BODY_SESSION); c.setDynamicProperty("war:bt", born ?? tick()); } catch {} }
+function bodyState(c, now) {
+  try {
+    if (c.getDynamicProperty("war:bs") !== BODY_SESSION) return "old";
+    return now - Number(c.getDynamicProperty("war:bt") ?? 0) > BODY_LIFE ? "expired" : "ok";
+  } catch { return "old"; }
+}
+const BODY_LIFE = 12000;   // 10 minutes
+function clearBody(c) {
+  try {
+    if (!c?.isValid) return;
+    const id = c.id;
+    if (SINKING.has(id)) return;
+    RD.delete(id);
+    if (bodySeen(c)) { SINKING.set(id, 60); return; }                         // (in view: sinks out of sight)
+    c.remove();
+    const i = CORPSES.findIndex((o) => o.id === id); if (i >= 0) CORPSES.splice(i, 1);
+  } catch {}
+}
+function sweepBodies() {
+  const now = tick(), falling = new Set(FALLS.values()), known = new Set(CORPSES.map((o) => o.id));
+  let n = 0;
+  for (const dim of DIMS.map((d) => world.getDimension(d))) {
+    let list = []; try { list = dim.getEntities({ type: "war:corpse" }); } catch {}
+    for (const c of list) {
+      if (falling.has(c.id) || SINKING.has(c.id)) continue;
+      const st = bodyState(c, now);
+      if (st !== "ok") { clearBody(c); n++; continue; }
+      if (!known.has(c.id)) CORPSES.push({ id: c.id, t: Number(c.getDynamicProperty("war:bt") ?? now) });   // (back in loaded ground: counted again)
+    }
+  }
+  if (n) CORPSES.sort((a, b) => a.t - b.t);
+  return n;
+}
+system.runInterval(() => { try { sweepBodies(); } catch {} }, 600);
+try {
+  world.afterEvents.entityLoad.subscribe((ev) => {
+    try {
+      const c = ev.entity; if (c?.typeId !== "war:corpse") return;
+      system.runTimeout(() => { try { if (c.isValid && ![...FALLS.values()].includes(c.id) && bodyState(c, tick()) !== "ok") clearBody(c); } catch {} }, 10);
+    } catch {}
+  });
+} catch {}
 
 const CIVILIANS = ["minecraft:villager_v2", "minecraft:villager", "minecraft:wandering_trader"];
 world.beforeEvents.entityHurt.subscribe((ev) => {
@@ -13048,7 +13102,7 @@ function pruneBodies() {
     if (SINKING.has(o.id)) continue;
     const c = world.getEntity(o.id);
     if (!c?.isValid) { CORPSES.splice(CORPSES.indexOf(o), 1); RD.delete(o.id); over--; continue; }
-    if (bodySeen(c)) { if (over > 24 && now - o.t > 2400) { SINKING.set(o.id, 100); RD.delete(o.id); over--; } continue; }
+    if (bodySeen(c)) { if ((over > 24 && now - o.t > 2400) || old) { SINKING.set(o.id, 100); RD.delete(o.id); over--; } continue; }   // (v9.21.1: past 10 minutes, even in view: it sinks away)
     try { c.remove(); } catch {} RD.delete(o.id); CORPSES.splice(CORPSES.indexOf(o), 1); over--;
   }
 }

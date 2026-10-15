@@ -1,5 +1,17 @@
 # War Engine changelog
 
+## v9.21.1 (Bodies never stay forever)
+
+Bodies from an earlier load could stay for good. Only bodies in loaded ground were cleared when the world started, and
+a body whose ground was unloaded (you walked away from the fight) was forgotten and never cleared after that. Now
+every body carries the load it was made in and when it fell:
+- A body from an earlier load (or from a version before this one) is cleared as soon as its ground is loaded again,
+  or by a sweep every 30 seconds.
+- Any body older than 10 minutes goes, wherever it is: one you're looking at sinks into the ground instead of
+  vanishing (before, a body in view was never taken away, so one you kept looking at could stay forever).
+- A body that was unloaded and loaded again is counted again, so the limit on how many lie about (16 / 32 / 48 by the
+  Performance setting) still applies to it.
+
 ## v9.21 (No more hesitating)
 
 Every kind of NPC was put through a new audit on a real server: how often a man stands still while he's meant to be
