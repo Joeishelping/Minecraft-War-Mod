@@ -320,6 +320,7 @@ function rideInfo(e) {
   try { on = e.getComponent("minecraft:riding")?.entityRidingOn; } catch {}
   const r = { t: now, v: !!on, on: on?.typeId };
   rideMemo.set(e.id, r);
+  try { if (e.typeId === SOLDIER && on && VEHICLES.includes(on.typeId)) { if (VEH_LOOK.get(e.id)?.m !== on) VEH_LOOK.set(e.id, { e, m: on }); } else VEH_LOOK.delete(e.id); } catch {}
   if (rideMemo.size > 4000) rideMemo.clear();
   return r;
 }
@@ -814,6 +815,7 @@ function speedGroupRoll(e, urgent) {
 }
 
 function think(e) {
+  if (globalThis.__noThink?.has(e.id)) return;                                     // (test kits only)
   sdDrop(e);
   try { if (!FALLS.has(e.id) && e.getProperty("war:hide")) { setP(e, "war:hide", false); equip(e, weaponItem(e)); } } catch {}   // (v9.14: never left hidden after a reload mid-fall)
   if (!downed.has(e.id) && gdp(e, "war:downed") !== undefined) downed.set(e.id, tick() + 300);   // still down after a reload
@@ -4455,7 +4457,7 @@ function gunTick(e, now) {
     const vc = chest(en), vh = headOf(en);
     const p = openNow(e.dimension, hl, vc) ? vc : openNow(e.dimension, hl, vh) ? vh : undefined;
     if (!p) { st.supp = undefined; st.next = now + 4; return; }
-    if (!friendlyInLine(e, d, hl, p, st.supp.ent) && turnTo(e, p, 20) <= 25) {
+    if (!friendlyInLine(e, d, hl, p, st.supp.ent) && aimTurn(e, p, 20) <= 25) {
       if (!fireAtPoint(e, spec, { x: p.x, y: p.y - 1, z: p.z })) { st.next = now + 4; return; }
       st.lastShot = now; st.ammo--;
       if (st.ammo > 0) st.next = now + Math.max(2, spec.gap); else st.next = now + (reloadGun(e, st, spec) ? spec.reload + Math.floor(Math.random() * 8) : 60);
@@ -4476,7 +4478,7 @@ function gunTick(e, now) {
     st.next = now + 6;
     return;
   }
-  if (turnTo(e, t.location, 20) > 25) { st.next = now + 2; return; } // still turning toward him
+  if (aimTurn(e, t.location, 20) > 25) { st.next = now + 2; return; } // still turning toward him (v9.20.3: or off to the side of where he's walking)
   // v9.19: how he stands: kneeling steadies the gun, running throws it off; an MG gunner who's just moved sets up first
   let vel = 0; try { const q = e.getVelocity(); vel = Math.hypot(q.x, q.z); } catch {}
   if (vel > 0.06) st.movedT = now;
@@ -4869,6 +4871,7 @@ function turnTo(e, at, maxStep = 18) {
     // aiming off to the side swung his horse sideways). He shoots from the saddle at anything up to ~100° off his line.
     const MO = mountOf.get(e.id), hd = MO ? MOUNT_HEAD.get(MO.id) : undefined;
     if (hd !== undefined) { const off = Math.abs(((want - hd + 540) % 360) - 180); return Math.max(0, off - 100); }
+    { const VL = VEH_LOOK.get(e.id); if (VL?.look !== undefined) return Math.abs(((want - VL.look + 540) % 360) - 180); }   // (v9.20.3: in a vehicle seat the look driver turns him)
     const now = tick(), m = rotMemo.get(e.id);
     const cur = m && m.t === now ? m.y : e.getRotation().y;            // (one read per tick at most)
     const off = Math.abs(((want - cur + 540) % 360) - 180);
@@ -4878,6 +4881,28 @@ function turnTo(e, at, maxStep = 18) {
   } catch { return 0; }
 }
 
+// v9.20.3: the gun's turn, for a man on the move. Minecraft walks a man only the way his body faces: turned 45 degrees
+// off his path he made a fifth of his pace, 90 degrees and he stood still. The gun swung him round to anyone off to the
+// side and he stopped dead mid-advance, again and again ("going nowhere"). Walking, he aims and fires only inside 40
+// degrees of his way; anything wider waits till he stops (or the brain stops him to fire).
+function aimTurn(e, at, maxStep) {
+  try {
+    if (!isRiding(e) && !gliders.has(e.id) && !climbing.has(e.id)) {
+      const g = getJSON(e, "war:st", {}).g;
+      if (g === "g_wp" || g === "g_post" || g === "g_owner") {
+        const gm = g === "g_owner" ? undefined : marker(Number(gdp(e, "war:goal") ?? 0)), l = e.location;
+        let hx, hz;
+        if (gm && flat(gm.location, l) > (g === "g_post" ? 1.5 : 3.2)) { hx = gm.location.x - l.x; hz = gm.location.z - l.z; }
+        else { const v = e.getVelocity(); if (Math.hypot(v.x, v.z) > 0.06) { hx = v.x; hz = v.z; } }
+        if (hx !== undefined) {
+          const way = (Math.atan2(-hx, hz) * 180) / Math.PI, want = (Math.atan2(-(at.x - l.x), at.z - l.z) * 180) / Math.PI;
+          if (Math.abs(((want - way + 540) % 360) - 180) > 40) return 999;                 // off to the side: not while walking
+        }
+      }
+    }
+  } catch {}
+  return turnTo(e, at, maxStep);
+}
 // v9.16: where a carried man faces: a heading turned at a human pace, the head level (a mild tilt only toward a man
 // he's aiming at). A facing point a fraction of a block away tipped him to look straight up or down.
 function faceRot(e, from, at, maxStep = 22, pitchTo, cur0) {
@@ -4949,7 +4974,7 @@ function engagement(e, d, now, orderGoal, melee) {
   if (t && t.isValid) {
     if (stance === "holdfire" && !isProvoker(d.faction, t, now)) return undefined; // hold fire until someone of ours is attacked
     { const gt = gunState.get(e.id)?.target; const look = gt?.isValid && !downed.has(gt.id) ? gt : t;
-      if (!(MELEE_W.includes(d.weapon) || OUT_OF.has(e.id)) || dist(look.location, e.location) > 5) turnTo(e, look.location); }   // (v9.19: a man in a sword fight is faced by his own swing; two of us turning him made him twitch)   // (v9.19: one place to look: the man his gun is on, else his threat; two disagreeing turned his head back and forth)
+      if (!(MELEE_W.includes(d.weapon) || OUT_OF.has(e.id)) || dist(look.location, e.location) > 5) aimTurn(e, look.location, 18); }   // (v9.19: a man in a sword fight is faced by his own swing; two of us turning him made him twitch)   // (v9.19: one place to look: the man his gun is on, else his threat; two disagreeing turned his head back and forth)
     const dd = dist(t.location, e.location);
     if (anchor && flat(t.location, anchor.location) > leash) {        // fight from the post
       // v6.4: ...from the best spot of it: no shot from where he stands (behind a merlon, back from a window) -> the
@@ -10722,7 +10747,7 @@ function smokeShot(e, d, spec, st, now) {
   const u = { x: dx / L, y: dy / L, z: dz / L }, from = { x: h.x + u.x * 0.9, y: h.y - 0.2 + u.y * 0.9, z: h.z + u.z * 0.9 };
   try { if (rayHit(e.dimension, from, u, L - 1.2)) return false; } catch { return false; }   // a wall in the way: not the smoke
   if (friendlyInLine(e, d, h, p, undefined)) return false;
-  if (turnTo(e, p, 25) > 30) { st.next = now + 2; return true; }
+  if (aimTurn(e, p, 25) > 30) { st.next = now + 2; return true; }
   if (now - (st.smokeT0 ?? 0) >= 100) { st.smokeT0 = now; st.smokeN = 0; }
   st.smokeN = (st.smokeN ?? 0) + 1;
   const r = () => (Math.random() + Math.random() - 1) * Math.max(0.03, spec.spread * 5);
@@ -11282,6 +11307,26 @@ system.runInterval(() => {
 // level and square every other tick and the game's own look-at tipped him at his target on the ticks between: a head
 // that snapped back and forth ten times a second.
 const RIDE_DRV = new Map();   // rider id -> { m, e, tx, tz, t }
+// v9.20.3: the same for a soldier in a vehicle's seat (truck, boat, gunboat, helicopter, plane, tank): one look per tick,
+// at the man he's shooting at, else the way the vehicle faces. The game's own look-at tipped him 20-30 degrees down and
+// off his aim on the ticks between the gun's turns: a head that nodded and twitched the whole ride.
+const VEH_LOOK = new Map();   // soldier id -> { e, m, look }
+system.runInterval(() => {
+  if (!VEH_LOOK.size) return;
+  for (const [id, R] of VEH_LOOK) {
+    try {
+      const e = R.e, m = R.m;
+      if (!e.isValid || !m.isValid || downed.has(id) || e.getComponent("minecraft:riding")?.entityRidingOn?.id !== m.id) { VEH_LOOK.delete(id); continue; }
+      const el = e.location, base = m.getRotation().y;
+      const t = gunState.get(id)?.target?.isValid ? gunState.get(id).target : perc.get(id)?.threat?.isValid ? perc.get(id).threat : undefined;
+      let wantY = base, pitchTo;
+      if (t && dist(t.location, el) < 90) { wantY = (Math.atan2(-(t.location.x - el.x), t.location.z - el.z) * 180) / Math.PI; pitchTo = { x: t.location.x, y: t.location.y + 1, z: t.location.z }; }
+      const r = faceRot(e, el, { x: el.x - Math.sin(wantY * Math.PI / 180) * 6, z: el.z + Math.cos(wantY * Math.PI / 180) * 6 }, 14, pitchTo, R.look ?? e.getRotation().y);
+      R.look = r.y;
+      e.setRotation({ x: Math.max(-20, Math.min(20, r.x)), y: r.y });
+    } catch { VEH_LOOK.delete(id); }
+  }
+}, 1);
 system.runInterval(() => {
   if (!RIDE_DRV.size) return;
   const now = tick();

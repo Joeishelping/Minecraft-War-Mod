@@ -1942,6 +1942,7 @@ KS.skinmix = async (o, ox, oz) => {
 };
 // v9.19: second-guessing meter: decision changes, flip-flops (A->B->A within 3 s) and which pairs flip, movement
 // reversals, yaw flicks, target switches, goal-group changes (the game's own movement switching)
+let o_detail = false;
 async function churn(list, T) {
   const st = new Map(), pairs = {}, ditherWhat = {}, stallWhat = {}; let want = 0, stall = 0, dither = 0, acts = 0, flips = 0, tsw = 0, gsw = 0, rev = 0, moves = 0, flick = 0, turns = 0, samples = 0, bigFlick = 0;
   for (let k = 0; k < T; k++) {
@@ -1967,7 +1968,7 @@ async function churn(list, T) {
       // little getting anywhere, over 3 s)
       const l = e.location, gm = marker(Number(gdp(e, "war:goal") ?? 0));
       const wants = (g === "g_wp" || g === "g_owner") && !downed.has(e.id) && (!gm || flat(gm.location, l) > 3.2) && !isRiding(e);
-      if (wants) { want++; if (Math.hypot(v.x, v.z) < 0.015 && (!S.lp || flat(S.lp, l) < 0.02)) { S.still = (S.still ?? 0) + 1; if (S.still > 20) { stall++; const nt = (notes.get(e.id)?.text ?? "?").slice(0, 26) + "/" + (act || "-"); stallWhat[nt] = (stallWhat[nt] ?? 0) + 1; } } else S.still = 0; } else S.still = 0;
+      if (wants) { want++; if (Math.hypot(v.x, v.z) < 0.015 && (!S.lp || flat(S.lp, l) < 0.02)) { S.still = (S.still ?? 0) + 1; if (S.still > 20) { stall++; const prx = personal.get(e.id), gmk = marker(Number(gdp(e, "war:goal") ?? 0)); const nt = (notes.get(e.id)?.text ?? "?").slice(0, 26) + "/" + (act || "-") + (o_detail ? `|${prx ? prx.kind + (prx.planning ? "P" : "") : "-"}${gliders.has(e.id) ? "G" : ""}${climbing.has(e.id) ? "C" : ""}|dy${gmk ? Math.round(gmk.location.y - e.location.y) : "?"}|in${isIndoors(e) ? 1 : 0}` : ""); stallWhat[nt] = (stallWhat[nt] ?? 0) + 1; } } else S.still = 0; } else S.still = 0;
       if (S.lp) S.path = (S.path ?? 0) + flat(S.lp, l);
       S.lp = { x: l.x, y: l.y, z: l.z };
       if (!S.w0 || now - S.w0.t >= 60) { if (S.w0 && S.path > 3 && flat(S.w0, l) < S.path * 0.35) { dither++; if (S.ditherAct === undefined) S.ditherAct = act || g; ditherWhat[act || g] = (ditherWhat[act || g] ?? 0) + 1; } S.w0 = { x: l.x, z: l.z, t: now }; S.path = 0; }
@@ -2165,7 +2166,7 @@ KS.walldbg = async (o, ox, oz) => {
 };
 // v9.20.3: the audit: every kind of NPC through the hesitation / jitter meter. o.only=<name> runs one part.
 KS.audit = async (o, ox, oz) => {
-  const res = {}, run = (k) => !o.only || String(o.only).split(",").includes(k);
+  const res = {}, run = (k) => !o.only || String(o.only).split(",").includes(k); o_detail = !!o.detail; globalThis.__noKick = !!o.nokick;
   const tough = (list) => { for (const e of list) try { e.addEffect("resistance", 3000, { amplifier: 3, showParticles: false }); e.addEffect("regeneration", 3000, { amplifier: 2, showParticles: false }); } catch {} };
   const clear = (list) => { for (const e of list) try { e.remove(); } catch {} };
   const T = Number(o.t ?? 500);
@@ -2245,6 +2246,20 @@ KS.audit = async (o, ox, oz) => {
     res.followfight.stayed = fs.map((e) => Math.round(flat(e.location, ld.location)));
     globalThis.__fakeLeader = undefined; clear([...fs, ...en, ld]);
   }
+  if (run("crew")) {                                               // a truck driven after you, the men aboard firing at an enemy off to the side
+    floorAt(ox - 50, oz - 50, ox + 50, oz + 50);
+    const ld = ow().spawnEntity("minecraft:armor_stand", { x: ox + 35.5, y: Y, z: oz + 0.5 });
+    globalThis.__fakeLeader = (id) => (id === ld.id ? ld : undefined);
+    const tr = ow().spawnEntity("war:truck", { x: ox - 25.5, y: Y, z: oz + 0.5 });
+    const crew = [0, 1, 2].map((i) => { const e = kitSoldier(1, { x: ox - 25.5 + i, y: Y, z: oz + 2.5 }, "rifle", "hold"); giveFunction(e, "follow", ld); return e; });
+    const en = [0, 1, 2].map((i) => kitSoldier(2, { x: ox - 5.5 + i * 6, y: Y, z: oz + 18.5 }, "rifle", "hold"));
+    tough([...crew, ...en]); await kitWait(10);
+    const rd = tr.getComponent("minecraft:rideable"); for (const e of crew) { try { e.teleport(tr.location); rd.addRider(e); } catch {} }
+    await kitWait(5);
+    res.crew = await churn(crew, 300); res.crew.aboard = rd.getRiders().length; res.crew.truckTo = Math.round(flat(tr.location, ld.location));
+    res.crew.truck = await churn([tr], 100);
+    globalThis.__fakeLeader = undefined; clear([...crew, ...en, tr, ld]);
+  }
   if (run("medic")) {
     floorAt(ox - 30, oz - 30, ox + 30, oz + 30);
     const men = [0, 1, 2, 3].map((i) => kitSoldier(1, { x: ox - 4.5 + i * 3, y: Y, z: oz + 0.5 }, "rifle", "hold"));
@@ -2296,6 +2311,131 @@ KS.pattrace = async (o, ox, oz) => {
   }
   for (const e of p) try { e.remove(); } catch {}
   return { stillPct: +(100 * still / Math.max(1, want)).toFixed(1), tr: tr.slice(0, 150) };
+};
+KS.crewtrace = async (o, ox, oz) => {
+  floorAt(ox - 50, oz - 50, ox + 50, oz + 50);
+  setRelPair(1, 2, "1", true);
+  const ld = ow().spawnEntity("minecraft:armor_stand", { x: ox + 35.5, y: Y, z: oz + 0.5 });
+  globalThis.__fakeLeader = (id) => (id === ld.id ? ld : undefined);
+  const tr = ow().spawnEntity(o.v ?? "war:truck", { x: ox - 25.5, y: Y, z: oz + 0.5 });
+  const crew = [0, 1, 2].map((i) => { const e = kitSoldier(1, { x: ox - 25.5 + i, y: Y, z: oz + 2.5 }, "rifle", "hold"); giveFunction(e, "follow", ld); return e; });
+  const en = [0, 1, 2].map((i) => kitSoldier(2, { x: ox - 5.5 + i * 6, y: Y, z: oz + 18.5 }, "rifle", "hold"));
+  for (const e of [...crew, ...en]) try { e.addEffect("resistance", 3000, { amplifier: 3, showParticles: false }); } catch {}
+  await kitWait(10);
+  const rd = tr.getComponent("minecraft:rideable"); for (const e of crew) { try { e.teleport(tr.location); rd.addRider(e); } catch {} }
+  await kitWait(5);
+  const w = crew[Number(o.i ?? 1)], out = []; let last = "";
+  for (let k = 0; k < 200; k++) {
+    await kitWait(1);
+    const r = w.getRotation(), s0 = `v${Math.round(tr.getRotation().y)} r${Math.round(r.y)}/${Math.round(r.x)} t:${gunState.get(w.id)?.target ? "Y" : "-"} ${notes.get(w.id)?.text ?? ""}`;
+    if (s0 !== last) out.push(`${k}:${s0}`); last = s0;
+  }
+  const shotsRes = crew.map((c) => gunState.get(c.id)?.lastShot ?? -1).map((t) => t < 0 ? "never" : `${tick() - t} ticks ago`);
+  globalThis.__fakeLeader = undefined; for (const e of [...crew, ...en, tr, ld]) try { e.remove(); } catch {}
+  return { mo: mountOf.has(w.id), shots0: shotsRes, shots: crew.map((c) => gunState.get(c.id)?.lastShot ?? -1).map((t) => t < 0 ? "never" : `${tick() - t} ticks ago`), enemyHp: en.map((x) => x.isValid ? Math.round(x.getComponent("minecraft:health").currentValue) : "x"), out: out.slice(0, 30) };
+};
+KS.advtrace = async (o, ox, oz) => {
+  floorAt(ox - 40, oz - 40, ox + 40, oz + 40);
+  setRelPair(1, 2, "1", true);
+  const ld = ow().spawnEntity("minecraft:armor_stand", { x: ox + 0.5, y: Y, z: oz + 0.5 });
+  globalThis.__fakeLeader = (id) => (id === ld.id ? ld : undefined);
+  const fs = [0, 1, 2, 3].map((i) => { const e = kitSoldier(1, { x: ox - 2.5 + i, y: Y, z: oz - 3.5 }, "rifle", "hold"); sdp(e, "war:squad", 0); if (!o.hold) giveFunction(e, "follow", ld); return e; });
+  await kitWait(60);
+  const en = [0, 1, 2].map((i) => kitSoldier(2, { x: ox - 3.5 + i * 3, y: Y, z: oz + 26.5 }, "rifle", "hold"));
+  for (const e of [...fs, ...en]) try { e.addEffect("resistance", 3000, { amplifier: 3, showParticles: false }); e.addEffect("regeneration", 3000, { amplifier: 2, showParticles: false }); } catch {}
+  const out = [], last = new Map();
+  for (let k = 0; k < 400; k++) {
+    await kitWait(1);
+    fs.forEach((e, i) => {
+      const B = brain.get(e.id), st = getJSON(e, "war:st", {}), gm = marker(Number(gdp(e, "war:goal") ?? 0)), v = e.getVelocity(), sp = Math.hypot(v.x, v.z), gs = gunState.get(e.id);
+      const yaw = e.getRotation().y, way = gm ? (Math.atan2(-(gm.location.x - e.location.x), gm.location.z - e.location.z) * 180) / Math.PI : yaw, off = Math.round(Math.abs(((yaw - way + 540) % 360) - 180) / 10) * 10;
+      const s0 = `${B?.act ?? ""} ${st.g}/${st.s} mk${gm ? flat(gm.location, e.location).toFixed(0) : "-"} ${sp < 0.015 ? "STILL" : "mv"} off${off} pose${P(e, "war:pose") ?? ""} [${notes.get(e.id)?.text ?? ""}]`;
+      if (last.get(i) !== s0) { out.push(`${k} #${i} ${s0}`); last.set(i, s0); }
+    });
+  }
+  globalThis.__fakeLeader = undefined; for (const e of [...fs, ...en, ld]) try { e.remove(); } catch {}
+  return { out: out.slice(0, 160) };
+};
+KS.rotmove = async (o, ox, oz) => {
+  floorAt(ox - 40, oz - 40, ox + 40, oz + 40);
+  const res = {};
+  for (const off of [0, 45, 90, 135]) {
+    const e = kitSoldier(1, { x: ox - 15.5, y: Y, z: oz + 0.5 }, "rifle", "hold");
+    await kitWait(10);
+    const slot = myMarker(e, { x: ox + 20.5, y: Y, z: oz + 0.5 }, "war:mymk", 0.4); setGoal(e, slot); setGroups(e, { g: "g_wp", s: "s_4" });
+    const x0 = e.location.x; let k = 0;
+    for (; k < 120; k++) { await kitWait(1); if (off && k % 2 === 0) { try { e.setRotation({ x: 0, y: -90 + off }); } catch {} } }   // (yaw -90 faces +x)
+    res[`off${off}`] = +((e.location.x - x0) / (k / 20)).toFixed(2);
+    try { e.remove(); } catch {}
+  }
+  return res;
+};
+KS.marchtrace = async (o, ox, oz) => {
+  floorAt(ox - 45, oz - 45, ox + 45, oz + 45);
+  const m = [...Array(6).keys()].map((i) => kitSoldier(1, { x: ox - 30 + i * 2 + 0.5, y: Y, z: oz + 30.5 }, "rifle", "hold"));
+  await kitWait(20);
+  const ids = new Set(m.map((e) => e.id)), callers = {}, proto = Object.getPrototypeOf(m[0]), orig = proto.setRotation;
+  proto.setRotation = function (r) { try { if (ids.has(this.id)) { const ln = (new Error().stack ?? "").split("\n").slice(2, 4).map((x) => x.trim().replace(/^at /, "").replace(/\(.*main\.js:?/, "(").replace(/\)$/, "")).join(" < "); callers[ln] = (callers[ln] ?? 0) + 1; } } catch {} return orig.call(this, r); };
+  await kitOrder(1, { x: ox + 30.5, y: Y, z: oz + 30.5 }, "hold");
+  const out = [], last = new Map();
+  for (let k = 0; k < 400; k++) {
+    await kitWait(1);
+    m.forEach((e, i) => {
+      const st = getJSON(e, "war:st", {}), gl = Number(gdp(e, "war:goal") ?? 0), gm = marker(gl), cu = Number(gdp(e, "war:catchup") ?? 0), v = e.getVelocity(), sp = Math.hypot(v.x, v.z);
+      const yaw = e.getRotation().y, way = gm ? (Math.atan2(-(gm.location.x - e.location.x), gm.location.z - e.location.z) * 180) / Math.PI : yaw, off = Math.round(Math.abs(((yaw - way + 540) % 360) - 180) / 10) * 10;
+      const s0 = `x${Math.round(e.location.x - ox)} ${st.g}/${st.s} goal${gl}${gl === cu ? "=cu" : ""} mk${gm ? flat(gm.location, e.location).toFixed(0) : "-"} ${sp < 0.015 ? "STILL" : "mv"} off${off} gl${gliders.has(e.id) ? 1 : 0} fm${formMode.has(e.id) ? 1 : 0} [${notes.get(e.id)?.text ?? ""}]`;
+      if (last.get(i) !== s0) { out.push(`${k} #${i} ${s0}`); last.set(i, s0); }
+    });
+  }
+  proto.setRotation = orig;
+  for (const e of m) try { e.remove(); } catch {}
+  return { callers, out: out.slice(0, 60) };
+};
+KS.mkmove = async (o, ox, oz) => {
+  floorAt(ox - 40, oz - 40, ox + 40, oz + 40);
+  const res = {};
+  for (const mode of ["fixed8", "fixed20", "hop4every4", "hop1every4", "lead8"]) {
+    const e = kitSoldier(1, { x: ox - 15.5, y: Y, z: oz + 0.5 }, "rifle", "hold");
+    await kitWait(10); try { e.setRotation({ x: 0, y: 0 }); } catch {}
+    let tx = mode === "fixed20" ? 20 : 8;
+    const slot = myMarker(e, { x: e.location.x + tx, y: Y, z: oz + 0.5 }, "war:mymk", 0.1); setGoal(e, slot); setGroups(e, { g: "g_wp", s: "s_4" });
+    const x0 = e.location.x; let start = -1, still = 0;
+    for (let k = 0; k < 100; k++) {
+      await kitWait(1);
+      const v = e.getVelocity(), sp = Math.hypot(v.x, v.z);
+      if (start < 0 && sp > 0.03) start = k; if (start >= 0 && sp < 0.015) still++;
+      if (k % 4 === 0) {
+        const l = e.location;
+        if (mode === "hop4every4") myMarker(e, { x: l.x + 8 + (k % 8 ? 2 : -2), y: Y, z: oz + 0.5 + (k % 8 ? 1 : -1) }, "war:mymk", 0.1);
+        if (mode === "hop1every4") myMarker(e, { x: l.x + 8, y: Y, z: oz + 0.5 }, "war:mymk", 0.1);
+        if (mode === "lead8") myMarker(e, { x: l.x + 8, y: Y, z: oz + 0.5 }, "war:mymk", 1.5);
+      }
+    }
+    res[mode] = { startTick: start, speed: +((e.location.x - x0) / 5).toFixed(2), stillTicksAfterStart: still };
+    try { e.remove(); } catch {}
+  }
+  return res;
+};
+KS.mkpark = async (o, ox, oz) => {
+  floorAt(ox - 40, oz - 40, ox + 40, oz + 40);
+  const res = {};
+  for (const mode of (o.modes ? String(o.modes).split(",") : ["switch", "parked", "parkedPost", "switchPost"])) {
+    const e = kitSoldier(1, { x: ox - 15.5, y: Y, z: oz + 0.5 }, "rifle", "hold");
+    globalThis.__noThink ??= new Set(); globalThis.__noThink.add(e.id);
+    await kitWait(10); try { e.setRotation({ x: 0, y: 0 }); } catch {}
+    const g0 = mode.includes("Post") ? "g_post" : "g_wp";
+    if (mode.startsWith("parked")) { const sl = myMarker(e, { ...e.location }, "war:mymk", 0.1); setGoal(e, sl); setGroups(e, { g: g0, s: "s_4" }); }
+    else setGroups(e, { g: "g_none", s: "s_4" });
+    await kitWait(60);
+    const sl = myMarker(e, { x: e.location.x + 8, y: Y, z: oz + 0.5 }, "war:mymk", 0.1); setGoal(e, sl); setGroups(e, { g: g0 });
+    if (mode.includes("Face")) try { e.setRotation({ x: 0, y: -90 }); } catch {}
+    if (mode.includes("Push")) try { e.applyImpulse({ x: 0.12, y: 0, z: 0 }); } catch {}
+    const x0 = e.location.x; const at = {};
+    for (let k = 1; k <= 80; k++) { await kitWait(1); if ([5, 10, 20, 40].includes(k)) at[k] = +(e.location.x - x0).toFixed(1); }
+    res[mode] = { at, moved: +(e.location.x - x0).toFixed(1) };
+    globalThis.__noThink.delete(e.id); try { e.remove(); } catch {}
+  }
+  return res;
 };
 KS.homeorder = async (o, ox, oz) => {
   floorAt(ox - 40, oz - 40, ox + 40, oz + 40);

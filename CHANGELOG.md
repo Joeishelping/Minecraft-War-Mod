@@ -1,5 +1,51 @@
 # War Engine changelog
 
+## v9.21 (No more hesitating)
+
+Every kind of NPC was put through a new audit on a real server: how often a man stands still while he's meant to be
+going somewhere, walks back and forth without getting anywhere, flicks his head, or changes his mind. Each cause found
+was fixed and measured again.
+
+Prisoners and following
+- Prisoners keep about 2.5 blocks behind whoever took them: you, if you did, or the soldier who did (if he falls, the
+  nearest man of his side takes charge). A soldier's prisoner goes along with him and is left under guard once they're
+  back at their side's lines. Measured: 2.7 blocks behind a walking captor, player or soldier.
+- "Follow me" squads keep up at your walking pace (they caught up slower than you walk, so once behind they stayed
+  behind), set off at once when you sprint away, and go round walls and buildings by a real route instead of pressing
+  into them. Measured: back in formation 4 s after an 18-block dash (was 6.5 s); round a 40-block wall in 11-14 s
+  (before: never).
+
+Walking
+- The biggest one: Minecraft only walks a man the way his body faces. The gun kept turning soldiers toward anyone off
+  to the side while they walked: at 45 degrees off his path a man made a fifth of his pace, at 90 he stood still. On
+  the move, a soldier now aims and fires only within 40 degrees of his way; wider shots wait till he stops.
+- Sent somewhere new, the game took anywhere from 0.2 to 3 seconds to set a man off (measured), every time. He's now
+  turned and walked the first steps at once.
+- A man counted on a route point on the far side of a wall cut the corner into it and stood there. Fixed, and the
+  straight-walk check no longer cuts the corner of a wall on a diagonal.
+- Blocks you place, break or blow up, pistons and doors are noticed at once (what the soldiers knew about the ground
+  was kept for up to a minute).
+- While a new route is worked out a man keeps on the way he was going, instead of stopping for it.
+- Moves to an exact spot (cover, a firing position, the machine gunner's flank) finish there instead of three blocks
+  short.
+
+Riders, crews, medics, patrols
+- Cavalry: the rider's head snapped between his horse's line and his target ten times a second, and the gallop pulsed
+  fast-slow. One look per tick now, and the horse is held at its pace: head flicks 320 a minute -> about 6.
+- Soldiers in a truck, boat, gunboat or helicopter seat: the same nodding head fixed (68 flicks a minute -> 0); they
+  still shoot (a truck's crew killed all three enemies in the test).
+- Medics go right to the wounded man's side (they stood 2.8 blocks off forever, "going to a downed soldier").
+- Patrols keep to the radius you gave them ("free to use judgment" made it the whole 100-block area) and walk their
+  rounds without stopping at every point (stalls 31% -> about 12%). Only marches and wide patrols send a scout out,
+  and he no longer stops every 5 s on his way back.
+- The machine gunner's move to the squad's flank is kept until he gets there (it was dropped half a second after he
+  set off, eight times a fight); the flank point no longer shifts every 10 s.
+- A squad holding a house keeps its spare men inside it, covering the rooms, instead of sending them out of the door.
+
+Measured with the battle simulator against v9.20.2: 10/10 acceptance checks; storming a building, the attackers
+reach the upper floor in 3 of 4 runs (was 0 of 4) on less than half the script work; castle defenders stay on their
+walls as before; marches and stairs unchanged.
+
 ## v9.20.2 (See out of your vehicles)
 
 The seats sat inside solid parts of the vehicle models (the truck cab, the gunboat cabin, the helicopter nose), and
