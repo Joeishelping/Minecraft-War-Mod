@@ -2459,6 +2459,30 @@ KS.bodies = async (o, ox, oz) => {
   for (const e of [prev, bare, fresh, v]) try { e?.remove(); } catch {}
   return r;
 };
+// v9.21.2: a prisoner's guards fall one by one: the next of the same group takes him each time; all gone, a third side at
+// war with him takes him; left alone in their charge's absence, a passing enemy picks him up
+KS.powchain = async (o, ox, oz) => {
+  floorAt(ox - 30, oz - 30, ox + 30, oz + 30);
+  setRelPair(1, 2, "1", false); setRelPair(3, 2, "1", false); setRelPair(1, 3, "0", false);
+  const tough = (e) => { try { e.addEffect("resistance", 3000, { amplifier: 255, showParticles: false }); } catch {} return e; };
+  const g = [0, 1, 2].map((i) => { const e = tough(kitSoldier(1, { x: ox - 4.5 + i * 3, y: Y, z: oz + 0.5 }, "rifle", "hold")); sdp(e, "war:squad", 4); sdp(e, "war:home", undefined); return e; });
+  const p = tough(kitSoldier(2, { x: ox + 0.5, y: Y, z: oz + 3.5 }, "rifle", "hold"));
+  await kitWait(20);
+  soldierTakes(p, g[0]);
+  const cap = () => { const pw = pows.get(p.id); return pw ? world.getEntity(pw.captor) : undefined; };
+  const who = () => { const pw = pows.get(p.id); const c = cap(); return pw ? `${pw.mode}:f${pw.cf}:${c ? (g.indexOf(c) >= 0 ? "g" + g.indexOf(c) : "f" + P(c, "war:faction")) : "none"}` : "free"; };
+  const r = { start: who(), steps: [] };
+  for (let k = 0; k < 2; k++) { cap()?.remove(); await kitWait(60); r.steps.push(who()); }   // his guard falls: the next of the group
+  const third = tough(kitSoldier(3, { x: ox + 8.5, y: Y, z: oz + 10.5 }, "rifle", "hold"));
+  await kitWait(20); cap()?.remove(); await kitWait(80); r.steps.push(who());          // the last of the group gone: the third side has him
+  r.distToThird = +flat(p.location, third.location).toFixed(1);
+  third.remove(); await kitWait(80); r.alone = who();                                 // nobody left: left where he is
+  const passer = tough(kitSoldier(1, { x: p.location.x + 12.5, y: Y, z: p.location.z + 0.5 }, "rifle", "hold"));
+  await kitWait(100); r.picked = who(); r.alive = p.isValid;
+  for (const e of [passer, p, ...g]) try { e.remove(); } catch {}
+  setRelPair(3, 2, "0", false);
+  return r;
+};
 KS.homeorder = async (o, ox, oz) => {
   floorAt(ox - 40, oz - 40, ox + 40, oz + 40);
   const fl = ow().spawnEntity(FLAG, { x: ox + 30.5, y: Y, z: oz + 0.5 }); setP(fl, "war:faction", 1); setP(fl, "war:rally", false); sdp(fl, "war:hq", true); claimSlot(fl);

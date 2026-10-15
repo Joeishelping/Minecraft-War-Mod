@@ -1,5 +1,18 @@
 # War Engine changelog
 
+## v9.21.2 (Prisoners change hands)
+
+When the soldier guarding a prisoner is killed (or goes down, is captured or surrenders), the prisoner is taken over
+instead of standing alone:
+- by the next closest man of the same group (squad), and again by the next each time one falls;
+- with the whole group gone, by the closest man of the same side;
+- with none of them left, by the closest soldier of another side at war with the prisoner: he's their prisoner now,
+  follows them and is taken to their lines.
+- A prisoner left alone with nobody of his captors' side near is picked up by any side at war with him that comes
+  within 16 blocks. His own side (as before) frees him.
+Tested on a real server: captor killed -> next of the group -> next of the group -> a third side at war with him ->
+left alone -> picked up by a passing enemy, unharmed throughout.
+
 ## v9.21.1 (Bodies never stay forever)
 
 Bodies from an earlier load could stay for good. Only bodies in loaded ground were cleared when the world started, and

@@ -7906,14 +7906,30 @@ const isPow = (e) => pows.has(e.id);
 // pace; further off he walks a straight line where there is one and a real route where there isn't.
 function powCaptor(e, pw) {
   const c = findPlayer(pw.captor) ?? world.getEntity(pw.captor);
-  if (c?.isValid && !downed.has(c.id) && !pows.has(c.id)) return c;
+  if (c?.isValid && !downed.has(c.id) && !pows.has(c.id) && !(c.typeId === SOLDIER && gdp(c, "war:surr"))) return c;
   if (!pw.cf) return undefined;                                                   // (a player's prisoner waits for him)
-  const n = nearSnap(e.dimension.id, e.location, 24).filter((o) => o.type === SOLDIER && !o.down && o.f === pw.cf && o.id !== e.id && !pows.has(o.id) && o.e?.isValid && !gdp(o.e, "war:surr")).sort((a, b) => a.dd - b.dd)[0];
+  const n = powSuccessor(e, pw);
   if (!n) return undefined;
-  pw.captor = n.id; pw.on = undefined; sdp(e, "war:pow", JSON.stringify({ captor: pw.captor, mode: pw.mode, at: pw.at, cf: pw.cf }));
-  note(n.e, "took charge of a prisoner"); v9stat("powHandover");
-  return n.e;
+  if (n.how === "taken") { soldierTakes(e, n.c); v9stat("powRetaken"); return n.c; }   // (another side at war with him: their prisoner now)
+  pw.captor = n.c.id; pw.on = undefined;
+  try { pw.sqn = Number(sd(n.c).squad ?? 0); } catch {}
+  sdp(e, "war:pow", powJSON(pw));
+  note(n.c, "took charge of a prisoner"); v9stat(n.how === "group" ? "powHandover" : "powHandoverSide");
+  return n.c;
 }
+// v9.21.2: who takes charge of a prisoner when the man guarding him falls: the next closest of the same group (squad),
+// again and again as they fall; with all of them gone, the closest of the same side; with none of those, the closest
+// soldier of another side at war with the prisoner, whose prisoner he then becomes (taken to their lines). Nobody near:
+// he's left where he is (and may slip away).
+function powSuccessor(e, pw) {
+  const l = e.location, pf = Number(P(e, "war:faction") ?? 0);
+  const near = nearSnap(e.dimension.id, l, 48).filter((o) => o.type === SOLDIER && !o.down && o.f && o.id !== e.id && !pows.has(o.id) && o.e?.isValid && !gdp(o.e, "war:surr")).sort((a, b) => a.dd - b.dd);
+  if (pw.sqn) { const g = near.find((o) => o.f === pw.cf && Number(sd(o.e).squad ?? 0) === pw.sqn); if (g) return { c: g.e, how: "group" }; }
+  const side = near.find((o) => o.f === pw.cf && o.dd <= 24); if (side) return { c: side.e, how: "side" };
+  const other = near.find((o) => o.f !== pw.cf && isHostile(o.f, pf) && o.dd <= 24); if (other) return { c: other.e, how: "taken" };
+  return undefined;
+}
+const powJSON = (pw) => JSON.stringify({ captor: pw.captor, mode: pw.mode, at: pw.at, cf: pw.cf, sqn: pw.sqn });
 const POWHEAD = new Map();   // captor id -> { ref, last, head, pace, t }: which way he's going, and how fast
 function captorHead(c, now) {
   let H = POWHEAD.get(c.id);
@@ -7939,13 +7955,14 @@ function powSlot(e, c, pw, H) {
   return w && Math.abs(w.y - l.y) <= 2.5 ? { x: w.x, y: w.y, z: w.z } : { x: l.x, y: Math.floor(l.y + 0.01), z: l.z };
 }
 function powMove(e, now) {
-  const pw = pows.get(e.id);
+  let pw = pows.get(e.id);
   if (!pw) return undefined;
   const g = { w: "w_none", t: "t_off", d: "d_off", r: "r_off", s: "s_1" };
-  const save = () => sdp(e, "war:pow", JSON.stringify({ captor: pw.captor, mode: pw.mode, at: pw.at, cf: pw.cf }));
+  const save = () => sdp(e, "war:pow", powJSON(pw));
   if (personal.has(e.id) && personal.get(e.id).kind !== "follow") dropPersonal(e);   // (a prisoner goes nowhere of his own)
   if (pw.mode !== "jail") {
     const c = powCaptor(e, pw);
+    pw = pows.get(e.id) ?? pw;                                                    // (taken by another side: a new record)
     if (!c && pw.cf) { pw.mode = "jail"; pw.at ??= { ...e.location }; pw.slot = undefined; save(); }   // (his guards are all gone: on to their lines by himself, as before)
     else if (c?.typeId === SOLDIER && pw.at && flat(c.location, pw.at) < 8 && Math.abs(c.location.y - pw.at.y) < 4) { pw.mode = "jail"; pw.slot = undefined; save(); note(c, "handed over a prisoner"); v9stat("powJailed"); }
     else {
@@ -9749,7 +9766,8 @@ function soldierTakes(e, captor) {
   makePow(e, captor);
   if (wasDown) { try { KNEEL.set(captor.id, tick() + 40); e.dimension.spawnParticle("minecraft:heart_particle", { x: e.location.x, y: e.location.y + 1.5, z: e.location.z }); note(captor, "bandaging a wounded prisoner"); v9stat("bandaged"); } catch {} }
   const pw = pows.get(e.id); pw.mode = "follow"; pw.at = at; pw.cf = cf; pw.t = tick();   // (v9.20.3: goes along with his captor, was sent off on his own)
-  sdp(e, "war:pow", JSON.stringify({ captor: pw.captor, mode: pw.mode, at: pw.at, cf: pw.cf }));
+  try { pw.sqn = Number(sd(captor).squad ?? 0); } catch {}                       // (v9.21.2: his group: the next of them takes over if he falls)
+  sdp(e, "war:pow", powJSON(pw));
   applyRelations(e);
   callout(captor, "Hands up!", { event: true }); v9stat("taken");
   note(captor, "took a prisoner"); updateName(e);
@@ -9766,7 +9784,11 @@ system.runInterval(() => {
         const guard = near.some((c) => !c.down && c.dd < 12 && (c.type === SOLDIER || c.type === "minecraft:player") && c.f && c.f === cf);
         const friend = near.find((c) => !c.down && c.dd < 3 && c.type === SOLDIER && c.f === f && c.id !== e.id && !pows.has(c.id));
         if (friend && !guard) { freePow(e, true); applyRelations(e); giveFunction(e, "hold"); callout(friend.e, "We've got you!", { event: true }); v9stat("freed"); continue; }
-        if (pw.mode === "jail" && !guard && pw.cf) { pw.alone = (pw.alone ?? 0) + 1; if (pw.alone > 30 && Math.random() < 0.05) { freePow(e, true); applyRelations(e); giveFunction(e, "hold"); v9stat("escaped"); } }
+        if (pw.mode === "jail" && !guard && pw.cf) {
+          const tk = near.find((c) => c.type === SOLDIER && !c.down && c.f && c.f !== pw.cf && isHostile(c.f, f) && c.dd < 16 && !pows.has(c.id) && c.e?.isValid && !gdp(c.e, "war:surr"));
+          if (tk) { soldierTakes(e, tk.e); v9stat("powRetaken"); continue; }        // (v9.21.2: his guards are gone, another side at war with him finds him: theirs now)
+          pw.alone = (pw.alone ?? 0) + 1; if (pw.alone > 30 && Math.random() < 0.05) { freePow(e, true); applyRelations(e); giveFunction(e, "hold"); v9stat("escaped"); }
+        }
         else pw.alone = 0;
         continue;
       }
