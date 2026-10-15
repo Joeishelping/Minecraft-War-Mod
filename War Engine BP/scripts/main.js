@@ -3326,7 +3326,6 @@ async function warTable(player, pre) {
       .dropdown("Content", ["Vanilla (only what the game has: swords, spears, crossbows, vanilla mounts, no add-on vehicles)", "Light (no MG, sniper or bazooka; sensible mounts only)", "Full experience"], { defaultValueIndex: ["vanilla", "light", "full"].indexOf(contentMode()) })
       .toggle("Shields for swordsmen, spearmen and crossbowmen", { defaultValue: setting("shields", true) !== false })
       .toggle("Night battles: muzzle flashes and illumination flares", { defaultValue: setting("nightfx", true) !== false })
-      .toggle("Limited ammo (soldiers run low in long fights; refill from squad mates, trucks, rally flags or a quiet spell)", { defaultValue: setting("ammo", true) !== false })
       .toggle("Off duty: soldiers smoke as well as eat (camp life)", { defaultValue: setting("smoking", false) === true });
     const sr = await show(sf, player);
     if (!sr || sr.canceled || !sr.formValues) return;
@@ -3353,8 +3352,7 @@ async function warTable(player, pre) {
     const cm0 = contentMode(); sdp(world, "war:set_content", ["vanilla", "light", "full"][Number(sr.formValues[19] ?? 2)] ?? "full");
     sdp(world, "war:set_shields", !!sr.formValues[20]);
     sdp(world, "war:set_nightfx", !!sr.formValues[21]);
-    sdp(world, "war:set_ammo", !!sr.formValues[22]);
-    sdp(world, "war:set_smoking", !!sr.formValues[23]);
+    sdp(world, "war:set_smoking", !!sr.formValues[22]);
     if (contentMode() !== cm0) player.sendMessage(`§eContent set to ${contentMode()}: soldiers switch their weapons and mounts over as they're near.`);
     player.sendMessage("§aSettings saved.");
     return warTable(player, 5);
@@ -9812,6 +9810,7 @@ system.runInterval(() => {
   if (PRIZE.size > 500) PRIZE.clear();
 }, 40);
 const PRIZE = new Set();
+const AMMO_LIMITED = false;   // v9.21.4: nobody runs dry any more (the old "Limited ammo" setting is gone); reloads stay
 function ownRound(e, f, near) {
   let own = 0, foe = 0;
   for (const c of near) {
@@ -12693,7 +12692,7 @@ const RESERVE = new Map();   // id -> rounds carried
 const OUT_OF = new Map();    // id -> tick he ran dry
 function reserveOf(e) { const w = sd(e).weapon; let r = RESERVE.get(e.id); if (r === undefined) { r = AMMO_START[w] ?? 60; RESERVE.set(e.id, r); } return r; }
 function reloadGun(e, st, spec) {
-  if (setting("ammo", true) === false || ARM.get(e.id)?.arm === "pistol" || spec === NEST_SPEC) { st.ammo = spec.mag; return true; }
+  if (!AMMO_LIMITED || ARM.get(e.id)?.arm === "pistol" || spec === NEST_SPEC) { st.ammo = spec.mag; return true; }   // (v9.21.4: ammo never runs out; the reload still takes its time)
   const r = reserveOf(e);
   if (r <= 0) {
     st.ammo = 0;
@@ -12706,7 +12705,7 @@ function reloadGun(e, st, spec) {
 }
 function giveAmmo(e, n) { const w = sd(e).weapon, cap = (AMMO_START[w] ?? 60) * 1.2; RESERVE.set(e.id, Math.min(cap, reserveOf(e) + n)); if (OUT_OF.has(e.id)) { OUT_OF.delete(e.id); note(e, "got ammo"); } }
 system.runInterval(() => {
-  if (setting("ammo", true) === false) { RESERVE.clear(); OUT_OF.clear(); return; }
+  if (!AMMO_LIMITED) { RESERVE.clear(); OUT_OF.clear(); return; }
   const now = tick();
   for (const e of allOf(SOLDIER)) {
     try {
@@ -13346,7 +13345,7 @@ function bodyKit(v, cid) {
 }
 // a man low on rounds walks over to a crate he can see nearby, or to a body with a gun
 system.runInterval(() => {
-  if (setting("ammo", true) === false || !OUT_OF.size) return;
+  if (!AMMO_LIMITED || !OUT_OF.size) return;
   const now = tick();
   for (const [k, b] of [...BODY_KIT]) if (now - b.t > 6000) BODY_KIT.delete(k);
   for (const e of allOf(SOLDIER)) {
@@ -13484,8 +13483,8 @@ async function perfMenu(p) {
 }
 // ---- quick presets: many settings at once
 const PRESETS = {
-  realistic: { name: "Realistic", desc: "Limited ammo, surrender, shields, kneeling, drills, gore; real damage; radio: important only", set: { ammo: true, isosurr: true, shields: true, poses: true, drills: true, gore: true, nightfx: true, commit: true, radio: 1, r_dmg: 100, r_react: 100 } },
-  arcade: { name: "Arcade", desc: "Unlimited ammo, no surrender, quicker kills, faster reactions, no gore, quiet radio", set: { ammo: false, isosurr: false, shields: true, poses: false, drills: true, gore: false, nightfx: true, commit: true, radio: 0, r_dmg: 150, r_react: 140 } },
+  realistic: { name: "Realistic", desc: "Surrender, shields, kneeling, drills, gore; real damage; radio: important only", set: { ammo: true, isosurr: true, shields: true, poses: true, drills: true, gore: true, nightfx: true, commit: true, radio: 1, r_dmg: 100, r_react: 100 } },
+  arcade: { name: "Arcade", desc: "No surrender, quicker kills, faster reactions, no gore, quiet radio", set: { ammo: false, isosurr: false, shields: true, poses: false, drills: true, gore: false, nightfx: true, commit: true, radio: 0, r_dmg: 150, r_react: 140 } },
   cinematic: { name: "Cinematic", desc: "Everything that looks good: gore, night flares, kneeling, all radio chatter, more bodies with physics", set: { ammo: true, isosurr: true, shields: true, poses: true, drills: true, gore: true, nightfx: true, commit: true, radio: 2, r_dmg: 100, r_react: 100, perf: "high" } },
 };
 async function presetMenu(p) {

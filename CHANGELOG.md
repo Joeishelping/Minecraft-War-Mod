@@ -1,5 +1,10 @@
 # War Engine changelog
 
+## v9.21.4 (Ammo never runs out)
+
+- Soldiers no longer run out of ammo: the "Limited ammo" setting is gone (and from the Realistic / Cinematic
+  presets). Every magazine still has to be reloaded, with the same reload time as before.
+
 ## v9.21.3 (Your shots count; back in the fight)
 
 - Your gun's shots went through nothing on a soldier with his shield raised toward you: only the soldiers' own rounds
