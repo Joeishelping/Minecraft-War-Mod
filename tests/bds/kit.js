@@ -15,7 +15,7 @@ function kfill(x0, y0, z0, x1, y1, z1, b) {
   const [ax, bx] = [Math.min(x0, x1), Math.max(x0, x1)], [ay, by] = [Math.min(y0, y1), Math.max(y0, y1)], [az, bz] = [Math.min(z0, z1), Math.max(z0, z1)];
   for (let x = ax; x <= bx; x += 32) for (let z = az; z <= bz; z += 32) for (let y = ay; y <= by; y += 30) kcmd(`fill ${x} ${y} ${z} ${Math.min(bx, x + 31)} ${Math.min(by, y + 29)} ${Math.min(bz, z + 31)} ${b}`);
 }
-const kset = (x, y, z, b) => kcmd(`setblock ${x} ${y} ${z} ${b}`);
+const kset = (x, y, z, b) => { const r = kcmd(`setblock ${x} ${y} ${z} ${b}`); try { terrainChanged(ow().id, x, y, z); } catch {} return r; };   // (like a player placing it: the soldiers notice)
 const STAIR = (dir) => `oak_stairs ["weirdo_direction"=${{ "+x": 0, "-x": 1, "+z": 2, "-z": 3 }[dir]}]`;
 let KIT = null;
 const kitSoldiers = (f) => allOf(SOLDIER).filter((e) => e.isValid && (f === undefined || Number(P(e, "war:faction")) === f));
@@ -2079,6 +2079,80 @@ KS.followform = async (o, ox, oz) => {
   }
   const fk = getJSON(world, "war:fshape", {}); delete fk["1|0"]; setJSON(world, "war:fshape", fk);
   return res;
+};
+// v9.20.3: prisoners keep close behind whoever took them (a soldier or you), across open ground and round a wall
+KS.powfollow = async (o, ox, oz) => {
+  floorAt(ox - 45, oz - 45, ox + 45, oz + 45);
+  setRelPair(1, 2, "1", true);
+  const res = {};
+  for (const who of ["soldier", "player"]) {
+    for (let x = ox - 10; x <= ox + 30; x++) for (let y = Y; y < Y + 3; y++) kset(x, y, oz + 12, "stone");   // a wall, open at its west end
+    const ld = ow().spawnEntity("minecraft:armor_stand", { x: ox - 20.5, y: Y, z: oz + 0.5 });
+    globalThis.__fakeLeader = (id) => (id === ld.id ? ld : undefined);
+    let cap = ld;
+    if (who === "soldier") { cap = kitSoldier(1, { x: ox - 22.5, y: Y, z: oz + 0.5 }, "rifle", "hold"); sdp(cap, "war:squad", 0); sdp(cap, "war:home", undefined); giveFunction(cap, "follow", ld); }
+    const pr = [0, 1].map((i) => kitSoldier(2, { x: ox - 24.5 + i, y: Y, z: oz - 3.5 }, "rifle", "hold"));
+    await kitWait(20);
+    for (const e of pr) { if (who === "soldier") soldierTakes(e, cap); else makePow(e, cap); }
+    await kitWait(40);
+    let sum = 0, n = 0, worst = 0; const trace = [], now0 = () => tick();
+    const gap = () => { for (const e of pr) { const g = flat(e.location, cap.location); sum += g; n++; worst = Math.max(worst, g); } };
+    for (let k = 0; k < 300; k++) { const l = ld.location; ld.teleport({ x: l.x + Number(o.v ?? 0.15), y: Y, z: l.z }); await kitWait(1); if (k > 40 && k % 10 === 0) gap(); if (o.tr && k % 30 === 0) trace.push(pr.map((e) => { const pw = pows.get(e.id); return `${flat(e.location, cap.location).toFixed(1)}/${personal.get(e.id)?.kind ?? "-"}${personal.get(e.id)?.planning ? "P" : ""}/${pw?.sr ? "sr" : ""}/${now0() - (pw?.on ?? -999)}/${getJSON(e, "war:st", {}).g ?? ""}`; }).join(" ")); }
+    const open = { avg: +(sum / Math.max(1, n)).toFixed(1), worst: +worst.toFixed(1) };
+    // the leader goes round to the far side of the wall (the prisoners have to go round its end)
+    ld.teleport({ x: ox + 10.5, y: Y, z: oz + 16.5 });
+    let t = 0; for (; t < 600; t += 10) { await kitWait(10); if (pr.every((e) => e.isValid && flat(e.location, cap.location) < 6 && e.location.z > oz + 12)) break; }
+    res[who] = { trace: o.tr ? trace : undefined, open, roundWall: t >= 600 ? "no" : `${(t / 20).toFixed(1)} s`, end: pr.map((e) => +flat(e.location, cap.location).toFixed(1)), mode: pr.map((e) => pows.get(e.id)?.mode), captorOk: pr.every((e) => pows.get(e.id)?.captor === cap.id), notes: pr.map((e) => notes.get(e.id)?.text ?? "") };
+    globalThis.__fakeLeader = undefined;
+    for (const e of [...pr, ld, cap]) try { e.remove(); } catch {}
+    for (let x = ox - 10; x <= ox + 30; x++) for (let y = Y; y < Y + 3; y++) kset(x, y, oz + 12, "air");
+  }
+  // the captor falls: one of his side takes the prisoner over
+  const c1 = kitSoldier(1, { x: ox + 0.5, y: Y, z: oz + 0.5 }, "rifle", "hold"), c2 = kitSoldier(1, { x: ox + 3.5, y: Y, z: oz + 0.5 }, "rifle", "hold");
+  sdp(c1, "war:home", undefined);
+  const p1 = kitSoldier(2, { x: ox + 0.5, y: Y, z: oz + 3.5 }, "rifle", "hold");
+  await kitWait(20); soldierTakes(p1, c1); await kitWait(20); c1.remove(); await kitWait(80);
+  res.handover = { to: pows.get(p1.id)?.captor === c2.id, mode: pows.get(p1.id)?.mode, d: +flat(p1.location, c2.location).toFixed(1) };
+  for (const e of [c2, p1]) try { e.remove(); } catch {}
+  return res;
+};
+// v9.20.3: "follow me" squads at your walking pace, after a dash ahead, and round a wall
+KS.followfar = async (o, ox, oz) => {
+  floorAt(ox - 45, oz - 45, ox + 45, oz + 45);
+  for (let x = ox - 10; x <= ox + 30; x++) for (let y = Y; y < Y + 3; y++) kset(x, y, oz + 12, "stone");
+  const ld = ow().spawnEntity("minecraft:armor_stand", { x: ox - 20.5, y: Y, z: oz + 0.5 });
+  globalThis.__fakeLeader = (id) => (id === ld.id ? ld : undefined);
+  const fs = [0, 1, 2, 3].map((i) => { const e = kitSoldier(1, { x: ox - 22.5 + i, y: Y, z: oz - 3.5 }, "rifle", "hold"); sdp(e, "war:squad", 0); giveFunction(e, "follow", ld); return e; });
+  await kitWait(60);
+  const res = {}, v = Number(o.v ?? 0.21);
+  const avgTo = () => { const F = FOLLOW.get(ld.id); let s = 0, n = 0; for (const e of fs) { const sp = F && followSlot(e, sd(e), ld, F); s += sp ? flat(sp, e.location) : flat(ld.location, e.location); n++; } return s / n; };
+  let sum = 0, n = 0, worst = 0;
+  const trace = [], tr = (tag) => { if (!o.tr) return; const F = FOLLOW.get(ld.id); trace.push(tag + " " + fs.map((e) => { const sp = F && followSlot(e, sd(e), ld, F); const l = e.location, pr = personal.get(e.id); return `(${Math.round(l.x - ox)},${Math.round(l.z - oz)})${pr?.pts ? pr.idx + "/" + pr.pts.length : ""} ${sp ? flat(sp, e.location).toFixed(1) : "?"}/${personal.get(e.id)?.kind ?? "-"}${personal.get(e.id)?.planning ? "P" : ""}/${getJSON(e, "war:st", {}).g ?? ""}/${getJSON(e, "war:st", {}).s ?? ""}`; }).join(" ")); };
+  for (let k = 0; k < 200; k++) { const l = ld.location; ld.teleport({ x: l.x + v, y: Y, z: l.z }); await kitWait(1); if (k > 40 && k % 10 === 0) { const g = avgTo(); sum += g; n++; worst = Math.max(worst, g); } if (k % 20 === 0) tr("w" + k); }
+  res.walk = { avgGap: +(sum / n).toFixed(1), worst: +worst.toFixed(1) };
+  { const l = ld.location; ld.teleport({ x: l.x + 18, y: Y, z: l.z }); }          // a dash ahead (you sprint off)
+  let t = 0; for (; t < 400; t += 5) { await kitWait(5); if (t % 20 === 0) tr("d" + t); if (avgTo() < 2) break; }
+  res.dash = `${(t / 20).toFixed(1)} s`;
+  ld.teleport({ x: ox + 10.5, y: Y, z: oz + 16.5 });                               // round the wall
+  t = 0; for (; t < 800; t += 10) { await kitWait(10); if (t % 40 === 0) tr("r" + t); if (fs.every((e) => e.location.z > oz + 12 && flat(e.location, ld.location) < 8)) break; }
+  res.roundWall = t >= 800 ? `no (${fs.map((e) => Math.round(flat(e.location, ld.location))).join(",")})` : `${(t / 20).toFixed(1)} s`;
+  res.notes = fs.map((e) => notes.get(e.id)?.text ?? ""); if (o.tr) res.trace = trace;
+  globalThis.__fakeLeader = undefined;
+  for (const e of [...fs, ld]) try { e.remove(); } catch {}
+  for (let x = ox - 10; x <= ox + 30; x++) for (let y = Y; y < Y + 3; y++) kset(x, y, oz + 12, "air");
+  return res;
+};
+KS.walldbg = async (o, ox, oz) => {
+  floorAt(ox - 45, oz - 45, ox + 45, oz + 45);
+  for (let x = ox - 10; x <= ox + 30; x++) for (let y = Y; y < Y + 3; y++) kset(x, y, oz + 12, "stone");
+  await kitWait(5);
+  const dim = ow(), from = { x: ox + 26.5, y: Y, z: oz + 10.5 }, to = { x: ox + 10.5, y: Y, z: oz + 16.5 };
+  const r = { blk: tBlock(dim, ox + 20.5, Y, oz + 12.5)?.typeId, blk2: tBlock(dim, ox + 20.5, Y + 2, oz + 12.5)?.typeId, standWall: standAt(dim, ox + 20, Y, oz + 12), standTop: standAt(dim, ox + 20, Y + 3, oz + 12), floor: tBlock(dim, ox + 20.5, Y - 1, oz + 10.5)?.typeId, Y };
+  const q = quickRoute(dim, from, to); r.quick = q ? q.length + " " + q.filter((p, i) => i % 4 === 0).map((p) => `${Math.round(p.x - ox)},${p.y - Y},${Math.round(p.z - oz)}`).join(" ") : "none";
+  r.sr = straightReach(dim, from, to);
+  await new Promise((res) => planRoute(dim, from, to, (pts, partial) => { r.plan = pts ? `${pts.length}${partial ? " PARTIAL" : ""} ` + pts.map((p) => `${Math.round(p.x - ox)},${p.y - Y},${Math.round(p.z - oz)}`).join(" ") : "none"; res(); }, { max: 6000, maxRadius: 50 }));
+  for (let x = ox - 10; x <= ox + 30; x++) for (let y = Y; y < Y + 3; y++) kset(x, y, oz + 12, "air");
+  return r;
 };
 KS.homeorder = async (o, ox, oz) => {
   floorAt(ox - 40, oz - 40, ox + 40, oz + 40);

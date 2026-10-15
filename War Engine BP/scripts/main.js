@@ -956,7 +956,7 @@ function think(e) {
       sdp(e, "war:ordergoal", d.goal);
       want.g = engaged.g;
       if (want.t !== "t_at") want.t = engaged.t;
-      want.s = engaged.slow ? "s_1" : speedGroup(e, engaged.urgent);
+      want.s = engaged.slow ? "s_1" : engaged.s ?? speedGroup(e, engaged.urgent);   // (v9.20.3: a pace the move asks for is kept: catching you up was walked at a stroll)
     } else if (gdp(e, "war:ordergoal") !== undefined) {
       setGoal(e, Number(gdp(e, "war:ordergoal")));  // back to the order
       sdp(e, "war:ordergoal", undefined);
@@ -5316,11 +5316,26 @@ function nearestIdx(pts, loc, lo, hi, prefer) {
 }
 function trackIdx(id, pts, loc) {
   let t = rTrack.get(id);
-  if (!t || t.pts !== pts) { t = { pts, i: nearestIdx(pts, loc, 0, pts.length), t: tick() }; rTrack.set(id, t); return t.i; }
-  if (tick() - t.t > 200) t.i = nearestIdx(pts, loc, 0, pts.length);                        // long gap (unloaded, teleported): look again
-  else t.i = nearestIdx(pts, loc, Math.max(0, t.i - 3), Math.min(pts.length, t.i + 14), t.i);
-  t.t = tick();
+  if (!t || t.pts !== pts) { let i = nearestIdx(pts, loc, 0, pts.length); for (let n = 0; i > 0 && n < 12 && !trackOk(id, pts, loc, i); n++) i--; t = { pts, i, t: tick() }; rTrack.set(id, t); return t.i; }
+  let i;
+  if (tick() - t.t > 200) { i = nearestIdx(pts, loc, 0, pts.length); for (let n = 0; i > 0 && n < 12 && !trackOk(id, pts, loc, i); n++) i--; }   // long gap (unloaded, teleported): look again
+  else { i = nearestIdx(pts, loc, Math.max(0, t.i - 3), Math.min(pts.length, t.i + 14), t.i); while (i > t.i && !trackOk(id, pts, loc, i)) i--; }
+  t.i = i; t.t = tick();
   return t.i;
+}
+// v9.20.3: may he be counted at route point k from where he stands? Not when it's the nearest point only through a wall
+// (the route round the end of a wall passes close by on the far side: counted there, he cut the corner into the wall
+// and stood pressing against it)
+function trackOk(id, pts, loc, k) {
+  const p = pts[k];
+  if (!p || r3(p, loc) < 1.6) return true;
+  const e = world.getEntity(id); if (!e) return true;
+  const dim = e.dimension, n = Math.ceil(flat(loc, p) * 2);
+  for (let s = 1; s < n; s++) {
+    const f = s / n, x = loc.x + (p.x - loc.x) * f, z = loc.z + (p.z - loc.z) * f, y = Math.floor(loc.y + (p.y - loc.y) * f + 0.01) + 1;
+    try { if (!passable(tBlock(dim, x, y, z))) return false; } catch { return true; }
+  }
+  return true;
 }
 system.runInterval(() => { for (const id of [...rTrack.keys()]) if (!world.getEntity(id)) rTrack.delete(id); }, 1200);
 // a point is a "gate" when ordinary walking can't be trusted past it: a ladder, a change of level, something to open
@@ -6735,20 +6750,30 @@ const webAt = (dim, x, y, z) => { try { return TI(tBlock(dim, x + 0.5, y, z + 0.
 function straightReach(dim, from, to, endOk = false) {
   const L = flat(from, to);
   if (L > 16) return false;
-  const n = Math.ceil(L), now = tick();
-  let y = Math.floor(from.y + 0.01);
+  // (v9.20.3: every cell the line crosses, half a block at a time, and the cells his shoulders brush passing a corner:
+  //  a block at a time it skipped cells on a slant, and a "straight walk" cut a wall's corner and stuck on it)
+  const n = Math.max(1, Math.ceil(L * 2)), now = tick(), ux = (to.x - from.x) / (L || 1), uz = (to.z - from.z) / (L || 1);
+  let y = Math.floor(from.y + 0.01), lx = Math.floor(from.x), lz = Math.floor(from.z), px = from.x, pz = from.z;
+  const roomAt = (x, z) => { try { const f0 = tBlock(dim, x + 0.5, y, z + 0.5), h0 = tBlock(dim, x + 0.5, y + 1, z + 0.5); return (passable(f0) && passable(h0)) || standAt(dim, x, y + 1, z, now); } catch { return false; } };
   for (let k = 1; k <= n; k++) {
-    const x = Math.floor(from.x + ((to.x - from.x) * k) / n), z = Math.floor(from.z + ((to.z - from.z) * k) / n);
-    if (dangerNear(dim, { x: x + 0.5, y, z: z + 0.5 }) && !(endOk && k === n)) return false;   // v6.2: past an edge / lava: not a walk for Minecraft (v6.9: but a perch at the end is)
-    if (webAt(dim, x, y, z)) return false;                                      // (v9.1: a cobweb on the line: not a walk, a route)
-    if (standAt(dim, x, y, z, now)) continue;
-    if (standAt(dim, x, y + 1, z, now)) {                                       // a step up: room over his head to jump it
-      const px = from.x + ((to.x - from.x) * (k - 1)) / n, pz = from.z + ((to.z - from.z) * (k - 1)) / n;
-      try { if (!passable(tBlock(dim, px, y + 2, pz))) return false; } catch { return false; }
-      y++; continue;
+    const cx = from.x + ((to.x - from.x) * k) / n, cz = from.z + ((to.z - from.z) * k) / n, x = Math.floor(cx), z = Math.floor(cz);
+    if (x !== lx || z !== lz) {
+      if (dangerNear(dim, { x: x + 0.5, y, z: z + 0.5 }) && !(endOk && k === n)) return false;   // v6.2: past an edge / lava: not a walk for Minecraft (v6.9: but a perch at the end is)
+      if (webAt(dim, x, y, z)) return false;                                    // (v9.1: a cobweb on the line: not a walk, a route)
+      if (standAt(dim, x, y, z, now)) {}
+      else if (standAt(dim, x, y + 1, z, now)) {                                // a step up: room over his head to jump it
+        try { if (!passable(tBlock(dim, px, y + 2, pz))) return false; } catch { return false; }
+        y++;
+      } else if (standAt(dim, x, y - 1, z, now)) y--;
+      else return false;
+      if (x !== lx && z !== lz && !roomAt(lx, z) && !roomAt(x, lz)) return false;   // (squeezing between two corners on a diagonal)
+      lx = x; lz = z;
     }
-    if (standAt(dim, x, y - 1, z, now)) { y--; continue; }
-    return false;
+    if (k < n) for (const sgn of [1, -1]) {                                     // his shoulders, a quarter block either side (he can brush a wall, not walk into its corner)
+      const sx = Math.floor(cx - uz * 0.25 * sgn), sz = Math.floor(cz + ux * 0.25 * sgn);
+      if ((sx !== x || sz !== z) && !roomAt(sx, sz)) return false;
+    }
+    px = cx; pz = cz;
   }
   return Math.abs(y - Math.floor(to.y + 0.01)) <= 1;
 }
@@ -7766,32 +7791,146 @@ function makePow(e, captor) {
   for (const S of squads.values()) S.known?.delete(e.id);          // (forgotten as an enemy, and nobody keeps aiming at him)
   for (const [id, st] of gunState) if (st.target?.id === e.id) { st.target = undefined; st.supp = undefined; }
   for (const [id, ps] of perc) if (ps?.threat?.id === e.id) ps.threat = undefined;
+  dropPersonal(e); gliders.delete(e.id); brain.delete(e.id);                       // (v9.20.3: whatever he was doing (a charge, a route to the fight) is over)
+  { const ps = perc.get(e.id); if (ps) ps.threat = undefined; }
   updateName(e);
 }
+function dropPersonal(e) { const pr = personal.get(e.id); if (pr?.job && pr.planning) pr.job.cancel = true; personal.delete(e.id); travelTo.delete(e.id); }
 function freePow(e, rearm) {
   pows.delete(e.id); sdp(e, "war:pow", undefined); setP(e, "war:hands", false);
   if (rearm) equip(e, weaponItem(e));
   updateName(e);
 }
 const isPow = (e) => pows.has(e.id);
+// v9.20.3: a prisoner keeps close behind whoever took him: you, if you did; the soldier who did, if a soldier did (and
+// if that man falls, the nearest of his side takes charge of him). A soldier's prisoner goes with him till the man is
+// back at his own lines, and is left there under guard. Close in, the follow driver carries him along at his captor's
+// pace; further off he walks a straight line where there is one and a real route where there isn't.
+function powCaptor(e, pw) {
+  const c = findPlayer(pw.captor) ?? world.getEntity(pw.captor);
+  if (c?.isValid && !downed.has(c.id) && !pows.has(c.id)) return c;
+  if (!pw.cf) return undefined;                                                   // (a player's prisoner waits for him)
+  const n = nearSnap(e.dimension.id, e.location, 24).filter((o) => o.type === SOLDIER && !o.down && o.f === pw.cf && o.id !== e.id && !pows.has(o.id) && o.e?.isValid && !gdp(o.e, "war:surr")).sort((a, b) => a.dd - b.dd)[0];
+  if (!n) return undefined;
+  pw.captor = n.id; pw.on = undefined; sdp(e, "war:pow", JSON.stringify({ captor: pw.captor, mode: pw.mode, at: pw.at, cf: pw.cf }));
+  note(n.e, "took charge of a prisoner"); v9stat("powHandover");
+  return n.e;
+}
+const POWHEAD = new Map();   // captor id -> { ref, last, head, pace, t }: which way he's going, and how fast
+function captorHead(c, now) {
+  let H = POWHEAD.get(c.id);
+  if (H && H.t === now) return H;
+  H ??= {}; const l = c.location;
+  H.pace = H.last ? Math.min(0.6, Math.hypot(l.x - H.last.x, l.z - H.last.z) / Math.max(1, now - H.t)) : 0;
+  if (H.ref) {
+    const vx = l.x - H.ref.x, vz = l.z - H.ref.z, sp = Math.hypot(vx, vz);
+    if (sp > 20) H.ref = { x: l.x, z: l.z };
+    else if (sp > 0.8) { const hx = (H.head?.x ?? 0) * 0.4 + (vx / sp) * 0.6, hz = (H.head?.z ?? 1) * 0.4 + (vz / sp) * 0.6, L = Math.hypot(hx, hz) || 1; H.head = { x: hx / L, z: hz / L }; H.ref = { x: l.x, z: l.z }; }
+  } else H.ref = { x: l.x, z: l.z };
+  if (!H.head) { const f = fwdFromYaw(c.getRotation().y); H.head = { x: f.x, z: f.z }; }
+  H.last = { x: l.x, z: l.z }; H.t = now;
+  POWHEAD.set(c.id, H);
+  return H;
+}
+function powSlot(e, c, pw, H) {
+  const ids = []; for (const [id, q] of pows) if (q.captor === pw.captor && q.mode === "follow") ids.push(id);
+  ids.sort();
+  const i = Math.max(0, ids.indexOf(e.id)), back = 2.2 + Math.floor(i / 2) * 1.4, side = ids.length > 1 ? (i % 2 ? 0.7 : -0.7) : 0;
+  const l = c.location, x = l.x - H.head.x * back - H.head.z * side, z = l.z - H.head.z * back + H.head.x * side;
+  const w = walkableNear(e.dimension, x, z, l.y);
+  return w && Math.abs(w.y - l.y) <= 2.5 ? { x: w.x, y: w.y, z: w.z } : { x: l.x, y: Math.floor(l.y + 0.01), z: l.z };
+}
 function powMove(e, now) {
   const pw = pows.get(e.id);
   if (!pw) return undefined;
   const g = { w: "w_none", t: "t_off", d: "d_off", r: "r_off", s: "s_1" };
-  if (pw.mode === "jail") {
-    if (!pw.slot || !marker(pw.slot)) pw.slot = makeWaypoint(e.dimension, pw.at ?? e.location);
-    const a = marker(pw.slot);
-    return { ...g, g: a && flat(a.location, e.location) > 3 ? "g_wp" : "g_none", slot: pw.slot };
+  const save = () => sdp(e, "war:pow", JSON.stringify({ captor: pw.captor, mode: pw.mode, at: pw.at, cf: pw.cf }));
+  if (personal.has(e.id) && personal.get(e.id).kind !== "follow") dropPersonal(e);   // (a prisoner goes nowhere of his own)
+  if (pw.mode !== "jail") {
+    const c = powCaptor(e, pw);
+    if (!c && pw.cf) { pw.mode = "jail"; pw.at ??= { ...e.location }; pw.slot = undefined; save(); }   // (his guards are all gone: on to their lines by himself, as before)
+    else if (c?.typeId === SOLDIER && pw.at && flat(c.location, pw.at) < 8 && Math.abs(c.location.y - pw.at.y) < 4) { pw.mode = "jail"; pw.slot = undefined; save(); note(c, "handed over a prisoner"); v9stat("powJailed"); }
+    else {
+      if (!c || c.dimension.id !== e.dimension.id) return { ...g, g: "g_none", slot: 0 };
+      pw.on = now;
+      const H = captorHead(c, now), sp = powSlot(e, c, pw, H), l = e.location;
+      const gap = flat(sp, l), dd = dist(c.location, l);
+      if (dd > 64) { tpNear(e, sp, e.dimension); v9stat("powCatchTp"); return { ...g, g: "g_none", slot: 0 }; }   // (far behind: the last resort)
+      if (gap < 12 && Math.abs(sp.y - l.y) < 1.2 && (gap < 5 || straightReach(e.dimension, l, sp))) {   // near, nothing in the way: the driver below brings him in and keeps him there
+        if (personal.get(e.id)?.kind === "follow") { personal.delete(e.id); travelTo.delete(e.id); }
+        return { ...g, g: "g_none", slot: 0 };
+      }
+      const mv = catchUp(e, sp, c.location, now, H.head);
+      return mv ? { ...g, g: mv.g, slot: mv.slot ?? 0, s: gap > 14 ? "s_7" : "s_6" } : { ...g, g: "g_none", slot: 0 };   // (quicker than you walk: he closes up)
+    }
   }
-  const c = findPlayer(pw.captor);
-  if (!c || c.dimension.id !== e.dimension.id) return { ...g, g: "g_none", slot: 0 };
-  const dd = dist(c.location, e.location);
-  if (dd <= 7) return { ...g, g: "g_none", slot: 0 };                    // close enough: wait (not on your heels)
-  const dx = e.location.x - c.location.x, dz = e.location.z - c.location.z, L = Math.hypot(dx, dz) || 1;
-  const spot = walkableNear(e.dimension, c.location.x + (dx / L) * 6, c.location.z + (dz / L) * 6, c.location.y) ?? c.location;
-  if (!pw.slot || !marker(pw.slot) || flat(marker(pw.slot).location, spot) > 3) pw.slot = makeWaypoint(e.dimension, spot);
-  return { ...g, g: "g_wp", slot: pw.slot, s: dd > 20 ? "s_3" : "s_2" };
+  if (!pw.slot || !marker(pw.slot)) pw.slot = makeWaypoint(e.dimension, pw.at ?? e.location);
+  const a = marker(pw.slot);
+  if (a && flat(a.location, e.location) > 6) {                                     // (a long way to his captors' lines: a real route)
+    const mv = catchUp(e, a.location, a.location, now);
+    if (mv) return { ...g, g: mv.g, slot: mv.slot ?? 0, s: "s_2" };
+  }
+  if (personal.get(e.id)?.kind === "follow") { personal.delete(e.id); travelTo.delete(e.id); }
+  return { ...g, g: a && flat(a.location, e.location) > 3 ? "g_wp" : "g_none", slot: pw.slot };
 }
+// catching up with someone on the move (a leader, a captor): a plain walk where there is one, a real route where there
+// isn't (round a building, up the stairs, over a wall): Minecraft's own following gave up a little way off. A route
+// is kept while the man ahead stays near its end (no stopping to work out a new one every few steps), and while one is
+// being worked out he keeps walking his way.
+function catchUp(e, spot, lead, now, ahead) {
+  const l = e.location, mk = (q) => { const slot = myMarker(e, q, "war:mymk", 1.0); return slot ? { g: "g_wp", slot, t: "t_mid", urgent: true } : undefined; };
+  let pr = personal.get(e.id);
+  if (pr && pr.kind !== "follow") return followPersonal(e, now) ?? mk(spot);      // (on another errand's route: that first)
+  const D = flat(spot, l), open = !isIndoors(e) && !onStairs(e.dimension, l);
+  if (open && Math.abs(spot.y - l.y) <= 1 && D <= 16 && straightReach(e.dimension, l, spot)) {   // a plain walk
+    if (pr) { personal.delete(e.id); travelTo.delete(e.id); }
+    return mk(ahead ? { x: spot.x + ahead.x * 3, y: spot.y, z: spot.z + ahead.z * 3 } : spot);   // (a little ahead: the game's following stops short)
+  }
+  const to = { x: lead.x, y: Math.floor(lead.y + 0.01), z: lead.z };
+  if (!pr || (!pr.planning && (!pr.pts || flat(pr.dest, to) > 10 || Math.abs(pr.dest.y - to.y) > 2))) { travelTo.set(e.id, to); planPersonalTo(e, "follow", to, now); pr = personal.get(e.id); }
+  const r = followPersonal(e, now);
+  if (r?.g === "g_wp") return r;
+  // no route yet (being worked out): meanwhile a clear stretch his way, if there is one; else he waits for it
+  if (open && D > 16 && Math.abs(spot.y - l.y) <= 3) {
+    const m = walkableNear(e.dimension, l.x + ((spot.x - l.x) * 12) / D, l.z + ((spot.z - l.z) * 12) / D, l.y);
+    if (m && Math.abs(m.y - l.y) <= 1 && straightReach(e.dimension, l, m)) return mk(m);
+  }
+  return personal.has(e.id) ? { g: "g_none", t: "t_mid", urgent: false } : mk(spot);
+}
+// one step of a follow driver: a man near his place is carried onto it at the pace of the man he follows, facing the
+// way they're going; a wall, a drop or a step too high and his own walking takes over
+function driveStep(e, sp, maxStep, head, avoid, reach = 7) {
+  const l = e.location, dx = sp.x - l.x, dz = sp.z - l.z, L = Math.hypot(dx, dz);
+  if (L > reach || Math.abs(sp.y - l.y) > 1.2 || L < 0.1) return false;
+  const stp = Math.min(L, maxStep), nx = l.x + (dx / L) * stp, nz = l.z + (dz / L) * stp;
+  if (avoid && Math.hypot(nx - avoid.x, nz - avoid.z) < 0.9) return false;               // (never into him)
+  let ny; for (const yy of [l.y, Math.floor(l.y + 0.01) + 1, Math.floor(l.y + 0.01) + 0.5, l.y - 0.5]) { if (yy > l.y + 1.1) continue; if (glideFree(e.dimension, nx, yy, nz) && floorUnder(e.dimension, nx, yy, nz)) { ny = yy; break; } }
+  if (ny === undefined || dangerNear(e.dimension, { x: nx, y: ny, z: nz })) return false;
+  e.teleport({ x: nx, y: ny, z: nz }, { rotation: faceRot(e, { x: nx, y: ny, z: nz }, { x: nx + head.x * 6, z: nz + head.z * 6 }, 10) });
+  return true;
+}
+system.runInterval(() => {                                                          // the prisoners' driver
+  if (!pows.size) return;
+  const now = tick();
+  for (const [id, pw] of pows) {
+    if (pw.mode === "jail" || now - (pw.on ?? -999) > 100) continue;
+    try {
+      const e = world.getEntity(id);
+      if (!e?.isValid || downed.has(id) || isRiding(e) || climbing.has(id) || gliders.has(id) || personal.has(id) || staggered(id)) continue;
+      const c = findPlayer(pw.captor) ?? world.getEntity(pw.captor);
+      if (!c?.isValid || c.dimension.id !== e.dimension.id) continue;
+      const H = captorHead(c, now), sp = powSlot(e, c, pw, H), L = flat(sp, e.location);
+      if (L > 5 && now - (pw.srT ?? -99) >= 10) { pw.srT = now; pw.sr = straightReach(e.dimension, e.location, sp); }   // (a clear walk to his place: checked twice a second)
+      const far = L > 5 && pw.sr;
+      const base = far ? 0.3 : L > 1.5 ? Math.max(0.22, H.pace * 1.4) : 0.18;     // (behind his place: a little quicker than his captor till he's in it)
+      if (!driveStep(e, sp, Math.min(0.42, Math.max(base, H.pace * 1.3)), H.head, c.location, far ? 12 : 7)) {
+        pw.sr = false;
+        if (L > 7 && now - (KICK.get(id) ?? -99) > 15) { KICK.set(id, now); try { think(e); } catch {} }   // (his captor got away from him: he goes now)
+      }   // (blocked: walking / a route takes over)
+    } catch {}
+  }
+}, 1);
+system.runInterval(() => { const now = tick(); for (const [k, H] of [...POWHEAD]) if (now - H.t > 200) POWHEAD.delete(k); }, 200);
 // ---- callouts: test button (every soldier near you calls out once, right now)
 function testCallouts(player) {
   let n = 0;
@@ -7904,10 +8043,10 @@ async function captiveMenu(p, e) {
     const pw = pows.get(e.id);
     if (friendly && pf !== ef) { p.onScreenDisplay.setActionBar("§7A prisoner. Only his own side can free him."); return; }
     if (friendly) { const r = await show(new ActionFormData().title("Captured comrade").button("Free and rearm him"), p); if (r && !r.canceled && r.selection === 0) { freePow(e, true); p.onScreenDisplay.setActionBar("§aFreed and rearmed."); } return; }
-    const r = await show(new ActionFormData().title("Prisoner").button(pw.mode === "jail" ? "Follow me" : "Imprison (stay here)").button("Release (goes home unarmed)").button("§cKill"), p);
+    const r = await show(new ActionFormData().title("Prisoner").button(pw.mode === "jail" || pw.captor !== p.id ? "Follow me" : "Imprison (stay here)").button("Release (goes home unarmed)").button("§cKill"), p);
     if (!r || r.canceled || r.selection === undefined || !e.isValid) return;
     if (r.selection === 0) {
-      if (pw.mode === "jail") { pw.mode = "follow"; pw.captor = p.id; pw.slot = undefined; }
+      if (pw.mode === "jail" || pw.captor !== p.id) { pw.mode = "follow"; pw.captor = p.id; pw.on = undefined; pw.slot = undefined; pw.cf = undefined; pw.at = undefined; }
       else { pw.mode = "jail"; pw.at = { ...e.location }; pw.slot = makeWaypoint(e.dimension, e.location); }
       sdp(e, "war:pow", JSON.stringify({ captor: pw.captor, mode: pw.mode, at: pw.at }));
       p.onScreenDisplay.setActionBar(pw.mode === "jail" ? "§7Imprisoned here." : "§7He follows you.");
@@ -9270,13 +9409,15 @@ system.runInterval(() => {
   stepping.clear();
   for (const e of allOf(SOLDIER)) {
     try {
-      if (climbing.has(e.id) || isRiding(e) || downed.has(e.id) || pows.has(e.id)) continue;
+      if (climbing.has(e.id) || isRiding(e) || downed.has(e.id) || (pows.has(e.id) && !personal.has(e.id))) continue;   // (v9.20.3: a prisoner on his way after his captor is carried too)
       let pts, i, own = false, mm;
       const pr = personal.get(e.id);
       if (pr) {
         if (!pr.pts || pr.planning || (pr.hold ?? 0) > now) continue;
         pts = pr.pts; i = trackIdx(e.id, pts, e.location); own = true;
       } else {
+        if (pows.has(e.id)) continue;
+        { const fd = sd(e); if ((fd.func === "follow" || fd.func === "escort") && fd.leader) continue; }   // (v9.20.3: a man following you is on no march: its lanes and "taking his spot" aren't his)
         const og = gdp(e, "war:ordergoal"), goal = Number(gdp(e, "war:goal") ?? 0);
         const cu = Number(gdp(e, "war:catchup") ?? 0);
         if (og !== undefined && goal !== cu) continue;                         // fighting: the brain moves him
@@ -9316,8 +9457,8 @@ system.runInterval(() => {
       if (tight || ahead < 0 || onPassage(e)) stepping.add(e.id);         // (v7.2: the edge guard watches only men where there's an edge to mind)
       if (tight) {
         const g = gliders.get(e.id);
-        const atDoor = !remote && stackAtDoor(e, { pts }, i, now);       // (v9.0: they're in there: stack at the door, frag in, all go)
-        if (atDoor || (!remote && stackAtStairs(e, { pts }, i, now))) {   // (v6.9.2: the enemy's up there: gather at the foot, then all go)
+        const atDoor = !remote && !pows.has(e.id) && stackAtDoor(e, { pts }, i, now);       // (v9.0: they're in there: stack at the door, frag in, all go)
+        if (atDoor || (!remote && !pows.has(e.id) && stackAtStairs(e, { pts }, i, now))) {   // (v6.9.2: the enemy's up there: gather at the foot, then all go)
           gliders.set(e.id, { yaw: g?.yaw, pts, k: g && g.pts === pts ? g.k : glideStart(pts, i, e.location), t: now, paused: true, wait: 0, blocked: 0 });
           myMarker(e, e.location); note(e, atDoor ? "stacking up at the door" : "stacking up at the stairs");
           continue;
@@ -9496,13 +9637,13 @@ function soldierTakes(e, captor) {
   const cf = Number(P(captor, "war:faction") ?? 0);
   const fl = nearestFlag(captor.dimension, captor.location, (f) => Number(P(f, "war:faction")) === cf, 200);
   const home = marker(Number(gdp(captor, "war:home") ?? 0));
-  const at = { ...(fl?.location ?? home?.location ?? captor.location) };
+  const at0 = fl?.location ?? home?.location, at = at0 ? { ...at0 } : undefined;   // (v9.20.3: no lines of his own: the prisoner just stays with him)
   if (gdp(e, "war:surr")) { sdp(e, "war:surr", 0); sdp(e, "war:surrIso", undefined); }
   const wasDown = downed.has(e.id);
   makePow(e, captor);
   if (wasDown) { try { KNEEL.set(captor.id, tick() + 40); e.dimension.spawnParticle("minecraft:heart_particle", { x: e.location.x, y: e.location.y + 1.5, z: e.location.z }); note(captor, "bandaging a wounded prisoner"); v9stat("bandaged"); } catch {} }
-  const pw = pows.get(e.id); pw.mode = "jail"; pw.at = at; pw.cf = cf; pw.t = tick();
-  sdp(e, "war:pow", JSON.stringify(pw));
+  const pw = pows.get(e.id); pw.mode = "follow"; pw.at = at; pw.cf = cf; pw.t = tick();   // (v9.20.3: goes along with his captor, was sent off on his own)
+  sdp(e, "war:pow", JSON.stringify({ captor: pw.captor, mode: pw.mode, at: pw.at, cf: pw.cf }));
   applyRelations(e);
   callout(captor, "Hands up!", { event: true }); v9stat("taken");
   note(captor, "took a prisoner"); updateName(e);
@@ -9587,6 +9728,33 @@ system.runInterval(() => {
 }, 20);
 // ---- v6.1: is the ground a step ahead (in the direction dx, dz) safe? No drop of 2+ blocks, no lava / fire / magma
 const DANGER = new Map(); // cell -> { v, t }: a drop of 2+ or a hazard right next to this cell
+// v9.20.3: the ground changed (a block placed or broken, blown up, pushed by a piston, a door opened): what the soldiers
+// knew about those blocks is forgotten at once, and a route through there is worked out again. Before, what they had
+// read stayed in mind for up to a minute: a wall you'd just built was walked into, a gap you'd just made was walked round.
+const TCHG = [];
+function terrainChanged(dimId, x, y, z) { if (TCHG.length < 4000) TCHG.push({ dimId, x: Math.floor(x), y: Math.floor(y), z: Math.floor(z) }); }
+system.runInterval(() => {
+  if (!TCHG.length) return;
+  const list = TCHG.splice(0), cols = new Set();
+  for (const c of list) {
+    for (let dx = -1; dx <= 1; dx++) for (let dz = -1; dz <= 1; dz++) {
+      cols.add(`${c.x + dx},${c.z + dz}`);
+      for (let dy = -2; dy <= 2; dy++) { const k = bkey(c.dimId, c.x + dx, c.y + dy, c.z + dz); TERRAIN.delete(k); STAND.delete(k); DANGER.delete(k); }
+      if (!dx && !dz) for (let dy = -16; dy <= 1; dy++) SKY.delete(bkey(c.dimId, c.x, c.y + dy, c.z));   // (a roof put on or taken off: the light under it)
+    }
+  }
+  reachMemo.clear();
+  const hit = (p) => cols.has(`${Math.floor(p.x)},${Math.floor(p.z)}`);
+  for (let i = routeCache.length - 1; i >= 0; i--) if (routeCache[i].pts.some(hit)) routeCache.splice(i, 1);
+  for (let i = STAIRS.length - 1; i >= 0; i--) if (STAIRS[i].pts?.some(hit)) STAIRS.splice(i, 1);
+  for (const [id, pr] of [...personal]) if (pr?.pts && !pr.planning && pr.pts.slice(Math.max(0, (pr.idx ?? 0) - 1)).some(hit)) { personal.delete(id); travelTo.delete(id); gliders.delete(id); }
+}, 1);
+try { world.afterEvents.playerPlaceBlock.subscribe((ev) => { try { const b = ev.block; terrainChanged(b.dimension.id, b.x, b.y, b.z); } catch {} }); } catch {}
+try { world.afterEvents.playerBreakBlock.subscribe((ev) => { try { const b = ev.block; terrainChanged(b.dimension.id, b.x, b.y, b.z); } catch {} }); } catch {}
+try { world.afterEvents.blockExplode.subscribe((ev) => { try { const b = ev.block; terrainChanged(b.dimension.id, b.x, b.y, b.z); } catch {} }); } catch {}
+try { world.afterEvents.pistonActivate.subscribe((ev) => { try { const b = ev.block; terrainChanged(b.dimension.id, b.x, b.y, b.z); for (const l of ev.piston.getAttachedBlocksLocations?.() ?? []) terrainChanged(b.dimension.id, l.x, l.y, l.z); } catch {} }); } catch {}
+try { world.afterEvents.playerInteractWithBlock.subscribe((ev) => { try { const b = ev.block; if (OPENABLE_ID(b.typeId)) terrainChanged(b.dimension.id, b.x, b.y, b.z); } catch {} }); } catch {}
+
 function hazardCell(dim, x, y, z) {
   try {
     const f = tBlock(dim, x, y, z), u = tBlock(dim, x, y - 1, z);
@@ -13373,21 +13541,30 @@ WarAPI.registerBehavior({
   decide(e, d, now) {
     if (d.func !== "follow" || d.div === "guard" || !d.leader) return undefined;
     const p = findPlayer(d.leader);
-    if (!p || p.dimension.id !== e.dimension.id || isRiding(p) || isRiding(e) || dist(p.location, e.location) > 30) return undefined;
+    if (!p || p.dimension.id !== e.dimension.id || isRiding(p) || isRiding(e) || dist(p.location, e.location) > 64) return undefined;
     if (perc.get(e.id)?.threat || squads.get(squadKey(e, d))?.known?.size || downed.has(e.id)) return undefined;   // (a fight: as before)
     const F = followFormOf(p, now), sp = followSlot(e, d, p, F);
-    if (!sp) return undefined;
+    if (!sp) {                                                                    // (no place for him just there (a wall, a drop): he makes for you)
+      const pd = flat(p.location, e.location);
+      if (pd < 5 && Math.abs(p.location.y - e.location.y) < 1.5) return { g: "g_none", t: "t_mid", urgent: false, note: "with you" };
+      const mv = catchUp(e, { x: p.location.x, y: Math.floor(p.location.y + 0.01), z: p.location.z }, p.location, now);
+      return mv ? { ...mv, t: "t_mid", s: pd > 14 ? "s_7" : "s_6", urgent: true, note: "catching up" } : undefined;
+    }
     const gap = Math.hypot(sp.x - e.location.x, sp.z - e.location.z);
     FOLLOW_ON.set(e.id, now);
-    if (gap < 7 && Math.abs(sp.y - e.location.y) < 1.2) return { g: "g_none", t: "t_mid", urgent: false, note: `in ${sp.shape}` };   // (the driver below keeps him there)
-    const slot = myMarker(e, { x: sp.x + F.head.x * 3, y: sp.y, z: sp.z + F.head.z * 3 }, "war:mymk", 1.0);   // (a little ahead: the game's following stops short)
-    return slot ? { g: "g_wp", slot, t: "t_mid", s: speedGroup(e, true), urgent: true, note: `falling in (${sp.shape})` } : undefined;
+    if (gap < 7 && Math.abs(sp.y - e.location.y) < 1.2) {                       // (the driver below keeps him there)
+      if (personal.get(e.id)?.kind === "follow") { personal.delete(e.id); travelTo.delete(e.id); }
+      return { g: "g_none", t: "t_mid", urgent: false, note: `in ${sp.shape}` };
+    }
+    const mv = catchUp(e, sp, p.location, now, F.head);                           // (v9.20.3: a straight walk, or a real route round whatever's in the way)
+    return mv ? { ...mv, t: "t_mid", s: gap > 14 ? "s_7" : "s_6", urgent: true, note: `falling in (${sp.shape})` } : undefined;   // (quicker than you walk, or he never closes up)
   },
 });
-system.runInterval(() => { const now = tick(); for (const [k, F] of [...FOLLOW]) if (now - F.t > 600) FOLLOW.delete(k); for (const [k, t] of [...FOLLOW_ON]) if (now - t > 600) FOLLOW_ON.delete(k); }, 200);
+system.runInterval(() => { const now = tick(); for (const [k, F] of [...FOLLOW]) if (now - F.t > 600) FOLLOW.delete(k); for (const [k, t] of [...FOLLOW_ON]) if (now - t > 600) FOLLOW_ON.delete(k); for (const [k, t] of [...KICK]) if (now - t > 600) KICK.delete(k); }, 200);
 // the follow driver: each tick a man near his place is carried onto it at your pace (like the guard detail), facing
 // the way you're going; a wall, a drop or a step too high and his own walking takes over
 const FOLLOW_ON = new Map();   // id -> tick he was last on the formation
+const KICK = new Map();        // id -> tick he was last made to think at once (you got away from him)
 system.runInterval(() => {
   if (!FOLLOW.size) return;
   const now = tick();
@@ -13403,14 +13580,7 @@ system.runInterval(() => {
         const e = world.getEntity(id);
         if (!e?.isValid || downed.has(id) || isRiding(e) || climbing.has(id) || gliders.has(id) || personal.has(id) || staggered(id) || perc.get(id)?.threat) continue;
         const d = sd(e), sp = followSlot(e, d, p, F); if (!sp) continue;
-        const l = e.location, dx = sp.x - l.x, dz = sp.z - l.z, L = Math.hypot(dx, dz);
-        if (L > 7 || Math.abs(sp.y - l.y) > 1.2 || L < 0.1) continue;
-        const stp = Math.min(L, maxStep), nx = l.x + (dx / L) * stp, nz = l.z + (dz / L) * stp;
-        if (Math.hypot(nx - pl.x, nz - pl.z) < 0.9) continue;                          // (never into you)
-        let ny; for (const yy of [l.y, Math.floor(l.y + 0.01) + 1, Math.floor(l.y + 0.01) + 0.5, l.y - 0.5]) { if (yy > l.y + 1.1) continue; if (glideFree(e.dimension, nx, yy, nz) && floorUnder(e.dimension, nx, yy, nz)) { ny = yy; break; } }
-        if (ny === undefined || dangerNear(e.dimension, { x: nx, y: ny, z: nz })) continue;
-        const look = pace > 0.04 || L > 1 ? { x: nx + F.head.x * 6, z: nz + F.head.z * 6 } : { x: nx + F.head.x * 6, z: nz + F.head.z * 6 };
-        e.teleport({ x: nx, y: ny, z: nz }, { rotation: faceRot(e, { x: nx, y: ny, z: nz }, look, 10) });
+        if (!driveStep(e, sp, maxStep, F.head, pl) && flat(sp, e.location) > 7 && now - (KICK.get(id) ?? -99) > 15) { KICK.set(id, now); try { think(e); } catch {} }   // (you dashed off: he goes now, not at his next thought)
       }
     } catch {}
   }
