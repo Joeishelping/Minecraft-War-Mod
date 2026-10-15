@@ -1,5 +1,15 @@
 # War Engine changelog
 
+## v9.21.3 (Your shots count; back in the fight)
+
+- Your gun's shots went through nothing on a soldier with his shield raised toward you: only the soldiers' own rounds
+  were recognised as bullets, so every round you fired into a shield was blocked outright. Any hit from a player that
+  isn't a punch or a sword blow (or made with a gun in hand) is now a bullet: a raised shield takes only the edge off
+  it, a lowered one nothing. Swords on a raised shield are still stopped.
+- A man who surrendered picks his gun back up and fights again, and a prisoner is set free (guard or not), when his
+  own side is all round him: 3 or more of them on their feet within 8 blocks, and more of them than of the enemy.
+  Tested: with 2 of his own, or 3 against 4 of the enemy, he stays as he is.
+
 ## v9.21.2 (Prisoners change hands)
 
 When the soldier guarding a prisoner is killed (or goes down, is captured or surrenders), the prisoner is taken over

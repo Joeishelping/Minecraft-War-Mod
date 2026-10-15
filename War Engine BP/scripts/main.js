@@ -9779,6 +9779,14 @@ system.runInterval(() => {
       const pw = pows.get(e.id), surr = !pw && gdp(e, "war:surr"), down = !pw && downed.has(e.id) && !FALLS.has(e.id);
       if (!pw && !surr && !down) continue;
       const f = Number(P(e, "war:faction") ?? 0), near = nearSnap(e.dimension.id, e.location, 16);
+      // v9.21.3: his own side all round him (3+ on their feet within 8 blocks, more of them than of the enemy): a
+      // prisoner is set free (guard or no guard), a man who surrendered picks his gun back up and is in the fight again
+      if ((pw || surr) && ownRound(e, f, near)) {
+        const by = near.filter((c) => !c.down && c.type === SOLDIER && c.f === f && c.id !== e.id && !pows.has(c.id)).sort((a, b) => a.dd - b.dd)[0];
+        if (pw) { freePow(e, true); applyRelations(e); giveFunction(e, "hold"); if (by) callout(by.e, "We've got you!", { event: true }); note(e, "freed by his own"); v9stat("freedByOwn"); }
+        else { sdp(e, "war:surrIso", undefined); resume(e); callout(e, "Thanks!", { event: true }); note(e, "back in the fight"); v9stat("unsurrendered"); }
+        updateName(e); continue;
+      }
       if (pw) {
         const cf = pw.cf ?? (findPlayer(pw.captor) ? playerFaction(findPlayer(pw.captor)) : 0);
         const guard = near.some((c) => !c.down && c.dd < 12 && (c.type === SOLDIER || c.type === "minecraft:player") && c.f && c.f === cf);
@@ -9804,6 +9812,16 @@ system.runInterval(() => {
   if (PRIZE.size > 500) PRIZE.clear();
 }, 40);
 const PRIZE = new Set();
+function ownRound(e, f, near) {
+  let own = 0, foe = 0;
+  for (const c of near) {
+    if (c.down || c.id === e.id || !c.f || (c.type !== SOLDIER && c.type !== "minecraft:player")) continue;
+    if (c.type === SOLDIER && (pows.has(c.id) || !c.e?.isValid || gdp(c.e, "war:surr"))) continue;
+    if (c.f === f) { if (c.dd <= 8) own++; }
+    else if (isHostile(c.f, f) && c.dd <= 12) foe++;
+  }
+  return own >= 3 && own > foe;
+}
 world.afterEvents.playerInteractWithEntity.subscribe((ev) => {                     // v9.14: your side's prisoner: you set him free
   const e = ev.target, p = ev.player;
   if (e?.typeId !== SOLDIER || !pows.has(e.id) || (ev.beforeItemStack ?? ev.itemStack)?.typeId === "war:unit_wand") return;
@@ -11880,6 +11898,8 @@ function shieldBlock(v, ev) {
     if (!src?.isValid) return 0;
     fx = src.location.x - v.location.x; fz = src.location.z - v.location.z;
     bullet = String(ev.damageSource?.damagingProjectile?.typeId ?? "").startsWith("ww:");
+    const shooter = ev.damageSource?.damagingEntity;                                 // (v9.21.3: a player's gun: whatever way the gun pack delivers the hit, it's a round. A raised shield stopped every one of them)
+    if (!bullet && shooter?.typeId === "minecraft:player" && (cause !== "entityAttack" || String(mainhand(shooter) ?? "").startsWith("ww:"))) bullet = true;
   }
   const L = Math.hypot(fx, fz); if (L < 0.01) return 0;
   const yaw = v.getRotation().y * Math.PI / 180, cos = (fx * -Math.sin(yaw) + fz * Math.cos(yaw)) / L;

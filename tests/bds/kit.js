@@ -2483,6 +2483,31 @@ KS.powchain = async (o, ox, oz) => {
   setRelPair(3, 2, "0", false);
   return r;
 };
+// v9.21.3: his own side all round him: a surrendered man is back in the fight, a prisoner is freed (guard or not);
+// not with only two of them, nor when the enemy round him outnumbers them
+KS.rejoin = async (o, ox, oz) => {
+  floorAt(ox - 40, oz - 40, ox + 40, oz + 40);
+  setRelPair(1, 2, "1", false);
+  const tough = (e) => { try { e.addEffect("resistance", 3000, { amplifier: 255, showParticles: false }); e.addEffect("weakness", 3000, { amplifier: 255, showParticles: false }); } catch {} return e; };
+  const all = [], sp = (f, x, z) => { const e = tough(kitSoldier(f, { x: ox + x + 0.5, y: Y, z: oz + z + 0.5 }, "rifle", "hold")); all.push(e); return e; };
+  const st = (e) => pows.has(e.id) ? "prisoner" : gdp(e, "war:surr") ? "surrendered" : "free";
+  const r = {};
+  // 1. a man who surrendered (his captor gone), then three of his own come up
+  { const en = sp(1, -30, -30), m = sp(2, -30, -27); await kitWait(10); isoSurrender(m, 1); en.remove(); await kitWait(10);
+    r.surrBefore = st(m); for (let i = 0; i < 3; i++) sp(2, -33 + i * 3, -24); await kitWait(100);
+    r.surrAfter = st(m); r.surrArmed = Number(P(m, "war:gun") ?? 0) > 0 || sd(m).weapon === "sword"; r.hands = !!P(m, "war:hands"); }
+  // 2. a prisoner with his guard right there: three of his own come up
+  { const g = sp(1, 0, -30), p = sp(2, 0, -27); await kitWait(10); soldierTakes(p, g); sdp(g, "war:home", undefined); await kitWait(20);
+    r.guardedBefore = st(p); for (let i = 0; i < 3; i++) sp(2, -3 + i * 3, -24); await kitWait(100); r.guardedAfter = st(p); }
+  // 3. only two of his own
+  { const g = sp(1, 30, -30), p = sp(2, 30, -27); await kitWait(10); soldierTakes(p, g); await kitWait(20);
+    for (let i = 0; i < 2; i++) sp(2, 28 + i * 3, -24); await kitWait(100); r.twoOnly = st(p); }
+  // 4. three of his own, but four of the enemy round him
+  { const gs = [0, 1, 2, 3].map((i) => sp(1, -30 + i * 2, 20)), p = sp(2, -27, 23); await kitWait(10); soldierTakes(p, gs[0]); await kitWait(20);
+    for (let i = 0; i < 3; i++) sp(2, -30 + i * 3, 26); await kitWait(100); r.outnumbered = st(p); }
+  for (const e of all) try { e.remove(); } catch {}
+  return r;
+};
 KS.homeorder = async (o, ox, oz) => {
   floorAt(ox - 40, oz - 40, ox + 40, oz + 40);
   const fl = ow().spawnEntity(FLAG, { x: ox + 30.5, y: Y, z: oz + 0.5 }); setP(fl, "war:faction", 1); setP(fl, "war:rally", false); sdp(fl, "war:hq", true); claimSlot(fl);
