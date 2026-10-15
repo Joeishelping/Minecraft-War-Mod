@@ -3416,6 +3416,7 @@ async function confirm(player, title, text) {
 async function cleanupMenu(player) {
   const r = await show(new ActionFormData().title("Cleanup / repair").body("Fix stuck soldiers, or remove War Engine things from the world.")
     .button("Repair (deletes nothing)\nstop all marches, every soldier holds where he is")
+    .button("Remove dead bodies\nevery body in loaded land")
     .button("Remove everything near me").button("Remove one faction's units").button("§cRemove everything from War Engine"), player);
   if (!r || r.canceled || r.selection === undefined) return;
   const now = tick();
@@ -3437,7 +3438,17 @@ async function cleanupMenu(player) {
     player.sendMessage(`§aRepaired: ${n} soldiers hold where they stand, all marches and routes cleared.`);
     return;
   }
-  if (r.selection === 1) {
+  if (r.selection === 1) {   // v9.21.7: one button clears the battlefield of bodies
+    let n = 0;
+    for (const dim of DIMS.map((x) => world.getDimension(x))) {
+      let list = []; try { list = dim.getEntities({ type: "war:corpse" }); } catch {}
+      for (const c of list) { try { RD.delete(c.id); SINKING.delete(c.id); c.remove(); n++; } catch {} }
+    }
+    CORPSES.length = 0;
+    player.sendMessage(n ? `§aRemoved ${n} dead bod${n === 1 ? "y" : "ies"}.` : "§7No dead bodies to remove.");
+    return;
+  }
+  if (r.selection === 2) {
     const mr = await show(new ModalFormData().title("Remove near me").slider("Radius (blocks)", 8, 160, { valueStep: 8, defaultValue: 32 }), player);
     if (!mr || mr.canceled || !mr.formValues) return;
     const R = Number(mr.formValues[0]);
@@ -3447,7 +3458,7 @@ async function cleanupMenu(player) {
     player.sendMessage(`§aRemoved ${n} things within ${R} blocks.`);
     return;
   }
-  if (r.selection === 2) {
+  if (r.selection === 3) {
     const ff = new ActionFormData().title("Remove one faction's units");
     for (const l of factionList()) ff.button(l);
     const fr = await show(ff, player);
@@ -3461,7 +3472,7 @@ async function cleanupMenu(player) {
     player.sendMessage(`§aRemoved ${n} loaded units of ${factionLabel(f)}; the rest go when their land loads.`);
     return;
   }
-  if (r.selection === 3) {
+  if (r.selection === 4) {
     if (!(await confirm(player, "§cRemove everything", "Remove EVERY War Engine soldier, hound, vehicle, nest, flag and marker in the world, and every march? (Things in unloaded land go when it loads. Settings, factions and names are kept.)"))) return;
     const ps = purgeState(); ps.gen++; ps.all = ps.gen; ps.f = {}; setJSON(world, "war:purge", ps);
     clearMarches();

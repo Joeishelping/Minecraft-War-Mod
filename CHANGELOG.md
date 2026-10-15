@@ -1,5 +1,10 @@
 # War Engine changelog
 
+## v9.21.7 (Clear the bodies)
+
+- War Table -> Cleanup / repair -> "Remove dead bodies": every body in loaded land is gone at once. Nothing else is
+  touched (living soldiers, vehicles, flags and markers stay).
+
 ## v9.21.6 (Far sight: see them as far as a sniper does)
 
 - Bedrock stops drawing mobs about 64 blocks from you. It's a fixed limit: no setting raises it (Simulation Distance

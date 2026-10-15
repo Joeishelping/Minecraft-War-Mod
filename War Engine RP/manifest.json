@@ -1,10 +1,10 @@
 {
   "format_version": 2,
   "header": {
-    "name": "War Engine RP v9.21.6",
+    "name": "War Engine RP v9.21.7",
     "description": "Faction NPC war framework",
     "uuid": "55a51bdd-64f6-4305-b2b3-e50c47ade70a",
-    "version": [9, 21, 6],
+    "version": [9, 21, 7],
     "min_engine_version": [
       1,
       21,
@@ -15,13 +15,13 @@
     {
       "type": "resources",
       "uuid": "c781fe28-a743-4ee7-ac85-86b9403ffc74",
-      "version": [9, 21, 6]
+      "version": [9, 21, 7]
     }
   ],
   "dependencies": [
     {
       "uuid": "67b58306-3e4b-4c5d-9066-5f8fc72ff122",
-      "version": [9, 21, 6]
+      "version": [9, 21, 7]
     }
   ]
 }
