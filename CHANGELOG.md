@@ -1,5 +1,13 @@
 # War Engine changelog
 
+## v9.21.8 (They move like players)
+
+- In a fight, soldiers used to dash and charge slower than you walk. Now a dash, a charge, a flank or a run to cover goes
+  at a player's pace (your walk to your sprint), and an ordinary move is a brisk walk, each man at his own pace.
+- Indoors, on stairs and through doors (where the add-on carries them) they move at your walking pace too (was 3.4
+  blocks/s, now 4.2), so defenders still reach the ground floor before the faster attackers break in.
+- Squads arrive about 30% sooner on long marches.
+
 ## v9.21.7 (Clear the bodies)
 
 - War Table -> Cleanup / repair -> "Remove dead bodies": every body in loaded land is gone at once. Nothing else is

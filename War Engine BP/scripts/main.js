@@ -808,8 +808,10 @@ function speedGroup(e, urgent) {
 function speedGroupRoll(e, urgent) {
   const cav = !!P(e, "war:cav");
   const pace = e.id.charCodeAt(e.id.length - 1) % 3; // personal pace: slow, steady, quick
-  let s = urgent ? 3 + Math.floor(Math.random() * 3) : 1 + pace + (Math.random() < 0.3 ? (Math.random() < 0.5 ? -1 : 1) : 0);
-  s = Math.max(1, Math.min(5, s));
+  // v9.22: under fire they move like players: a dash or a charge at a player's pace (s_6/s_7: you walking to sprinting),
+  // not a jog slower than you walk; an ordinary move at a brisk walk, each man at his own pace
+  let s = urgent ? 6 + (Math.random() < 0.5 ? 0 : 1) : 2 + pace + (Math.random() < 0.3 ? (Math.random() < 0.5 ? -1 : 1) : 0);
+  s = Math.max(2, Math.min(urgent ? 7 : 5, s));
   if (cav) s = 5 + Math.max(1, Math.min(3, Math.ceil(s / 2)));
   return `s_${s}`;
 }
@@ -10400,7 +10402,7 @@ function combatMove(e, d, now, melee, anchor, leash) {
 // the way across, down a step he drops past the middle, doors and trapdoors are opened as he reaches them. Nothing here
 // depends on Minecraft's pathing or on pushes, so he can't get lost, stuck on a stair edge, or pile into the man ahead.
 const gliders = new Map(); // id -> { pts, k (index of the point he's heading to), t (last refresh), paused, wait }
-const GLIDE_SPEED = 0.17;  // blocks per tick (~3.4 blocks/s, a brisk walk)
+const GLIDE_SPEED = 0.21;  // blocks per tick (~4.2 blocks/s: v9.22, a player's walk; was 3.4)
 const glideBan = new Map(); // id -> tick until which the glider leaves him alone (it was blocked)
 // a cell he can be carried into: open (or a stair / slab / open-able door / ladder / water) at feet and head
 function cellOpen(b) {

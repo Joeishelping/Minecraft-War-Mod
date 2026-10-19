@@ -986,13 +986,13 @@ KS.big = async (o, ox, oz) => {
   for (let i = 0; i < N; i++) kitSoldier(2, { x: ox + (i % 20) * 2 - 20 + 0.5, y: Y, z: oz + 60 + Math.floor(i / 20) * 2 + 0.5 }, W8[i % 6]);
   await kitWait(20);
   await kitOrder(1, { x: ox, y: Y, z: oz + 60 }); await kitOrder(2, { x: ox, y: Y, z: oz - 60 });
-  globalThis.__dpReport?.(); globalThis.__evReport?.(1); globalThis.__rdTot = 0; globalThis.__scTot = 0; globalThis.__scN = 0; const t0 = tick(), r0 = Date.now(); let slow = 0, last = Date.now(), worst = 0;
+  globalThis.__profDump?.(true); globalThis.__dpReport?.(); globalThis.__evReport?.(1); globalThis.__rdTot = 0; globalThis.__scTot = 0; globalThis.__scN = 0; const t0 = tick(), r0 = Date.now(); let slow = 0, last = Date.now(), worst = 0;
   let mid;
   await kitLoop(Number(o.ticks ?? 600), () => { const now = Date.now(), dt = now - last; last = now; worst = Math.max(worst, dt); if (dt > 600) slow++;
     if (!mid && tick() - t0 > 400) { const sz = allOf(SOLDIER).map((e) => { try { return e.getDynamicPropertyTotalByteCount(); } catch { return 0; } }).sort((a, b) => b - a); const keys = {}; const big = allOf(SOLDIER)[0]; try { for (const k of big.getDynamicPropertyIds()) { const v = big.getDynamicProperty(k); keys[k] = typeof v === "string" ? v.length : 8; } } catch {} mid = { n: sz.length, avg: Math.round(sz.reduce((a, b) => a + b, 0) / Math.max(1, sz.length)), max: sz[0], world: world.getDynamicPropertyTotalByteCount(), wps: allOf(WAYPOINT).length, keys: Object.entries(keys).sort((a, b) => b[1] - a[1]).slice(0, 12) }; }
     return false; });
   const sec = (Date.now() - r0) / 1000, ticks = tick() - t0;
-  return { mid, bodyMsPerTick: +((globalThis.__rdTot + globalThis.__scTot) / Math.max(1, tick() - t0)).toFixed(2), corpses: globalThis.__scN, corpseMsEach: +(globalThis.__scTot / Math.max(1, globalThis.__scN)).toFixed(1), ev: globalThis.__evReport?.(tick() - t0), dp: globalThis.__dpReport?.(), n: N, ticks, realSec: +sec.toFixed(1), tps: +(ticks / sec).toFixed(1), worstGapMs: worst, left1: kitSoldiers(1).filter((e) => !isDown(e)).length, left2: kitSoldiers(2).filter((e) => !isDown(e)).length, ...kitShotStats(t0) };
+  return { prof: globalThis.__profDump?.(false), mid, bodyMsPerTick: +((globalThis.__rdTot + globalThis.__scTot) / Math.max(1, tick() - t0)).toFixed(2), corpses: globalThis.__scN, corpseMsEach: +(globalThis.__scTot / Math.max(1, globalThis.__scN)).toFixed(1), ev: globalThis.__evReport?.(tick() - t0), dp: globalThis.__dpReport?.(), n: N, ticks, realSec: +sec.toFixed(1), tps: +(ticks / sec).toFixed(1), worstGapMs: worst, left1: kitSoldiers(1).filter((e) => !isDown(e)).length, left2: kitSoldiers(2).filter((e) => !isDown(e)).length, ...kitShotStats(t0) };
 };
 function kitShotStats(t0) {
   const a = KSHOTS.filter((x) => x.t >= t0);
@@ -2641,4 +2641,29 @@ KS.crewdrive = async (o, ox, oz) => {
   kfill(ox - 30, Y - 3, oz + 15, ox + 30, Y - 1, oz + 35, "stone");
   globalThis.__fakeLeader = undefined; try { ld.remove(); } catch {}
   return res;
+};
+// micro-benchmarks of the hottest little calls (ms per 100k)
+KS.micro = async (o, ox, oz) => {
+  floorAt(ox - 8, oz - 8, ox + 8, oz + 8);
+  const e = kitSoldier(1, { x: ox + 0.5, y: Y, z: oz + 0.5 }, "rifle", "hold");
+  await kitWait(10);
+  const dim = e.dimension, N = 100000, r = {};
+  const T = (k, f) => { const t = Date.now(); for (let i = 0; i < N; i++) f(i); r[k] = Date.now() - t; };
+  T("empty", () => {});
+  T("dim.id", () => dim.id);
+  T("e.dimension", () => e.dimension);
+  T("e.location", () => e.location);
+  T("e.id", () => e.id);
+  T("e.isValid", () => e.isValid);
+  T("bkey", (i) => bkey("minecraft:overworld", ox + (i & 7), Y, oz));
+  T("tBlock cached", (i) => tBlock(dim, ox + (i & 7), Y - 1, oz));
+  T("gdp", () => gdp(e, "war:goal"));
+  T("sd", () => sd(e));
+  T("P", () => P(e, "war:faction"));
+  T("standAt", (i) => standAt(dim, Math.floor(ox) + (i & 7), Y, Math.floor(oz)));
+  T("dangerNear", (i) => dangerNear(dim, { x: ox + (i & 7), y: Y, z: oz }));
+  T("Math.hypot", (i) => Math.hypot(i, 2, 3));
+  T("getRotation", () => e.getRotation());
+  T("getVelocity", () => e.getVelocity());
+  return r;
 };
