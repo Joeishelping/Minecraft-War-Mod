@@ -1,5 +1,20 @@
 # War Engine changelog
 
+## v9.22 (Wild animals are a threat, and an enemy's animals are the enemy)
+
+For World Animals v3.7 (Joeishelping/Animals), which now spawns its animals in their real biomes:
+
+- A wild man-eater (lion, tiger, hyena, hippo, crocodile, alligator, Komodo dragon, the snakes, great white and tiger
+  sharks) is shot on sight: gunners from 40 blocks, the rest once it's within 12. Before, soldiers only noticed one
+  inside 9-16 blocks, and ignored any animal more than 20 blocks off.
+- Any wild animal that is attacking right now (World Animals gives it the `monster` family while it has a target) is
+  fair game too: a charging moose or rhino gets shot before it lands the hit.
+- An animal tamed by someone of a faction at war with yours is one of their fighters: your men shoot it like an enemy
+  soldier. Tamed by your own faction or a friend's, it's never a target; tamed by a faction you're at peace with, it's
+  left alone unless it goes for you. Animals that never fight (deer, birds, a duck...) are never shot.
+- Tests: `node run.mjs wildAnimals` (a wild lion and an enemy's tamed lion shot; ours, a neutral's and a deer left
+  alone).
+
 ## v9.21.8 (They move like players)
 
 - In a fight, soldiers used to dash and charge slower than you walk. Now a dash, a charge, a flank or a run to cover goes

@@ -206,6 +206,21 @@ const S = {
   },
   async load() { step(40); report({ ok: SIM.errors.length === 0 }); },
 
+  // v9.22: World Animals. A squad of faction 1 (at war with 2) and five lions around it: wild (shot on sight), tamed by
+  // faction 2 (an enemy fighter), tamed by faction 1 (ours), tamed by faction 3 (not at war: left alone), and a wild
+  // deer (never). Reports which ones were shot.
+  async wildAnimals() {
+    const wa = (id, fams, hp) => { SIM.defs[`worldanimals:${id}`] = { description: { identifier: `worldanimals:${id}` }, components: { "minecraft:type_family": { family: [id, "worldanimals", "mob", ...fams] }, "minecraft:health": { value: hp, max: hp } }, component_groups: {}, events: {} }; };
+    wa("lion", [], 60); wa("deer", [], 60);
+    W.setRelPair(1, 2, "1", false);
+    spawnPlayer({ x: 0, y: 0, z: -60 });
+    for (let i = 0; i < 4; i++) soldier(1, { x: i * 2 + 0.5, y: 0, z: 0.5 }, ["rifle", "smg", "semi", "mg"][i % 4]);
+    const mk = (id, x, z, tag) => { const o = overworld.spawnEntity(`worldanimals:${id}`, { x, y: 0, z }); if (tag) o.addTag(tag); return o; };
+    const A = opt.only === "wild" ? { wild: mk("lion", 0.5, 25.5) } : { wild: mk("lion", 0.5, 25.5), enemyPet: mk("lion", 20.5, 15.5, "war_f2"), ourPet: mk("lion", -18.5, 15.5, "war_f1"), neutralPet: mk("lion", -20.5, -10.5, "war_f3"), deer: mk("deer", 20.5, -12.5) };
+    step(900);
+    report(Object.fromEntries(Object.entries(A).map(([k, o]) => [k, o.isValid ? o.hp < o.maxHp : "dead"])));
+  },
+
   // a squad on the top floor ordered out of the building to a point outside: down two 1-wide staircases and a door
   async stairsDown() {
     const B = building(0, 0, { windows: false });

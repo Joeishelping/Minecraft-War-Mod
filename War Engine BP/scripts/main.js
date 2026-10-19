@@ -3815,7 +3815,13 @@ system.runInterval(() => entMemo.clear(), 1);
 // v9.4: World Animals v2 (Joeishelping/Animals): every animal has the family "worldanimals"; these attack people on
 // sight. A tamed one carries its owner's faction tag war_f<n> (that add-on copies it), so it's friend or foe like him.
 const WA_FAMILY = "worldanimals";
-const WA_DANGER = new Set(["lion", "white_lion", "tiger", "white_tiger", "leopard", "panther", "bear", "hyenas", "hippopotamus", "crocodile", "komodo_dragon", "snake", "snake_coral", "shark", "white_shark", "tiger_shark"].map((k) => `worldanimals:${k}`));
+const WA_DANGER = new Set(["lion", "white_lion", "tiger", "white_tiger", "leopard", "panther", "bear", "hyenas", "hippopotamus", "crocodile", "komodo_dragon", "snake", "snake_coral", "shark", "white_shark", "tiger_shark",
+  "american_alligator", "king_cobra", "rattlesnake"].map((k) => `worldanimals:${k}`));
+// v9.22: the ones that never fight (an enemy's tamed duck is still just a duck); every other animal can, dogs included
+const WA_PASSIVE = new Set(["ballena", "capuchin_monkeys", "deer", "dove", "duck", "emperor_penguin", "flamingo", "hermann_tortoise", "iguana", "indian_peafowl", "manta_ray", "opossum", "raccoon", "rat", "squirrel", "tucan", "turkey", "vulture",
+  "duck_egg", "emperor_penguin_egg", "ostrich_egg", "turkey_egg"].map((k) => `worldanimals:${k}`));
+const WA_SIGHT = 40, WA_CLOSE = 12;   // v9.22: a wild man-eater is shot on sight (gunners from 40 blocks, others once it's within 12)
+function waMonster(o) { try { return o.matches({ families: ["monster"] }); } catch { return false; } }   // World Animals gives an animal "monster" while it's attacking
 let raCache = { t: -1, s: new Set() };
 function recentAttackers() {      // who has hurt one of ours in the last 10 s (one pass per tick, shared)
   const now = tick(); if (raCache.t === now) return raCache.s;
@@ -3838,7 +3844,8 @@ function refreshCombatants() {
     try { add(dim.getEntities({ families: ["monster"] })); } catch {}
     // v9.4: World Animals (another add-on): its man-eaters, and any animal that has just gone for one of ours. Deer,
     // birds, fish and the like aren't in the scan at all (nobody shoots them, and they cost nothing).
-    try { const hit = recentAttackers(); add(dim.getEntities({ families: [WA_FAMILY] }).filter((o) => !o.hasComponent?.("minecraft:is_baby") && (WA_DANGER.has(o.typeId) || hit.has(o.id)))); } catch {}
+    // v9.22: and every animal tamed by someone of a faction, if it can fight (friend or foe is decided per soldier)
+    try { const hit = recentAttackers(), seen = new Set(list.map((c) => c.id)); add(dim.getEntities({ families: [WA_FAMILY] }).filter((o) => !seen.has(o.id) && !o.hasComponent?.("minecraft:is_baby") && (WA_DANGER.has(o.typeId) || hit.has(o.id) || (!WA_PASSIVE.has(o.typeId) && waFaction(o) > 0)))); } catch {}
     // v5.7: a 32-block grid, so "who is near me" looks at the nearby cells only
     const grid = new Map();
     for (const c of list) { const k = Math.floor(c.x / 32) * 100000 + Math.floor(c.z / 32); let a = grid.get(k); if (!a) { a = []; grid.set(k, a); } a.push(c); }
@@ -4015,7 +4022,13 @@ function isTargetFor(e, d, o) {
   // v9.4: a World Animals pet of ours or a friend's is never a target (even if it bit someone by mistake)
   // (and a pet of a faction we're not at war with is left alone unless it goes for us: it doesn't attack us either)
   let petCalm = false;
-  if (isWA(o)) { const pf = waFaction(o); if (pf && (pf === d.faction || isFriendly(d.faction, pf))) return false; petCalm = !!pf && !isHostile(d.faction, pf); }
+  if (isWA(o)) {
+    const pf = waFaction(o);
+    if (pf && (pf === d.faction || isFriendly(d.faction, pf))) return false;
+    petCalm = !!pf && !isHostile(d.faction, pf);
+    // v9.22: an animal tamed by a faction we're at war with is one of their fighters: fair game like their soldiers
+    if (pf && !petCalm && !WA_PASSIVE.has(o.typeId)) return dist(o.location, e.location) <= 64;
+  }
   // vanilla mobs: only once one of them has attacked one of ours, and only when it's close
   const as = assist.get(e.id);
   if ((as && as.id === o.id && tick() - as.t < 200) || attackedRecently(e, o, tick())) return true;
@@ -4023,7 +4036,9 @@ function isTargetFor(e, d, o) {
   const dd = dist(o.location, e.location), id = o.typeId;
   if (id.includes("creeper")) return dd <= 10;                                        // shoot it before it gets here
   if (["skeleton", "stray", "pillager", "witch", "blaze", "bogged"].some((k) => id.includes(k))) return dd <= 20;   // shooting at us
-  if (isWA(o)) { if (!WA_DANGER.has(id)) return false; return dd <= (d.ranged ? 16 : 9); }   // (v9.4: a rhino or an elephant only once it's charged one of ours; a lion (it goes for men within 10) shot before it gets there)
+  // (v9.4: a rhino or an elephant only once it's charged one of ours; v9.22: a wild man-eater, or any wild animal that is
+  //  on the attack right now, is shot on sight, before it gets to us)
+  if (isWA(o)) { if (!WA_DANGER.has(id) && !waMonster(o)) return false; return dd <= (d.ranged ? WA_SIGHT : WA_CLOSE); }
   return dd <= 9;                                                                      // anything hostile this close is a danger
 }
 // Is a friendly (or ally) in or near the line of fire?
@@ -4791,7 +4806,7 @@ function perceive(e, now) {
       if (c.id === e.id || c.down) continue;
       if (c.type === SOLDIER || c.type === HOUND || c.type === "minecraft:player") { if (c.f === d.faction && c.f) continue; if (!isHostile(d.faction, c.f) && !(prov && isProvoker(d.faction, c.e, now))) continue; }
       else if (VEHICLES.includes(c.type)) { if (d.weapon !== "at") continue; }
-      else if (c.dd > 20) continue;
+      else if (c.dd > (c.type.startsWith("worldanimals:") ? WA_SIGHT : 20)) continue;   // (v9.22: a man-eater is seen farther off)
       out.push(c);
     }
     return out;
