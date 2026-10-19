@@ -1,5 +1,32 @@
 # War Engine changelog
 
+## v9.22.0 (Smoother, and three bugs gone)
+
+Fixes:
+- A wounded soldier could stay invisible and unarmed for good: if his body was removed while it was still falling
+  (Cleanup / repair -> Remove dead bodies, or a blast that throws a body), he was never put back down. He now is, and a
+  falling body is never counted among the dead bodies the cap clears.
+- Raised shields stop a player's bow arrows and tridents again (since v9.21.3 they were treated like gun rounds and went
+  through). Gun rounds still go through.
+- The stair search could hand a small search's answer to a big one (defenders and attackers looked for staircases in
+  the wrong places in big halls).
+
+Smoother (measured on a real server, 30 v 30, released vs new, twice each):
+- About 12% less script time a tick (34-37 ms -> 29-33 ms), the server held 19.3-19.6 ticks a second instead of
+  18.6-18.8, and the worst pauses were ~17% shorter.
+- Where a soldier is, which dimension, whether he's still there: the add-on asked the game this thousands of times a
+  tick. Each answer is now remembered for the rest of the tick (forgotten the moment he's moved or removed, and fresh in
+  every game event).
+- A straight walk asks one remembered answer per block instead of five separate lookups; block lookups are quicker.
+- "Can I walk there" and short-hop routes could freeze the game for up to 80 ms on new ground. They now share a time
+  allowance (25 ms each, 40 ms a tick); the rare one that runs out goes to the route planner instead.
+- The stair search finds the steps first: the same answers from a fifth of the lookups (it was a hitch in big halls).
+- Looking around: who could be an enemy is worked out once per half second per side, not on every look.
+
+Checked: the simulator's 10 acceptance checks on several seeds; 61 real-server scenarios with no script errors, compared
+one by one with v9.21.9, and the ones that differed repeated on both versions (sword duels, ragdolls, sieges, prisoners
+following round walls, wounded crawling to cover): all within the game's normal run-to-run spread.
+
 ## v9.21.9 (Lighter on your device)
 
 - The add-on now keeps to a time budget of its own each tick (Performance: Low 8 ms, Medium 14, High 22). On a phone
