@@ -6901,11 +6901,13 @@ function spotNear(e, test, anchor, leash, maxR = 4) {
 const STAND = new Map();
 system.runInterval(() => { if (STAND.size > 60000) STAND.clear(); }, 200);
 const reachMemo = new Map(); // "from cell>to cell" -> { v, t }  (v5.7: the same question is asked every thought)
-// v9.22: instant searches (can I walk there, a short hop's route) share a time allowance: 8 ms a tick in all, 5 ms at
-// most for one. On ground nobody has looked at yet one search could take 80 ms (a hitch you see). One that runs out
-// answers "don't know yet": never remembered as a "no", asked again a moment later with the ground already known.
-let SYNC_LEFT = 8, SYNC_T = -1;
-function syncAllow() { const now = tick(); if (SYNC_T !== now) { SYNC_T = now; SYNC_LEFT = 8; } return Math.min(5, SYNC_LEFT); }
+// v9.22: instant searches (can I walk there, a short hop's route) share a time allowance: 40 ms a tick in all, 25 ms
+// at most for one. Measured on a real server most take 2-20 ms, but on ground nobody has looked at yet one could take
+// 80 ms (a hitch you see). One that runs out answers "don't know yet": never remembered as a "no" (a short hop goes to
+// the route planner instead), asked again a moment later with the ground already known. (A 5 ms cap was tried first:
+// it cut off 70% of short routes and men stood "working out the way".)
+let SYNC_LEFT = 40, SYNC_T = -1;
+function syncAllow() { const now = tick(); if (SYNC_T !== now) { SYNC_T = now; SYNC_LEFT = 40; } return Math.min(25, SYNC_LEFT); }
 function localReach(dim, from, to, maxNodes = 400) {
   if (Math.abs(to.y - from.y) > 3) return false;
   if (flat(from, to) < 1.5) return true;
