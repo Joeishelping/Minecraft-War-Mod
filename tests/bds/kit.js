@@ -979,6 +979,7 @@ KS.load = async (o, ox, oz) => {                                      // how fas
 };
 KS.big = async (o, ox, oz) => {
   const N = Number(o.n ?? 90);
+  if (o.view !== undefined) KIT.view = Number(o.view);
   floorAt(ox - 60, oz - 90, ox + 60, oz + 90);
   setRelPair(1, 2, "1", false);
   const W8 = ["rifle", "smg", "semi", "mg", "rifle", "semi"];
@@ -1005,7 +1006,7 @@ function kitLoop(max, f) { return new Promise((res) => { const t0 = tick(); cons
   if (KIT?.trace && (tick() - t0) % Number(KIT.trace) < 10) { try { const ps = globalThis.__planStats; if (ps) { console.warn(`PLAN jobs=${planJobs.length} exp/tick=${(ps.exp / Math.max(1, ps.ticks)).toFixed(0)} ms/tick=${(ps.ms / Math.max(1, ps.ticks)).toFixed(1)} reads/tick=${(ps.reads / Math.max(1, ps.ticks)).toFixed(0)} done=${ps.done} dropped=${ps.dropped} meanDoneTicks=${(ps.doneT / Math.max(1, ps.done)).toFixed(0)}`); globalThis.__planStats = { exp: 0, ms: 0, reads: 0, ticks: 0, done: 0, dropped: 0, doneT: 0 }; } console.warn(`TRACE ${tick() - t0} ` + kitSoldiers().slice(0, 12).map((e) => `${(e.location.x - KIT.ox).toFixed(1)},${(e.location.y - Y).toFixed(1)},${(e.location.z - KIT.oz).toFixed(1)}${isDown(e) ? "D" : ""}:${(notes.get(e.id)?.text ?? "").slice(0, 18)}:${JSON.parse(String(gdp(e, "war:st") ?? "{}")).g ?? ""}:${sd(e).func}`).join(" | ")); } catch (err) { console.warn(`TRACE err ${err}`); } }
   if (done || tick() - t0 >= max) { system.clearRun(id); res(); } }, 10); }); }
 let kitSlot = 0;
-globalThis.__viewers = () => (KIT ? [{ d: "minecraft:overworld", x: KIT.ox + 20, z: KIT.oz }] : []);   // (the test site counts as watched, as a real battle is)
+globalThis.__viewers = () => (KIT ? [{ d: "minecraft:overworld", x: KIT.ox + 20 + Number(KIT.view ?? 0), z: KIT.oz }] : []);   // (the test site counts as watched, as a real battle is)
 system.afterEvents.scriptEventReceive.subscribe((ev) => {
   if (ev.id !== "war:test") return;
   const [name, ...args] = String(ev.message ?? "").trim().split(/\s+/);
