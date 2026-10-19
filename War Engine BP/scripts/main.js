@@ -35,7 +35,7 @@ function oops(sys, err) {
 }
 { const ri = system.runInterval.bind(system); system.runInterval = (f, n) => {
   const site = (String(new Error().stack).split("\n").map((l) => Number((l.match(/main\.js:(\d+)/) ?? [])[1] ?? 0)).find((n) => n > 40) ?? "?");   // (v9.23: where the loop was made, for the loop profiler: test servers only)
-  return ri(() => { const P0 = globalThis.__loopProf; if (P0) { const t = Date.now(); try { f(); } catch (err) { oops("loop", err); } const k = `${site}/${n}`; P0[k] = (P0[k] ?? 0) + Date.now() - t; } else { try { f(); } catch (err) { oops("loop", err); } } }, n);
+  return ri(() => { const t = Date.now(); try { f(); } catch (err) { oops("loop", err); } const dt = Date.now() - t; SCRIPT_MS += dt; const P0 = globalThis.__loopProf; if (P0) { const k = `${site}/${n}`; P0[k] = (P0[k] ?? 0) + dt; } }, n);   // (v9.22: every loop's time counts toward the add-on's own budget)
 }; }
 import "./extensions/index.js";
 // v8.1: the current tick, read from the game ONCE per tick. Asking the game (system.currentTick) is a call into the
@@ -43,9 +43,14 @@ import "./extensions/index.js";
 // 90 v 90 (half the lag). This interval is registered first, so it runs before every other one in the tick.
 // v8.2: level of detail. When the server falls behind (a big battle), every soldier looks and thinks a little less
 // often (down to ~40% of normal) so the game keeps running at full speed; as it catches up they go back to normal.
-const aiLoad = () => Math.min(2.5, Math.max(1, tickGap / 52));
+// v9.22: and its own budget. On a phone or a console the game and the screen share one processor: the add-on's time
+// comes out of your frame rate long before the server falls behind. Every loop's time is measured; over the budget
+// (Performance: Low 8 ms a tick, Medium 14, High 22) soldiers look and think a little less often until it's back under.
+const SCRIPT_BUDGET = { low: 8, medium: 14, high: 22 };
+let SCRIPT_MS = 0, scriptAvg = 0, scriptBudget = 14;
+const aiLoad = () => Math.min(2.5, Math.max(1, tickGap / 52, Math.min(1.5, scriptAvg / scriptBudget)));   // (the budget alone slows them at most 1.5x: more and defenders reacted too late to a breach)
 let TICK_NOW = 0, tickGap = 50, lastTickMs = 0;   // (tickGap: real ms between ticks, smoothed: 50 = the server keeps pace)
-system.runInterval(() => { TICK_NOW = system.currentTick; const t = Date.now(); if (lastTickMs) tickGap = tickGap * 0.95 + Math.min(500, t - lastTickMs) * 0.05; lastTickMs = t; }, 1);
+system.runInterval(() => { TICK_NOW = system.currentTick; const t = Date.now(); if (lastTickMs) tickGap = tickGap * 0.95 + Math.min(500, t - lastTickMs) * 0.05; lastTickMs = t; scriptAvg = scriptAvg * 0.97 + Math.min(200, SCRIPT_MS) * 0.03; SCRIPT_MS = 0; }, 1);
 
 // ================================================================ constants
 const SOLDIER = "war:soldier", HOUND = "war:hound", WAYPOINT = "war:waypoint", FLAG = "war:flag";
@@ -4577,6 +4582,7 @@ system.runInterval(() => {
     try {
       const st = gunState.get(e.id);
       if (st && !st.target && !(st.supp && st.supp.until > now) && now < st.check && !(now - st.seen < 42)) continue;   // v5.7: nothing to aim at until his next look
+      if (st && now < st.next && (st.ammo <= 0 || (st.target && now < st.check))) continue;   // v9.22: between shots / reloading, nothing to decide before his next shot or look
       if (GUNS.includes(String(gdp(e, "war:weapon") ?? "")) || ridingNest(e)) gunTick(e, now);
     } catch {}
   }
@@ -13546,7 +13552,7 @@ system.runInterval(() => {
 // full attention. "Huge battle" mode (over 200 soldiers, or Low) thins out the far ones further.
 const perfLevel = () => { const v = String(setting("perf", "medium")); return ["low", "medium", "high"].includes(v) ? v : "medium"; };
 let SOLDIER_N = 0;
-system.runInterval(() => { SOLDIER_N = allOf(SOLDIER).length; }, 40);
+system.runInterval(() => { SOLDIER_N = allOf(SOLDIER).length; scriptBudget = SCRIPT_BUDGET[perfLevel()] ?? 14; }, 40);
 const lodOn = () => perfLevel() === "low" || SOLDIER_N > 200;
 const FAR_R = () => (perfLevel() === "low" ? 64 : SOLDIER_N > 200 ? 80 : 96);
 const bodyCap = () => ({ low: 16, medium: 32, high: 48 }[perfLevel()] ?? 32) - (SOLDIER_N > 250 ? 8 : 0);

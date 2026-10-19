@@ -1,5 +1,14 @@
 # War Engine changelog
 
+## v9.21.9 (Lighter on your device)
+
+- The add-on now keeps to a time budget of its own each tick (Performance: Low 8 ms, Medium 14, High 22). On a phone
+  or console the game and the screen share one processor, so its time came out of your frame rate long before the
+  old safeguard (which waited for the server itself to fall behind) did anything. Over budget, soldiers look and think
+  a little less often (at most 1.5x), and go back to normal as soon as there's room.
+- Gunners between shots or reloading no longer re-check everything every other tick.
+- Measured in a 30 v 30 on a test server: about 10% less script time a tick, shorter worst pauses.
+
 ## v9.21.8 (They move like players)
 
 - In a fight, soldiers used to dash and charge slower than you walk. Now a dash, a charge, a flank or a run to cover goes

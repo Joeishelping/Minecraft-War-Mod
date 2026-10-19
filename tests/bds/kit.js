@@ -992,7 +992,7 @@ KS.big = async (o, ox, oz) => {
     if (!mid && tick() - t0 > 400) { const sz = allOf(SOLDIER).map((e) => { try { return e.getDynamicPropertyTotalByteCount(); } catch { return 0; } }).sort((a, b) => b - a); const keys = {}; const big = allOf(SOLDIER)[0]; try { for (const k of big.getDynamicPropertyIds()) { const v = big.getDynamicProperty(k); keys[k] = typeof v === "string" ? v.length : 8; } } catch {} mid = { n: sz.length, avg: Math.round(sz.reduce((a, b) => a + b, 0) / Math.max(1, sz.length)), max: sz[0], world: world.getDynamicPropertyTotalByteCount(), wps: allOf(WAYPOINT).length, keys: Object.entries(keys).sort((a, b) => b[1] - a[1]).slice(0, 12) }; }
     return false; });
   const sec = (Date.now() - r0) / 1000, ticks = tick() - t0;
-  return { prof: globalThis.__profDump?.(false), mid, bodyMsPerTick: +((globalThis.__rdTot + globalThis.__scTot) / Math.max(1, tick() - t0)).toFixed(2), corpses: globalThis.__scN, corpseMsEach: +(globalThis.__scTot / Math.max(1, globalThis.__scN)).toFixed(1), ev: globalThis.__evReport?.(tick() - t0), dp: globalThis.__dpReport?.(), n: N, ticks, realSec: +sec.toFixed(1), tps: +(ticks / sec).toFixed(1), worstGapMs: worst, left1: kitSoldiers(1).filter((e) => !isDown(e)).length, left2: kitSoldiers(2).filter((e) => !isDown(e)).length, ...kitShotStats(t0) };
+  return { load: typeof scriptAvg === "number" ? { scriptAvg: +scriptAvg.toFixed(1), aiLoad: +aiLoad().toFixed(2) } : undefined, prof: globalThis.__profDump?.(false), mid, bodyMsPerTick: +((globalThis.__rdTot + globalThis.__scTot) / Math.max(1, tick() - t0)).toFixed(2), corpses: globalThis.__scN, corpseMsEach: +(globalThis.__scTot / Math.max(1, globalThis.__scN)).toFixed(1), ev: globalThis.__evReport?.(tick() - t0), dp: globalThis.__dpReport?.(), n: N, ticks, realSec: +sec.toFixed(1), tps: +(ticks / sec).toFixed(1), worstGapMs: worst, left1: kitSoldiers(1).filter((e) => !isDown(e)).length, left2: kitSoldiers(2).filter((e) => !isDown(e)).length, ...kitShotStats(t0) };
 };
 function kitShotStats(t0) {
   const a = KSHOTS.filter((x) => x.t >= t0);
@@ -2665,5 +2665,10 @@ KS.micro = async (o, ox, oz) => {
   T("Math.hypot", (i) => Math.hypot(i, 2, 3));
   T("getRotation", () => e.getRotation());
   T("getVelocity", () => e.getVelocity());
+  const N2 = 5000, R = (k, f) => { const t = Date.now(); for (let i = 0; i < N2; i++) f(i); r[k] = +((Date.now() - t) * 100000 / N2).toFixed(0); };
+  R("ray 10 (per 100k)", (i) => rayHit(dim, { x: ox + 0.5, y: Y + 1.6, z: oz + 0.5 }, { x: 1, y: 0, z: 0 }, 10));
+  R("ray 40 (per 100k)", (i) => rayHit(dim, { x: ox + 0.5, y: Y + 1.6, z: oz + 0.5 }, { x: 0.7071, y: 0, z: 0.7071 }, 40));
+  R("nearSnap (per 100k)", (i) => nearSnap(dim.id, { x: ox, y: Y, z: oz }, 30));
+  R("getEntities r30 (per 100k)", (i) => dim.getEntities({ location: { x: ox, y: Y, z: oz }, maxDistance: 30 }));
   return r;
 };
