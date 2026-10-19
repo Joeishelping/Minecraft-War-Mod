@@ -50,27 +50,44 @@ const SCRIPT_BUDGET = { low: 8, medium: 14, high: 22 };
 let SCRIPT_MS = 0, scriptAvg = 0, scriptBudget = 14;
 const aiLoad = () => Math.min(2.5, Math.max(1, tickGap / 52, Math.min(1.5, scriptAvg / scriptBudget)));   // (the budget alone slows them at most 1.5x: more and defenders reacted too late to a breach)
 let TICK_NOW = 0, tickGap = 50, lastTickMs = 0;   // (tickGap: real ms between ticks, smoothed: 50 = the server keeps pace)
-system.runInterval(() => { TICK_NOW = system.currentTick; const t = Date.now(); if (lastTickMs) tickGap = tickGap * 0.95 + Math.min(500, t - lastTickMs) * 0.05; lastTickMs = t; scriptAvg = scriptAvg * 0.97 + Math.min(200, SCRIPT_MS) * 0.03; SCRIPT_MS = 0; }, 1);
+let MEMK = 0;   // (v9.22: the entity memory's epoch: a new tick, or a game event (it can come mid-tick, after things moved))
+system.runInterval(() => { TICK_NOW = system.currentTick; MEMK++; const t = Date.now(); if (lastTickMs) tickGap = tickGap * 0.95 + Math.min(500, t - lastTickMs) * 0.05; lastTickMs = t; scriptAvg = scriptAvg * 0.97 + Math.min(200, SCRIPT_MS) * 0.03; SCRIPT_MS = 0; }, 1);
 // v9.22: the three questions the add-on asks the game most (where is he, which dimension, is he still there) were half
 // of all its work in a battle (measured with the game's own profiler: 20% / 18% / 13%): every ask is a call into the
 // game, and the brain asks thousands of times a tick about the same few dozen men. Nothing moves while the script runs,
 // so each answer is remembered for the rest of the tick (the dimension for half a second), and forgotten the moment the
-// add-on itself teleports or removes him. Every caller still gets its own copy of the position.
+// add-on itself teleports or removes him. Every caller still gets its own copy of the position. A game event (a hit,
+// a death, a spawn) can come in the middle of the game's tick, after everyone moved: each one starts with a fresh memory
+// (a sword parry, decided by where the attacker stands, missed most of them on the old positions).
 {
   const EP = Object.getPrototypeOf(Player.prototype), D = (k) => Object.getOwnPropertyDescriptor(EP, k);
   const dL = D("location"), dD = D("dimension"), dV = D("isValid");
   if (dL?.get && dL.configurable && dD?.get && dD.configurable && dV?.get && dV.configurable) {
     const gL = dL.get, gD = dD.get, gV = dV.get, MEM = new WeakMap();
     const mem = (o) => { let m = MEM.get(o); if (!m) { m = { lt: -1, l: undefined, dt: -99, d: undefined, vt: -1, v: false }; MEM.set(o, m); } return m; };
-    Object.defineProperty(EP, "location", { configurable: true, enumerable: dL.enumerable, get() { const m = mem(this); if (m.lt !== TICK_NOW) { m.l = gL.call(this); m.lt = TICK_NOW; } const l = m.l; return { x: l.x, y: l.y, z: l.z }; } });
+    Object.defineProperty(EP, "location", { configurable: true, enumerable: dL.enumerable, get() { const m = mem(this); if (m.lt !== MEMK) { m.l = gL.call(this); m.lt = MEMK; } const l = m.l; return { x: l.x, y: l.y, z: l.z }; } });
     Object.defineProperty(EP, "dimension", { configurable: true, enumerable: dD.enumerable, get() { const m = mem(this); if (TICK_NOW - m.dt >= 10 || TICK_NOW < m.dt) { m.d = gD.call(this); m.dt = TICK_NOW; } return m.d; } });
-    Object.defineProperty(EP, "isValid", { configurable: true, enumerable: dV.enumerable, get() { const m = mem(this); if (m.vt !== TICK_NOW) { m.v = gV.call(this); m.vt = TICK_NOW; } return m.v; } });
+    Object.defineProperty(EP, "isValid", { configurable: true, enumerable: dV.enumerable, get() { const m = mem(this); if (m.vt !== MEMK) { m.v = gV.call(this); m.vt = MEMK; } return m.v; } });
     if (!Object.getOwnPropertyDescriptor(Player.prototype, "dimension")) Object.defineProperty(Player.prototype, "dimension", { configurable: true, enumerable: dD.enumerable, get() { return gD.call(this); } });   // (a player goes through portals: always asked fresh)
     const forget = (o) => { const m = MEM.get(o); if (m) { m.lt = -1; m.dt = -99; m.vt = -1; } };
     for (const k of ["teleport", "tryTeleport", "remove", "kill"]) {
       const pd = D(k); if (!pd || typeof pd.value !== "function" || !pd.writable) continue;
       const f = pd.value;
       Object.defineProperty(EP, k, { configurable: pd.configurable, enumerable: pd.enumerable, writable: true, value: function (...a) { try { return f.apply(this, a); } finally { forget(this); } } });
+    }
+    // every game event handler starts with a fresh memory (subscribe and unsubscribe both see the same handler)
+    for (const bag of [world.afterEvents, world.beforeEvents]) {
+      let names = []; try { for (let p = Object.getPrototypeOf(bag); p && p !== Object.prototype; p = Object.getPrototypeOf(p)) names.push(...Object.getOwnPropertyNames(p)); names.push(...Object.keys(bag)); } catch {}
+      for (const k of new Set(names)) {
+        if (k === "constructor") continue;
+        let sig; try { sig = bag[k]; } catch { continue; }
+        if (!sig || typeof sig.subscribe !== "function" || typeof sig.unsubscribe !== "function") continue;
+        const sub = sig.subscribe.bind(sig), uns = sig.unsubscribe.bind(sig), W = new WeakMap();
+        try {
+          sig.subscribe = (cb, ...rest) => { const w = (ev) => { MEMK++; return cb(ev); }; W.set(cb, w); W.set(w, w); return sub(w, ...rest); };
+          sig.unsubscribe = (cb) => uns(W.get(cb) ?? cb);
+        } catch {}
+      }
     }
   }
 }
