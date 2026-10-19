@@ -295,6 +295,26 @@ const S = {
     report({ shots: s.length, ok: s.length > 0 });
   },
 
+  // v9.22: a shootout with a player who keeps hitting them: do they step side to side (and keep firing)?
+  async duel() {
+    spawnPlayer({ x: 0.5, y: 0, z: 20.5 });
+    player.tags.delete("war_f1"); player.tags.add("war_f2"); SIM.gameMode = "survival";
+    const men = []; for (let i = 0; i < 4; i++) men.push(soldier(1, { x: i * 4 - 6 + 0.5, y: 0, z: 0.5 }, "rifle", 1, "hold"));
+    W.setRelPair(1, 2, "1", false);
+    step(60);
+    const xs = men.map(() => []);
+    for (let t = 0; t < 400; t++) {
+      player.hp = 20; player._valid = true;
+      if (t % 15 === 0) for (const m of men) if (m._valid) { m.hp = Math.max(m.hp, 15); m.applyDamage(0.5, { damagingEntity: player, cause: "projectile" }); }
+      step(1);
+      men.forEach((m, i) => { if (m._valid) xs[i].push(m._loc.x); });
+    }
+    const swing = xs.map((a) => a.length ? +(Math.max(...a) - Math.min(...a)).toFixed(2) : 0);
+    let turns = 0; for (const a of xs) { let dir = 0; for (let k = 5; k < a.length; k += 5) { const d = Math.sign(a[k] - a[k - 5]); if (d && dir && d !== dir) turns++; if (d) dir = d; } }
+    const s = SIM.shots.filter((x) => x.owner?.props?.get("war:faction") === 1);
+    report({ swing, turns, shots: s.length, alive: men.map((m) => m._valid), hp: men.map((m) => m.hp), notes: men.map((m) => { try { return W.noteOf?.(m) ?? m.nameTag; } catch { return '?'; } }), pos: men.map((m) => [+m._loc.x.toFixed(1), +m._loc.z.toFixed(1)]), php: player.hp });
+  },
+
   async planDbg() {
     if (!opt.flat) fill(-6, -5, -6, 6, -1, 6, "air"); fill(-7, -6, -7, 7, -6, 7, "stone");
     for (let y = -5; y <= -1; y++) setBlock(0, y, 6, "ladder");

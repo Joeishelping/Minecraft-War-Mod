@@ -987,13 +987,15 @@ KS.big = async (o, ox, oz) => {
   for (let i = 0; i < N; i++) kitSoldier(2, { x: ox + (i % 20) * 2 - 20 + 0.5, y: Y, z: oz + 60 + Math.floor(i / 20) * 2 + 0.5 }, W8[i % 6]);
   await kitWait(20);
   await kitOrder(1, { x: ox, y: Y, z: oz + 60 }); await kitOrder(2, { x: ox, y: Y, z: oz - 60 });
-  globalThis.__profDump?.(true); globalThis.__dpReport?.(); globalThis.__evReport?.(1); globalThis.__rdTot = 0; globalThis.__scTot = 0; globalThis.__scN = 0; const t0 = tick(), r0 = Date.now(); let slow = 0, last = Date.now(), worst = 0;
+  globalThis.__profDump?.(true); globalThis.__MC = undefined; globalThis.__PS = undefined; globalThis.__dpReport?.(); globalThis.__evReport?.(1); globalThis.__rdTot = 0; globalThis.__scTot = 0; globalThis.__scN = 0; const t0 = tick(), r0 = Date.now(); let slow = 0, last = Date.now(), worst = 0;
   let mid;
   await kitLoop(Number(o.ticks ?? 600), () => { const now = Date.now(), dt = now - last; last = now; worst = Math.max(worst, dt); if (dt > 600) slow++;
     if (!mid && tick() - t0 > 400) { const sz = allOf(SOLDIER).map((e) => { try { return e.getDynamicPropertyTotalByteCount(); } catch { return 0; } }).sort((a, b) => b - a); const keys = {}; const big = allOf(SOLDIER)[0]; try { for (const k of big.getDynamicPropertyIds()) { const v = big.getDynamicProperty(k); keys[k] = typeof v === "string" ? v.length : 8; } } catch {} mid = { n: sz.length, avg: Math.round(sz.reduce((a, b) => a + b, 0) / Math.max(1, sz.length)), max: sz[0], world: world.getDynamicPropertyTotalByteCount(), wps: allOf(WAYPOINT).length, keys: Object.entries(keys).sort((a, b) => b[1] - a[1]).slice(0, 12) }; }
     return false; });
   const sec = (Date.now() - r0) / 1000, ticks = tick() - t0;
-  return { load: typeof scriptAvg === "number" ? { scriptAvg: +scriptAvg.toFixed(1), aiLoad: +aiLoad().toFixed(2) } : undefined, prof: globalThis.__profDump?.(false), mid, bodyMsPerTick: +((globalThis.__rdTot + globalThis.__scTot) / Math.max(1, tick() - t0)).toFixed(2), corpses: globalThis.__scN, corpseMsEach: +(globalThis.__scTot / Math.max(1, globalThis.__scN)).toFixed(1), ev: globalThis.__evReport?.(tick() - t0), dp: globalThis.__dpReport?.(), n: N, ticks, realSec: +sec.toFixed(1), tps: +(ticks / sec).toFixed(1), worstGapMs: worst, left1: kitSoldiers(1).filter((e) => !isDown(e)).length, left2: kitSoldiers(2).filter((e) => !isDown(e)).length, ...kitShotStats(t0) };
+  const MC = globalThis.__MC; if (MC) { globalThis.__MC = undefined; }
+  const PS = globalThis.__PS; if (PS) { globalThis.__PS = undefined; }
+  return { perc: PS ? Object.fromEntries(Object.entries(PS).map(([k, v]) => [k, +(v / ticks).toFixed(2)])) : undefined, mem: MC ? Object.fromEntries(Object.entries(MC).map(([k, v]) => [k, +(v / ticks).toFixed(0)])) : undefined, load: typeof scriptAvg === "number" ? { scriptAvg: +scriptAvg.toFixed(1), aiLoad: +aiLoad().toFixed(2) } : undefined, prof: globalThis.__profDump?.(false), mid, bodyMsPerTick: +((globalThis.__rdTot + globalThis.__scTot) / Math.max(1, tick() - t0)).toFixed(2), corpses: globalThis.__scN, corpseMsEach: +(globalThis.__scTot / Math.max(1, globalThis.__scN)).toFixed(1), ev: globalThis.__evReport?.(tick() - t0), dp: globalThis.__dpReport?.(), n: N, ticks, realSec: +sec.toFixed(1), tps: +(ticks / sec).toFixed(1), worstGapMs: worst, left1: kitSoldiers(1).filter((e) => !isDown(e)).length, left2: kitSoldiers(2).filter((e) => !isDown(e)).length, ...kitShotStats(t0) };
 };
 function kitShotStats(t0) {
   const a = KSHOTS.filter((x) => x.t >= t0);
@@ -2671,5 +2673,69 @@ KS.micro = async (o, ox, oz) => {
   R("ray 40 (per 100k)", (i) => rayHit(dim, { x: ox + 0.5, y: Y + 1.6, z: oz + 0.5 }, { x: 0.7071, y: 0, z: 0.7071 }, 40));
   R("nearSnap (per 100k)", (i) => nearSnap(dim.id, { x: ox, y: Y, z: oz }, 30));
   R("getEntities r30 (per 100k)", (i) => dim.getEntities({ location: { x: ox, y: Y, z: oz }, maxDistance: 30 }));
+  return r;
+};
+// v9.22: a wounded man's falling body removed mid-fall (cleanup, a blast swap): he must not stay hidden
+KS.fallrm = async (o, ox, oz) => {
+  floorAt(ox - 10, oz - 10, ox + 10, oz + 10);
+  for (const c of ow().getEntities({ type: "war:corpse" })) { try { c.remove(); } catch {} }
+  const a = kitSoldier(1, { x: ox + 0.5, y: Y, z: oz + 0.5 }, "rifle", "hold"), b = kitSoldier(1, { x: ox + 4.5, y: Y, z: oz + 0.5 }, "rifle", "hold");
+  await kitWait(60);
+  for (const e of [a, b]) { e.getComponent("minecraft:health").setCurrentValue(2); }
+  await kitWait(2);
+  for (const e of [a, b]) { lastHit.set(e.id, { t: tick(), dir: { x: 1, y: 0, z: 0 }, weapon: "rifle", dd: 10 }); e.applyDamage(3); }
+  await kitWait(3);
+  const mid = { hidden: [a, b].map((e) => !!e.getProperty("war:hide")), falling: [a, b].map((e) => FALLS.has(e.id)) };
+  try { world.getEntity(FALLS.get(a.id))?.remove(); } catch {}   // a: his body is simply removed (as cleanup did)
+  await kitWait(80);                                              // b: falls normally
+  const end = { hidden: [a, b].map((e) => !!e.getProperty("war:hide")), falling: [a, b].map((e) => FALLS.has(e.id)), downed: [a, b].map((e) => downed.has(e.id)) };
+  for (const e of [a, b]) { try { revive(e); } catch {} }
+  await kitWait(20);
+  for (const e of [a, b]) try { e.remove(); } catch {}
+  return { mid, end, ok: !end.hidden[0] && !end.hidden[1] };
+};
+// can the entity getters be wrapped (per-tick memory), and what does it cost
+KS.patchprobe = async (o, ox, oz) => {
+  floorAt(ox - 8, oz - 8, ox + 8, oz + 8);
+  const e = kitSoldier(1, { x: ox + 0.5, y: Y, z: oz + 0.5 }, "rifle", "hold");
+  await kitWait(10);
+  const EP = Object.getPrototypeOf(Player.prototype), r = { proto: EP?.constructor?.name };
+  for (const k of ["location", "dimension", "isValid", "id"]) { let pd; for (let p = EP; p && !pd; p = Object.getPrototypeOf(p)) pd = Object.getOwnPropertyDescriptor(p, k); r["pd_" + k] = pd ? { get: !!pd.get, conf: pd.configurable, own: !!Object.getOwnPropertyDescriptor(EP, k) } : (Object.getOwnPropertyDescriptor(e, k) ? "instance" : "none"); }
+  for (const k of ["teleport", "remove", "tryTeleport"]) { const pd = Object.getOwnPropertyDescriptor(EP, k); r[k] = pd ? { w: pd.writable, conf: pd.configurable } : "none"; }
+  const all = allOf(SOLDIER); r.sameObj = all[0] === allOf(SOLDIER)[0]; const g1 = world.getEntity(e.id), g2 = world.getEntity(e.id); r.getEntitySame = g1 === g2; r.getEntityVsList = g1 === all.find((x) => x.id === e.id);
+  const N = 50000, T = (k, f) => { const t = Date.now(); for (let i = 0; i < N; i++) f(i); r[k] = +((Date.now() - t) * 100000 / N).toFixed(0); };
+  const WM = new WeakMap(), MM = new Map();
+  T("location", () => e.location); T("dimension", () => e.dimension); T("isValid", () => e.isValid); T("id", () => e.id);
+  WM.set(e, { t: 1, l: e.location }); MM.set(e.id, { t: 1, l: e.location });
+  T("weakmap get", () => { const c = WM.get(e); return c && c.t === 1 ? c.l : 0; });
+  T("map by id get", () => { const c = MM.get(e.id); return c && c.t === 1 ? c.l : 0; });
+  return r;
+};
+// v9.22: the stair-entrance search, old sweep vs new (steps first): same answers, and how long each takes
+KS.mouths = async (o, ox, oz) => {
+  floorAt(ox - 30, oz - 30, ox + 30, oz + 30);
+  kfill(ox - 6, Y, oz - 6, ox + 6, Y + 3, oz + 6, "stone"); kfill(ox - 6, Y + 4, oz - 6, ox + 6, Y + 8, oz + 6, "air");   // a raised block, 4 high, roof open
+  for (let i = 0; i < 4; i++) kset(ox + 7 + i, Y + 3 - i, oz, STAIR("-x"));            // stairs down to +x
+  for (let i = 0; i < 4; i++) kset(ox, Y + 3 - i, oz - 7 - i, STAIR("+z"));            // stairs down to -z
+  for (let i = 0; i < 4; i++) kset(ox - 7, Y + i, oz + 3, "ladder");                   // a ladder on the -x side
+  kfill(ox + 14, Y, oz + 10, ox + 18, Y + 1, oz + 14, "stone"); kset(ox + 13, Y, oz + 12, STAIR("+x")); kset(ox + 13, Y + 1, oz + 12, "air");   // a little step-up
+  await kitWait(10); terrainForget();
+  const old = (dim, at, R) => {
+    const fy = Math.floor(at.y + 0.01), now = tick(), raw = [], bx = Math.floor(at.x), bz = Math.floor(at.z);
+    try { for (let dx = -R; dx <= R; dx++) for (let dz = -R; dz <= R; dz++) { const x = bx + dx, z = bz + dz;
+      if (!standAt(dim, x, fy, z, now) || stairish(tBlock(dim, x + 0.5, fy - 1, z + 0.5))) continue;
+      for (const [qx, qz] of [[1, 0], [-1, 0], [0, 1], [0, -1]]) { const s1 = tBlock(dim, x + qx + 0.5, fy - 1, z + qz + 0.5), s2 = tBlock(dim, x + qx + 0.5, fy - 2, z + qz + 0.5); if (stairish(s1) || (stairish(s2) && passable(s1))) { raw.push({ x: x + 0.5, y: fy, z: z + 0.5 }); break; } } } } catch {}
+    const list = []; for (const p of raw) { const m = list.find((q) => Math.hypot(q.x - p.x, q.z - p.z) < 3.5); if (m) { m.n++; m.x += (p.x - m.x) / m.n; m.z += (p.z - m.z) / m.n; } else list.push({ ...p, n: 1 }); } return list; };
+  const dim = ow(), r = { cases: [], same: 0, diff: 0 };
+  let tOld = 0, tNew = 0;
+  for (const [px, py, pz, R] of [[ox, Y + 4, oz, 18], [ox, Y + 4, oz, 6], [ox, Y + 4, oz, 32], [ox + 12, Y, oz, 18], [ox - 10, Y, oz - 10, 24], [ox + 14, Y, oz + 12, 6], [ox + 16, Y + 2, oz + 12, 8]]) {
+    MOUTHS.clear(); terrainForget();
+    let t = Date.now(); const a = old(dim, { x: px, y: py, z: pz }, R); tOld += Date.now() - t;
+    terrainForget(); MOUTHS.clear();
+    t = Date.now(); const b = stairMouths(dim, { x: px, y: py, z: pz }, R); tNew += Date.now() - t;
+    const sa = JSON.stringify(a.map((m) => [m.x.toFixed(2), m.y, m.z.toFixed(2), m.n])), sb = JSON.stringify(b.map((m) => [m.x.toFixed(2), m.y, m.z.toFixed(2), m.n]));
+    if (sa === sb) r.same++; else { r.diff++; r.cases.push({ at: [px - ox, py - Y, pz - oz, R], old: sa.slice(0, 200), new: sb.slice(0, 200) }); }
+  }
+  r.msOld = tOld; r.msNew = tNew;
   return r;
 };
