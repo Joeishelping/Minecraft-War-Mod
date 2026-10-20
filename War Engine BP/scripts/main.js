@@ -9764,12 +9764,11 @@ system.runInterval(() => {
   const eyes = [];
   for (const p of ps) { try { eyes.push({ p, d: p.dimension.id, l: p.getHeadLocation() }); } catch {} }
   const now = tick();
-  for (const type of VEHICLES) {
-    const spec = FARV[type]; if (!spec) continue;
-    let list; try { list = allOf(type); } catch { continue; }
-    for (const e of list) {
+  {
+    for (const e of vehicleList) {   // (refreshed every second: no searches of our own)
       try {
         if (!e.isValid) continue;
+        const spec = FARV[e.typeId]; if (!spec) continue;
         const l = e.location, did = e.dimension.id;
         let m = farvMemo.get(e.id);
         if (!m) { m = { x: l.x, y: l.y, z: l.z, t: now }; farvMemo.set(e.id, m); }
@@ -14370,6 +14369,17 @@ world.afterEvents.entityHurt.subscribe((ev) => {
     const v = ev.hurtEntity; if (v?.typeId !== SOLDIER && v?.typeId !== HOUND) return;
     const a = ev.damageSource?.damagingEntity; if (a?.typeId !== "minecraft:player") return;
     a.playSound("war.hitmark", { volume: downed.has(v.id) ? 0.9 : 0.6, pitch: downed.has(v.id) ? 0.8 : 1.15 });
+    // v9.24: and a word on screen when it drops him or kills him
+    if (v.typeId !== SOLDIER) return;
+    const was = downed.has(v.id), name = soldierName(v), d = Math.round(dist(a.location, v.location));
+    system.runTimeout(() => {
+      try {
+        if (!a.isValid) return;
+        const dead = !v.isValid || (hpOf(v)?.currentValue ?? 1) <= 0;
+        if (dead) a.onScreenDisplay.setActionBar(`§c☠ §f${name} §7killed · ${d} blocks`);
+        else if (!was && downed.has(v.id)) a.onScreenDisplay.setActionBar(`§6${name} §7down · ${d} blocks`);
+      } catch {}
+    }, 1);
   } catch {}
 });
 

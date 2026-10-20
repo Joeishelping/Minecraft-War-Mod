@@ -301,11 +301,19 @@ const S = {
     const out = {};
     for (const yaw of [0, 90, 180, 270]) {
       const t = overworld.spawnEntity("war:tank", { x: 0.5, y: 0, z: 100.5 }); t.rot = { x: 0, y: yaw };
-      SIM.farv = []; step(8);
-      out[yaw] = SIM.farv.map((q) => q.v["variable.u"] / 128).join(",");
+      SIM.farv = []; step(30);   // (vehicles are picked up within a second)
+      out[yaw] = [...new Set(SIM.farv.map((q) => q.v["variable.u"] / 128))].join(",");
       t.remove(); step(1);
     }
     report({ cols: out });
+  },
+  // v9.24: your shot drops him: a word on screen
+  async pkill() {
+    spawnPlayer({ x: 0.5, y: 0, z: 0.5 }); SIM.gameMode = "survival";
+    const m = soldier(2, { x: 0.5, y: 0, z: 30.5 }, "rifle", 1, "hold");
+    step(20);
+    for (let k = 0; k < 30 && m._valid; k++) { m.applyDamage(4, { damagingEntity: player, cause: "projectile" }); step(5); }
+    report({ bars: SIM.log.filter((l) => l.startsWith("[bar]") && /down|killed/.test(l)) });
   },
   // v9.22: a shootout with a player who keeps hitting them: do they step side to side (and keep firing)?
   async duel() {
