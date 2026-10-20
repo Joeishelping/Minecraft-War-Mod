@@ -6215,7 +6215,7 @@ function cellAt(job, x, z, refY) {
       if (job.step === 1 && isIronDoor(feet) && !floor.isAir && !floor.isLiquid) { found = { x, z, y, w: false, iron: true }; break; }  // iron door: see expansion
       if (feet.typeId.includes("water") && passable(head)) { found = { x, z, y, w: true }; break; }  // surface water: swim
       if (feet.typeId.includes("water")) continue;
-      if (job.step === 1 && isClimb(feet) && pathable(head)) { found = { x, z, y, w: false, climb: true }; break; }   // on a ladder
+      if (job.step === 1 && isClimb(feet) && pathable(head) && !(feet.typeId.includes("vine") && isFloor(floor))) { found = { x, z, y, w: false, climb: true }; break; }   // on a ladder (v9.25: a vine hanging to the ground is walked through, not climbed: a squad queued to "climb" one at a swamp's edge)
       if (!isFloor(floor)) continue;
       if (!pathable(feet) || !pathable(head)) continue;
       // a shoreline cell (water right next to it) costs a little extra, so routes keep off the water's edge;
@@ -6540,7 +6540,10 @@ system.runInterval(() => {
           const key = job.nkey(n.x, n.z, yy);
           if (job.closed.has(key)) continue;
           job.cells.set(key, c2);
-          const g = (job.g.get(nk) ?? 0) + 1.6;
+          // (v9.25: a vine is a way up only if there's no other: in a swamp the route went up the vines over every bush,
+          //  and a whole squad queued at the water's edge to climb one vine one man at a time)
+          let vine = false; try { vine = c2.climb && tBlock(job.dim, n.x + 0.5, yy, n.z + 0.5)?.typeId.includes("vine"); } catch {}
+          const g = (job.g.get(nk) ?? 0) + (vine ? 10 : 1.6);
           if (g >= (job.g.get(key) ?? Infinity)) continue;
           job.g.set(key, g); job.came.set(key, nk);
           job.open.push({ x: n.x, z: n.z, y: yy, w: false, climb: !!c2.climb, f: g + (job.goalFn ? 0 : job.weight * Math.hypot(job.goal.x - n.x, job.goal.z - n.z)) });
