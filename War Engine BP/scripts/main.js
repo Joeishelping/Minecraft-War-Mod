@@ -4243,6 +4243,9 @@ const preciseHits = () => setting("bullets", "precise") !== "pack";
 // Fast is the old pace; Slow is longer still. (Snipers and point blank stay deadly: the cut is the same everywhere.)
 const PACE = { fast: 1, normal: 0.4, slow: 0.25 };
 const battlePace = () => PACE[String(setting("pace", "normal"))] ?? PACE.normal;
+// (v9.24: aimed at a player the pace is halfway back to the old one (Normal 0.7): soldier battles last, but the men
+//  shooting at you are still a real threat)
+const paceFor = (t) => { const k = battlePace(); return t?.typeId === "minecraft:player" ? (1 + k) / 2 : k; };
 const NOT_HITTABLE = ["war:corpse", WAYPOINT, FLAG, "war:blank", "war:bomb", "war:shell", "minecraft:item", "minecraft:xp_orb", "minecraft:arrow", "minecraft:armor_stand"];
 function hittable(o, shooter) {
   try {
@@ -4301,7 +4304,7 @@ function hitscan(e, spec, from, dir, range, weapon, missed = false) {
   try {
     const hits = dim.getEntitiesFromRay(from, u, pierceAt < Infinity ? { maxDistance: blockD + 0.3, ignoreBlockCollision: true } : { maxDistance: blockD + 0.3 }).sort((a, b) => a.distance - b.distance);   // (v9.19: past the pane it went through)
     for (const r of hits) { if (r.distance > blockD + 0.3) break; if (hittable(r.entity, e)) { hit = r; break; } }
-    if (hit && missed && Math.random() >= battlePace()) hit = undefined;   // (v9.23: a round the dice called a miss, into a crowd: the Battle pace decides whether it finds someone else (Fast: always, as before))
+    if (hit && missed && Math.random() >= paceFor(hit.entity)) hit = undefined;   // (v9.23: a round the dice called a miss, into a crowd: the Battle pace decides whether it finds someone else (Fast: always, as before))
   } catch {}
   const end = hit ? hit.distance : blockD;
   if (RD.size) try { rdShot(dim, from, u, end); } catch {}                // (v9.14: rounds kick the bodies they pass through)
@@ -4449,7 +4452,7 @@ function fireGun(e, spec, t, aim) {
     const w = onNestW(e) ?? sd(e).weapon, HC = HIT_CHANCE[w] ?? HIT_CHANCE.rifle;
     let p = HC[0] + (HC[1] - HC[0]) * Math.max(0, Math.min(1, (l - 8) / Math.max(1, HC[2] - 8)));
     p /= Math.max(1, spec.spread / ((GUN_SPEC[w] ?? spec).spread || spec.spread));   // (shaky: wounded, pinned, just turned)
-    p *= battlePace();                                                 // v9.23: Battle pace (War Table -> Settings)
+    p *= paceFor(t);                                                   // v9.23: Battle pace (War Table -> Settings)
     try { const v = t.getVelocity(); if (Math.hypot(v.x, v.z) > 0.08) p *= 0.8; } catch {}
     if ((poseOf.get(t.id) ?? 0) >= 1) p *= 0.85;
     const ux = dx / n, uy = dy / n, uz = dz / n, hz = Math.hypot(ux, uz) || 1, px = -uz / hz, pz = ux / hz;
@@ -6621,6 +6624,7 @@ function shakenMove(e, d, now) {
   if (st < 4) return undefined;
   let chance = 0.04 + (st - 4) * 0.03;                                                       // rare: a few % per check
   if (d.func === "post") chance *= 0.1;                                                      // garrisons on posts almost never break
+  else if (holdingGround(e)) chance *= 0.5;                                                  // (v9.24: nor do men holding a position, as often)
   if (Math.random() >= chance) return undefined;
   const key = breakKey(e, d);
   const squadSize = allOf(SOLDIER).filter((o) => { try { return breakKey(o, sd(o)) === key; } catch { return false; } }).length;
@@ -12835,6 +12839,15 @@ function callMedic(e) {
   } catch {}
 }
 // ---- breaking as a squad, and the rally
+// v9.24: men holding ground (a post, a hold, a sentry line) at their anchor don't give it up lightly: they've got cover,
+// a reason to be there and nowhere better to go. A squad caught on the march breaks and surrenders as before.
+function holdingGround(o) {
+  try {
+    const d = sd(o);
+    if (d.func !== "post" && d.func !== "hold" && d.func !== "sentry") return false;
+    const a = anchorOf(o); return !a || flat(a.location, o.location) < 24;
+  } catch { return false; }
+}
 function breakNow(e, d, now) {
   if (shaken.has(e.id)) return false;
   const t = perc.get(e.id)?.threat, p = e.location;
@@ -12854,14 +12867,16 @@ system.runInterval(() => {
     try {
       if (!S.ours?.length || now - S.t > 40) continue;
       const ours = S.ours.filter((o) => o.isValid && !downed.has(o.id) && !sd(o).surr);
+      const dug = ours.length > 0 && ours.filter(holdingGround).length * 2 >= ours.length;   // (v9.24: holding a position)
       // rout: a squad that's lost half its men and is still losing, with no veterans to steady it
-      if (S.known?.size && S.contactT >= 0 && S.routFor !== S.contactT && (S.startN ?? 0) >= 4 && ours.length <= S.startN / 2 && (S.ratio ?? 1) < 0.8) {
+      // (dug in: only once two-thirds are gone and they're clearly losing)
+      if (S.known?.size && S.contactT >= 0 && S.routFor !== S.contactT && (S.startN ?? 0) >= 4 && ours.length <= S.startN / (dug ? 3 : 2) && (S.ratio ?? 1) < (dug ? 0.6 : 0.8)) {
         const green = ours.filter((o) => vetTier(o) < 2 && traitOf(o) !== "brave" && !OFFICER_IDS.has(o.id) && sd(o).func !== "post" && sd(o).div !== "guard");   // (the sergeant holds)
         if (green.length >= Math.ceil(ours.length / 2) && Math.random() < 0.35) {
           S.routT = now; S.routFor = S.contactT; S.rallied = false; let n = 0;
           for (const o of green) if (breakNow(o, sd(o), now)) n++;
           if (n) {
-            callout(green[0], "Fall back!", { event: true }); radio(green[0], `${squadName(sd(green[0]).faction, sd(green[0]).squad)} is breaking!`, "story"); v9stat("rout");
+            callout(green[0], "Fall back!", { event: true }); radio(green[0], `${squadName(sd(green[0]).faction, sd(green[0]).squad)} is breaking!`, "story"); v9stat(dug ? "routDug" : "rout");
             try {   // (v9.19: whoever has smoke throws it between them and the enemy as they go)
               const kn = [...S.known.values()][0], sm = ours.find((o) => canSmoke(o, sd(o), now));
               if (kn && sm) { const l = sm.location, dx = kn.x - l.x, dz = kn.z - l.z, L = Math.hypot(dx, dz) || 1, k = Math.min(8, L / 2); throwSmoke(sm, { x: l.x + (dx / L) * k, y: l.y, z: l.z + (dz / L) * k }, "covering the retreat"); callout(sm, "Smoke out!", { event: true }); }
@@ -12880,14 +12895,15 @@ system.runInterval(() => {
       }
       if (!S.known?.size) { S.routT = undefined; S.rallied = undefined; S.routFor = undefined; S.whiteFor = undefined; }
       // the white flag: a few men left, hurt, heavily outnumbered and nobody coming
-      if (S.known?.size && setting("isosurr", true) && S.whiteFor !== S.contactT && ours.length && ours.length <= 3 && S.known.size >= ours.length * 3) {
+      // (dug in: two men at most, four to one, badly hurt and after at least half a minute of it)
+      if (S.known?.size && setting("isosurr", true) && S.whiteFor !== S.contactT && ours.length && ours.length <= (dug ? 2 : 3) && S.known.size >= ours.length * (dug ? 4 : 3) && (!dug || S.contactT >= 0 && now - S.contactT > 600)) {
         const hr = ours.reduce((t, o) => { const h = hpOf(o); return t + (h ? h.currentValue / h.effectiveMax : 1); }, 0) / ours.length;
-        if (hr < 0.55 && !ours.some((o) => traitOf(o) === "brave" && vetTier(o) >= 2) && Math.random() < 0.3) {
+        if (hr < (dug ? 0.4 : 0.55) && !ours.some((o) => traitOf(o) === "brave" && vetTier(o) >= 2) && Math.random() < 0.3) {
           S.whiteFor = S.contactT;
           let near; for (const q of S.known.values()) if (q.ent?.isValid) { near = q.ent; break; }
           const fac = near ? factionOf(near) : 0;
           ours.forEach((o, i) => { isoSurrender(o, fac); if (i === 0) system.runTimeout(() => { try { if (o.isValid) equip(o, "banner 1 15"); } catch {} }, 3); });
-          radio(ours[0], `${squadName(sd(ours[0]).faction, sd(ours[0]).squad)} raised a white flag`, "story"); v9stat("whiteFlag");
+          radio(ours[0], `${squadName(sd(ours[0]).faction, sd(ours[0]).squad)} raised a white flag`, "story"); v9stat(dug ? "whiteFlagDug" : "whiteFlag");
         }
       }
     } catch {}
