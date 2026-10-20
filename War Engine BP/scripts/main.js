@@ -813,6 +813,7 @@ function surrender(e, captor) {
   try { sdDrop(e); } catch {}
   const d = sd(e);
   if (d.surr) return;
+  repLoss(e, "surr", d.faction);                                  // (v9.24: the battle report)
   callout(e, "Don't shoot!", { event: true });                   // (v6.6)
   try {                                                          // (v9.5: the nearest enemy soldier covers him)
     const at = { ...e.location }, did = e.dimension.id, f0 = d.faction;
@@ -2021,6 +2022,7 @@ world.beforeEvents.entityHurt.subscribe((ev) => {
 });
 world.afterEvents.entityHurt.subscribe((ev) => {
   try { chronHit(ev.damageSource.damagingEntity, ev.hurtEntity); } catch {}
+  try { repHit(ev.damageSource.damagingEntity, ev.hurtEntity); } catch {}
   const v = ev.hurtEntity;
   if (!v?.isValid || (v.typeId !== SOLDIER && v.typeId !== "minecraft:player" && v.typeId !== HOUND)) return;
   const f = factionOf(v);
@@ -3380,7 +3382,8 @@ async function warTable(player, pre) {
       .dropdown("Content", ["Vanilla (only what the game has: swords, spears, crossbows, vanilla mounts, no add-on vehicles)", "Light (no MG, sniper or bazooka; sensible mounts only)", "Full experience"], { defaultValueIndex: ["vanilla", "light", "full"].indexOf(contentMode()) })
       .toggle("Shields for swordsmen, spearmen and crossbowmen", { defaultValue: setting("shields", true) !== false })
       .toggle("Night battles: muzzle flashes and illumination flares", { defaultValue: setting("nightfx", true) !== false })
-      .toggle("Off duty: soldiers smoke as well as eat (camp life)", { defaultValue: setting("smoking", false) === true });
+      .toggle("Off duty: soldiers smoke as well as eat (camp life)", { defaultValue: setting("smoking", false) === true })
+      .toggle("Battle report in the chat when a fight near you ends", { defaultValue: setting("report", true) !== false });
     const sr = await show(sf, player);
     if (!sr || sr.canceled || !sr.formValues) return;
     sdp(world, "war:set_capture", sr.formValues[0] === 0 ? "neutral" : "surrender");
@@ -3407,6 +3410,7 @@ async function warTable(player, pre) {
     sdp(world, "war:set_shields", !!sr.formValues[20]);
     sdp(world, "war:set_nightfx", !!sr.formValues[21]);
     sdp(world, "war:set_smoking", !!sr.formValues[22]);
+    sdp(world, "war:set_report", !!sr.formValues[23]);
     if (contentMode() !== cm0) player.sendMessage(`§eContent set to ${contentMode()}: soldiers switch their weapons and mounts over as they're near.`);
     player.sendMessage("§aSettings saved.");
     return warTable(player, 5);
@@ -3730,6 +3734,70 @@ world.afterEvents.entityDie.subscribe((ev) => {
     if (b) { b.cas[f] = (b.cas[f] ?? 0) + 1; if (name) b.named.push(name); }
   }
 });
+// ---- v9.24: the battle report. When a fight near you goes quiet for 15 s you get the result in the chat: who held the
+// field, what each side lost (wounded, killed, surrendered), who landed the most hits and the longest hit of the day.
+// Skirmishes (under 10 s, or fewer than 2 men lost) pass without one.
+const REPORTS = []; // { dim, x, y, z, start, last, sides: Map f -> { men: Set, lost: Map id -> kind }, top: Map id -> { n, name, f }, far }
+function repAt(dimId, loc, make) {
+  let r = REPORTS.find((x) => x.dim === dimId && Math.hypot(x.x - loc.x, x.z - loc.z) < 80);
+  if (!r && make && REPORTS.length < 40) { r = { dim: dimId, x: loc.x, y: loc.y, z: loc.z, start: tick(), last: tick(), sides: new Map(), top: new Map(), far: undefined }; REPORTS.push(r); }
+  return r;
+}
+const repSide = (r, f) => { let s = r.sides.get(f); if (!s) { s = { men: new Set(), lost: new Map() }; r.sides.set(f, s); } return s; };
+const repName = (e) => (e.typeId === "minecraft:player" ? e.name : soldierName(e));
+function repHit(a, v) {
+  if (!a?.isValid || !v?.isValid || a.id === v.id) return;
+  if ((a.typeId !== SOLDIER && a.typeId !== "minecraft:player") || (v.typeId !== SOLDIER && v.typeId !== "minecraft:player")) return;
+  const fa = factionOf(a), fv = factionOf(v);
+  if (!fa || !fv || !isHostile(fa, fv)) return;
+  const vl = v.location, r = repAt(v.dimension.id, vl, true); if (!r) return;
+  r.last = tick(); repSide(r, fa).men.add(a.id); repSide(r, fv).men.add(v.id);
+  let t = r.top.get(a.id); if (!t) { t = { n: 0, name: repName(a), f: fa }; r.top.set(a.id, t); } t.n++;
+  const d = dist(a.location, vl); if (!r.far || d > r.far.d) r.far = { d, name: t.name, f: fa };
+}
+function repLoss(e, kind, f) {
+  try {
+    const r = repAt(e.dimension.id, e.location, false); if (!r) return;
+    f ??= factionOf(e); if (!f) return;
+    const s = repSide(r, f), was = s.lost.get(e.id);
+    if (was !== "dead") s.lost.set(e.id, kind); s.men.add(e.id);
+  } catch {}
+}
+system.runInterval(() => {
+  const now = tick();
+  for (let i = REPORTS.length - 1; i >= 0; i--) {
+    const r = REPORTS[i];
+    if (now - r.last < 300) continue;
+    REPORTS.splice(i, 1);
+    try {
+      let lost = 0; for (const s of r.sides.values()) lost += s.lost.size;
+      if (r.last - r.start < 200 || lost < 2 || setting("report", true) === false) continue;
+      const near = world.getAllPlayers().filter((p) => { try { return p.dimension.id === r.dim && Math.hypot(p.location.x - r.x, p.location.z - r.z) < 160; } catch { return false; } });
+      if (!near.length) continue;
+      // who's still standing there
+      const up = new Map();
+      for (const c of nearSnap(r.dim, r, 96)) if ((c.type === SOLDIER || c.type === "minecraft:player") && !c.down && c.f && r.sides.has(c.f)) { try { if (c.type === SOLDIER && sd(c.e).surr) continue; } catch {} up.set(c.f, (up.get(c.f) ?? 0) + 1); }
+      const standing = [...r.sides.keys()].filter((f) => (up.get(f) ?? 0) > 0);
+      let verdict = standing.length === 1 ? `${factionLabel(standing[0])} §aheld the field` : standing.length ? "§7Neither side gave way" : "§7Nobody left standing";
+      if (standing.length > 1) {   // (both still there: whoever lost the smaller share of his men had the better of it)
+        const share = (f) => { const s = r.sides.get(f); return s.lost.size / Math.max(1, s.men.size); };
+        const by = [...standing].sort((a, b) => share(a) - share(b));
+        if (share(by[1]) - share(by[0]) >= 0.25) verdict = `${factionLabel(by[0])} §ahad the better of it`;
+      }
+      const lines = [`§6§l— Battle over —§r §7(${mmss(r.last - r.start)})  ${verdict}`];
+      for (const [f, s] of r.sides) {
+        const k = { down: 0, dead: 0, surr: 0 }; for (const x of s.lost.values()) k[x]++;
+        const bits = [k.dead && `${k.dead} killed`, k.down && `${k.down} wounded`, k.surr && `${k.surr} surrendered`].filter(Boolean).join(", ") || "no losses";
+        lines.push(` ${factionLabel(f)}§7: ${bits} §8(${s.men.size} in the fight)`);
+      }
+      const best = [...r.top.values()].sort((a, b) => b.n - a.n)[0];
+      const extra = [best && best.n >= 2 && `§7Most hits: §f${best.name} §7(${best.n})`, r.far && r.far.d >= 30 && `§7Longest hit: §f${r.far.name} §7(${Math.round(r.far.d)} blocks)`].filter(Boolean).join(" §8· ");
+      if (extra) lines.push(" " + extra);
+      for (const p of near) { try { p.sendMessage(lines.join("\n")); } catch {} }
+    } catch {}
+  }
+}, 20);
+world.afterEvents.entityDie.subscribe((ev) => { try { const e = ev.deadEntity; if (e.typeId === SOLDIER || e.typeId === "minecraft:player") repLoss(e, "dead"); } catch {} });
 function chronFlagCaptured(dim, loc, text) {
   if (!chron) return;
   chron.flags++;
@@ -4318,7 +4386,7 @@ function hitscan(e, spec, from, dir, range, weapon, missed = false) {
     // already, and a man in netherite lasts about three times as long as one in none.)
     preHp(hit.entity);
     if (hit.entity.typeId === "minecraft:player") { try { hit.entity.applyDamage(dmg, { cause: "entityAttack", damagingEntity: e }); } catch { try { hit.entity.applyDamage(dmg); } catch {} } }
-    else if (dmg > 0) try { hit.entity.applyDamage(dmg); } catch {}
+    else if (dmg > 0) { try { hit.entity.applyDamage(dmg); } catch {} try { repHit(e, hit.entity); } catch {} }   // (no damaging entity here: the battle report hears of it directly)
   }
   else if (stopId && blockD < range && SPARK.some((k) => stopId.includes(k)) && Math.random() < 0.5) {   // (v9.19: a ricochet off stone or steel)
     try { const q = { x: from.x + u.x * (blockD - 0.05), y: from.y + u.y * (blockD - 0.05), z: from.z + u.z * (blockD - 0.05) }; dim.spawnParticle("minecraft:critical_hit_emitter", q); if (Math.random() < 0.2) dim.playSound("random.anvil_land", q, { volume: 0.08, pitch: 2 }); } catch {}
@@ -7702,7 +7770,7 @@ function goDown(e, killer) {
     if (!ke) { const k = hurtBy.get(e.id); if (k && now - k.t < 40) ke = world.getEntity(k.id); }
     if (ke?.typeId === SOLDIER) callout(ke, "Target down!");
   } catch {}
-  downed.set(e.id, now + 600); v9stat("wentDown");
+  downed.set(e.id, now + 600); v9stat("wentDown"); repLoss(e, "down");
   downPos.set(e.id, { ...e.location });
   noteKillzone(e);
   sdp(e, "war:downed", now + 600);
@@ -9686,6 +9754,48 @@ system.runInterval(() => {
   farCur = (farCur + per) % n;
   if (farMemo.size > 4000) farMemo.clear();
 }, 1);
+// v9.24: vehicles too. Each one is drawn from its own model, seen from one of 8 sides: the side you're looking at it
+// from (tools/far_vehicles.py renders them). [atlas row, half width, half height, centre above the ground] in blocks.
+const FARV = {"war:boat":[0,4.299,2.15,1.672],"war:plane":[1,5.613,2.807,1.643],"war:tank":[2,3.827,1.913,0.949],"war:truck":[3,3.828,1.914,1.316],"war:gunboat":[4,3.827,1.913,1.21],"war:heli":[5,6.314,3.157,2.06]};
+const farvMemo = new Map(); // id -> { x, y, z, t }
+system.runInterval(() => {
+  let ps; try { ps = world.getAllPlayers(); } catch { return; }
+  if (!ps.length) return;
+  const eyes = [];
+  for (const p of ps) { try { eyes.push({ p, d: p.dimension.id, l: p.getHeadLocation() }); } catch {} }
+  const now = tick();
+  for (const type of VEHICLES) {
+    const spec = FARV[type]; if (!spec) continue;
+    let list; try { list = allOf(type); } catch { continue; }
+    for (const e of list) {
+      try {
+        if (!e.isValid) continue;
+        const l = e.location, did = e.dimension.id;
+        let m = farvMemo.get(e.id);
+        if (!m) { m = { x: l.x, y: l.y, z: l.z, t: now }; farvMemo.set(e.id, m); }
+        const gap = Math.max(1, now - m.t), vx = (l.x - m.x) / gap, vy = (l.y - m.y) / gap, vz = (l.z - m.z) / gap;
+        m.x = l.x; m.y = l.y; m.z = l.z; m.t = now;
+        const sp = Math.hypot(vx, vy, vz), move = sp > 0.01 && sp < 3;   // (blocks a tick; a teleport isn't driving)
+        let f;
+        for (const v of eyes) {
+          if (v.d !== did) continue;
+          const dx = v.l.x - l.x, dz = v.l.z - l.z, dd = Math.hypot(dx, l.y - v.l.y, dz);
+          if (dd <= FAR_IN || dd > FAR_OUT) continue;
+          f ??= fwdFromYaw(e.getRotation().y);
+          const rel = Math.atan2(f.x * dz - f.z * dx, f.x * dx + f.z * dz), col = ((Math.round(rel / (Math.PI / 4)) % 8) + 8) % 8;
+          const mv = new MolangVariableMap();
+          mv.setFloat("variable.u", col * 128); mv.setFloat("variable.v", spec[0] * 64);
+          mv.setFloat("variable.w", spec[1]); mv.setFloat("variable.h", spec[2]);
+          mv.setFloat("variable.spd", move ? sp * 20 : 0);
+          mv.setFloat("variable.dx", move ? vx / sp : 0); mv.setFloat("variable.dy", move ? vy / sp : 0); mv.setFloat("variable.dz", move ? vz / sp : 0);
+          mv.setFloat("variable.life", (FAR_EVERY * 2 + 1) / 20);
+          v.p.spawnParticle("war:farv", { x: l.x, y: l.y + spec[3], z: l.z }, mv);
+        }
+      } catch {}
+    }
+  }
+  if (farvMemo.size > 500) farvMemo.clear();
+}, FAR_EVERY);
 const stepping = new Set(); // soldiers following a route of their own right now (the edge guard watches only them)
 // v6.2: out of range. Beyond the game's simulation distance (4 chunks by default, ~64 blocks from every player) the land
 // is still loaded but mobs don't move at all: their own walking simply doesn't run. A squad sent far away used to walk

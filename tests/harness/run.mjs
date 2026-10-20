@@ -295,6 +295,18 @@ const S = {
     report({ shots: s.length, ok: s.length > 0 });
   },
 
+  // v9.24: far sight for vehicles: the side of the tank you're looking at
+  async farv() {
+    spawnPlayer({ x: 0.5, y: 0, z: 0.5 });
+    const out = {};
+    for (const yaw of [0, 90, 180, 270]) {
+      const t = overworld.spawnEntity("war:tank", { x: 0.5, y: 0, z: 100.5 }); t.rot = { x: 0, y: yaw };
+      SIM.farv = []; step(8);
+      out[yaw] = SIM.farv.map((q) => q.v["variable.u"] / 128).join(",");
+      t.remove(); step(1);
+    }
+    report({ cols: out });
+  },
   // v9.22: a shootout with a player who keeps hitting them: do they step side to side (and keep firing)?
   async duel() {
     spawnPlayer({ x: 0.5, y: 0, z: 20.5 });
@@ -502,7 +514,9 @@ const S = {
       if (up(1) <= n1 * 0.25 || up(2) <= n2 * 0.25) break;
     }
     const u1 = up(1) / n1, u2 = up(2) / n2;
-    report({ ticks: SIM.tick - t0, firstHit, winner: u1 > u2 ? 1 : u2 > u1 ? 2 : 0, up1: up(1), up2: up(2), dead1: n1 - alive(1).length, dead2: n2 - alive(2).length, down1: alive(1).length - up(1), down2: alive(2).length - up(2), dmgBy, miss: globalThis.__MS, pAvg: globalThis.__P ? +(globalThis.__P.sum / globalThis.__P.n).toFixed(3) : undefined, shots1: shotStats(1), shots2: shotStats(2) });
+    if (opt.after) step(Number(opt.after));   // (v9.24: then quiet, for the battle report)
+    const battleReport = opt.after ? SIM.log.filter((l) => l.includes("Battle over")) : undefined;
+    report({ battleReport, ticks: SIM.tick - t0, firstHit, winner: u1 > u2 ? 1 : u2 > u1 ? 2 : 0, up1: up(1), up2: up(2), dead1: n1 - alive(1).length, dead2: n2 - alive(2).length, down1: alive(1).length - up(1), down2: alive(2).length - up(2), dmgBy, miss: globalThis.__MS, pAvg: globalThis.__P ? +(globalThis.__P.sum / globalThis.__P.n).toFixed(3) : undefined, shots1: shotStats(1), shots2: shotStats(2) });
   },
 
   // v6.0: a march that runs into an enemy position off to the side: do they deal with it, then carry on (no ping-pong)?

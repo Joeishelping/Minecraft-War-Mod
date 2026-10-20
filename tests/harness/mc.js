@@ -193,7 +193,7 @@ export class Player extends Entity {
   constructor(loc, dim) { super("minecraft:player", loc, dim); this.isPlayer = true; this.name = "Tester"; this.onScreenDisplay = { setActionBar: (t) => SIM.log.push(`[bar] ${t}`), setTitle() {} }; this.camera = { setCamera() {}, clear() {} }; this.hp = 20; this.maxHp = 20; }
   sendMessage(m) { SIM.log.push(`[msg] ${m}`); }
   playSound() {}
-  spawnParticle(id) { count("spawnParticle"); if (id === "war:far") SIM.farDrawn = (SIM.farDrawn ?? 0) + 1; }
+  spawnParticle(id, at, mv) { count("spawnParticle"); if (id === "war:far") SIM.farDrawn = (SIM.farDrawn ?? 0) + 1; if (id === "war:farv") (SIM.farv ??= []).push({ at, v: mv?.v }); }
 }
 function damage(v, amount, src, cause) {
   if (!v._valid || v.static) return false;
@@ -323,7 +323,7 @@ export const GameMode = { Creative: "Creative", Survival: "Survival", Adventure:
 export const EquipmentSlot = { Mainhand: "Mainhand", Offhand: "Offhand", Head: "Head", Chest: "Chest", Legs: "Legs", Feet: "Feet" };
 export class ItemStack { constructor(id, n = 1) { this.typeId = id.includes(":") ? id : `minecraft:${id}`; this.amount = n; } }
 export const EntityDamageCause = {};
-export class MolangVariableMap { setFloat() {} setColorRGB() {} setColorRGBA() {} setVector3() {} setSpeedAndDirection() {} }
+export class MolangVariableMap { setFloat(k, x) { (this.v ??= {})[k] = x; } setColorRGB() {} setColorRGBA() {} setVector3() {} setSpeedAndDirection() {} }
 export const BlockPermutation = { resolve: (id) => ({ id }) };
 
 // ---------------------------------------------------------------- vanilla-ish navigation (A* on the grid; no ladders)
