@@ -1,5 +1,30 @@
 # War Engine changelog
 
+## v9.25.0 (They march over real land, and they fight back)
+
+Everything here was found by testing on a real generated world (hills, forests, swamps, lakes) instead of the flat
+test floors: a 10-man squad marched 210 blocks into a 6-man ambush.
+
+- **They fight back.** Before, the squad fired 6 shots in 80 s while the ambush shot them down: a man held fire
+  unless his target was in the clear on all four edges of his aim, which through trees, over a crest or past a fence
+  post is almost never, and nothing moved him to a better spot. Now a man half behind cover is a target (fewer hits),
+  and a man whose shots keep being refused goes and finds a clear line, or closes in. Same ambush now: the squad fires
+  back 130-200 rounds, wipes the ambush out and carries on with 7-9 of its 10 men.
+- **They march properly over rough ground.** Before, the squad stood still 80% of the time:
+  - Minecraft's own walking stalls on slopes, grass and flowers: a man who hasn't moved for a second on rough ground
+    is now carried past the spot.
+  - In the open nobody queues any more: each man keeps his own lane beside the route, so the squad moves as a body of
+    men, not single file on one line that jammed at every step up a slope (single file only at stairs, doors,
+    ladders and drops).
+  - The squad no longer waits for men stuck behind it (they're dealt with by the stuck-handling): three men snagged
+    on one spot used to hold everyone else standing beside them.
+  - Vines hanging to the ground (swamps, jungles) are walked through, not climbed: a whole squad queued at a swamp's
+    edge to "climb the ladder" one man at a time.
+  - A 210-block march over hills now takes about 1.5 minutes instead of stalling for minutes.
+- **Bodies don't fly into the sky.** Men killed bunched on one spot left bodies that climbed over each other every
+  tick, a tower of bodies up to 10 blocks high. Bodies now land on what's under them and slide off a heap, never
+  rise higher than the blow could throw them, and a man who dies inside a wall is laid out beside it.
+
 ## v9.24.0 (Battle reports, far-off vehicles, men who hold their ground)
 
 - Battle report: when a fight near you goes quiet for 15 s, the chat tells you how it went: who held the field (or had
