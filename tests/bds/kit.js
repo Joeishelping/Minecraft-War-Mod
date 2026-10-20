@@ -37,7 +37,7 @@ const KSHOTS = [];
 function kitSeeAny(o, from) {
   const f = Number(P(o, "war:faction") ?? 0);
   for (const e of kitSoldiers()) {
-    if (e.id === o.id || isDown(e) || Number(P(e, "war:faction")) === f || dist(e.location, from) > 80) continue;
+    if (e.id === o.id || isDown(e) || Number(P(e, "war:faction")) === f || dist(e.location, from) > 220) continue;
     for (const hy of [0.6, 1.2, 1.7]) if (openNow(o.dimension, from, { x: e.location.x, y: e.location.y + hy, z: e.location.z })) return true;
   }
   return false;

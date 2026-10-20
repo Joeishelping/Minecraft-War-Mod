@@ -5750,7 +5750,12 @@ system.runInterval(() => {
     // carried through stairs and doors, single file where it's tight, side by side in the open). Nobody waits for
     // anybody behind him; only a man far out in front eases off so the squad doesn't string out over 100 blocks.
     const progOf = new Map(members.map((e) => [e.id, routeProgress(m, e.location, e.id)]));
-    const prog = [...progOf.values()].sort((a, b) => b - a);
+    // (v9.25: a man who's made no progress for 10 s is stuck (the stuck-handling deals with him): the squad doesn't
+    //  wait for him. Three men snagged on one spot used to hold everyone else beside them, "bunched up and confused")
+    m.progMem ??= new Map();
+    for (const [id, i0] of progOf) { const pm = m.progMem.get(id); if (!pm || i0 > pm.i + 1) m.progMem.set(id, { i: i0, t: now }); }
+    const moving = [...progOf].filter(([id]) => now - (m.progMem.get(id)?.t ?? now) < 200).map(([, i0]) => i0);
+    const prog = (moving.length >= Math.ceil(members.length / 3) ? moving : [...progOf.values()]).sort((a, b) => b - a);
     const lead = prog[0], tail = prog[Math.floor((prog.length - 1) * 0.7)];
     // real contact (an enemy soldier or player, never a mob): the squad stops and fights for up to ~20 s, then moves on
     let contact = members.some((e) => combatLock.has(e.id));
