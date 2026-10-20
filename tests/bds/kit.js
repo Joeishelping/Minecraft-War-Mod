@@ -2739,3 +2739,26 @@ KS.mouths = async (o, ox, oz) => {
   r.msOld = tOld; r.msNew = tNew;
   return r;
 };
+// v9.23: battle pace on the real game: two lines of n facing each other `dist` apart, holding; ends when one side has
+// <= 25% on its feet (or `max` ticks). pace=normal|fast|slow sets the Battle pace for this run.
+KS.pace = async (o, ox, oz) => {
+  const n = Number(o.n ?? 10), D = Number(o.dist ?? 50), max = Number(o.max ?? 4800);
+  if (o.pace) sdp(world, "war:set_pace", String(o.pace));
+  floorAt(ox - 30, oz - D / 2 - 12, ox + 30, oz + D / 2 + 12);
+  for (const [x, z] of [[-14, -10], [10, -14], [0, -4], [16, -6]]) for (const k of [1, -1]) kfill(Math.min(ox + x * k, ox + x * k + 3 * k), Y, oz + z * k, Math.max(ox + x * k, ox + x * k + 3 * k), Y, oz + z * k, "cobblestone");
+  terrainForget();
+  setRelPair(1, 2, "1", false);
+  const W8 = ["rifle", "smg", "semi", "mg", "rifle", "semi", "smg", "rifle"], a = [], b = [];
+  for (let i = 0; i < n; i++) {
+    const x = (i % 8) * 2.5 - 8.75;
+    const s1 = kitSoldier(1, { x: ox - x, y: Y, z: oz - D / 2 - Math.floor(i / 8) * 2.5 + 0.5 }, W8[i % 8], "hold"); s1.setRotation({ x: 0, y: 0 }); a.push(s1);
+    const s2 = kitSoldier(2, { x: ox + x, y: Y, z: oz + D / 2 + Math.floor(i / 8) * 2.5 + 0.5 }, W8[i % 8], "hold"); s2.setRotation({ x: 0, y: 180 }); b.push(s2);
+  }
+  const up = (L) => L.filter((e) => e.isValid && !downed.has(e.id) && !isDown(e)).length;
+  const t0 = tick(); let firstDown = -1, t = 0;
+  await kitLoop(max, () => { t = tick() - t0; if (firstDown < 0 && (up(a) < n || up(b) < n)) firstDown = t; return up(a) <= n * 0.25 || up(b) <= n * 0.25; });
+  const r = { pace: String(setting("pace", "normal")), seconds: +((tick() - t0) / 20).toFixed(1), firstDownS: +(firstDown / 20).toFixed(1), up1: up(a), up2: up(b), winner: up(a) > up(b) ? 1 : up(b) > up(a) ? 2 : 0, ...kitShotStats(t0) };
+  sdp(world, "war:set_pace", undefined);
+  for (const e of [...a, ...b]) try { e.remove(); } catch {}
+  return r;
+};

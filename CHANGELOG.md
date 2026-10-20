@@ -1,5 +1,24 @@
 # War Engine changelog
 
+## v9.23.0 (Battles that last, and fights that are fair)
+
+- Battles were over in seconds, and an even-looking fight was a coin flip. Measured: two squads of 12 meeting in the
+  open were decided in ~16 s with half of all rounds hitting at 25 blocks, and a force of 16 beat one of 10 only half
+  the time (whoever fired first won).
+  - A round the dice called a miss now really misses (it used to pass so close it often went through the man's head
+    anyway: at range half of all hits were "misses").
+  - New: War Table -> Settings -> Realism -> Battle pace. Normal (the new default) is about 40% as deadly as before,
+    stray rounds into a crowd included. Firefights now last: a 12 v 12 meeting ~30 s, a shootout at 60 blocks a
+    minute or two (real server: 73-176 s), an assault on men behind a wall ~1.5 min. Cover and numbers decide them:
+    16 against 10 won 8 times in 8, defenders behind a wall 8 in 8. Fast is the old pace; Slow is longer still.
+    The Arcade preset sets Fast, Realistic and Cinematic set Normal.
+- Fair fights:
+  - Two men who saw each other in the same moment: the one earlier in the game's list always fired first, so in an
+    even fight the army spawned first won 7 battles in 8. The turn order now changes every time.
+  - Soldiers far from every player look and think less often (to save work). With you standing behind one army, the
+    other counted as "far" and lost an even fight 8 times in 8. A man in a fight now counts as far only at twice the
+    distance; with you behind one side the even fight went 4-6 and 3-7.
+
 ## v9.22.0 (Smoother, and three bugs gone)
 
 Fixes:
