@@ -1408,7 +1408,9 @@ const THINK_MAX = 24;
 // are read once a second.
 let PLAYER_POS = [];
 system.runInterval(() => { try { PLAYER_POS = world.getAllPlayers().map((p) => ({ d: p.dimension.id, x: p.location.x, z: p.location.z })); const xv = globalThis.__viewers?.(); if (xv) PLAYER_POS.push(...xv); } catch {} }, 20);   // (__viewers: test kits only)
-const farFromPlayers = (e) => { const l = e.location, d = e.dimension.id, R = FAR_R(); for (const p of PLAYER_POS) if (p.d === d && Math.abs(p.x - l.x) < R && Math.abs(p.z - l.z) < R) return false; return true; };   // (v9.22: closer in on Low, or in a huge battle)
+// (v9.23: a man in a fight counts as far only at twice the distance: with you behind one army the other used to be "far",
+//  looked and thought half as often, and lost an even fight 8 times in 8)
+const farFromPlayers = (e, hot = false) => { const l = e.location, d = e.dimension.id, R = FAR_R() * (hot ? 2 : 1); for (const p of PLAYER_POS) if (p.d === d && Math.abs(p.x - l.x) < R && Math.abs(p.z - l.z) < R) return false; return true; };   // (v9.22: closer in on Low, or in a huge battle)
 let thinkCursor = 0, thinkAcc = 0;
 const thinkPass = new Map(), g2Done = new Set();
 system.runInterval(() => {
@@ -1434,7 +1436,7 @@ system.runInterval(() => {
       const pass = (thinkPass.get(e.id) ?? 0) + 1; thinkPass.set(e.id, pass);
       const hot = isHot(e, now);
       if (!hot && pass % 3) continue;
-      if (pass % (hot ? (lodOn() ? 4 : 2) : 6) && farFromPlayers(e)) continue;                    // (v9.2: nobody near to see him; v9.22: a huge battle: the far ones decide half as often)
+      if (pass % (hot ? (lodOn() ? 4 : 2) : 6) && farFromPlayers(e, hot)) continue;                    // (v9.2: nobody near to see him; v9.22: a huge battle: the far ones decide half as often)
       think(e);
     } catch (err) { oops("think", err); }
   }
@@ -3342,14 +3344,17 @@ async function warTable(player, pre) {
     if (which.selection === 3) { await factionSkinMenu(player); return warTable(player, 5); }
     if (which.selection === 2) {
       const cur = (k) => Math.round(Number(setting(k, 100)));
+      const PACES = ["fast", "normal", "slow"];
       const rf = new ModalFormData().title("Realism")
+        .dropdown("Battle pace", ["Fast (the old pace: over in seconds, first to fire wins)", "Normal (firefights last; cover and numbers decide)", "Slow (long, careful battles)"], { defaultValueIndex: Math.max(0, PACES.indexOf(String(setting("pace", "normal")))) })
         .slider("Damage (% of normal)", 25, 200, { valueStep: 25, defaultValue: cur("r_dmg") })
         .slider("Reaction speed (% of normal)", 50, 200, { valueStep: 25, defaultValue: cur("r_react") });
       const rr = await show(rf, player);
       if (!rr || rr.canceled || !rr.formValues) return;
-      sdp(world, "war:set_r_dmg", Math.round(Number(rr.formValues[0])));
-      sdp(world, "war:set_r_react", Math.round(Number(rr.formValues[1])));
-      player.sendMessage(`§aRealism saved: damage ${rr.formValues[0]}%, reaction speed ${rr.formValues[1]}%.`);
+      sdp(world, "war:set_pace", PACES[Number(rr.formValues[0])] ?? "normal");   // (v9.23)
+      sdp(world, "war:set_r_dmg", Math.round(Number(rr.formValues[1])));
+      sdp(world, "war:set_r_react", Math.round(Number(rr.formValues[2])));
+      player.sendMessage(`§aRealism saved: ${PACES[Number(rr.formValues[0])] ?? "normal"} battles, damage ${rr.formValues[1]}%, reaction speed ${rr.formValues[2]}%.`);
       return warTable(player, 5);
     }
     const sf = new ModalFormData().title("Settings")
@@ -4232,6 +4237,12 @@ system.runInterval(() => {
 const HIT_DMG = { rifle: 7, semi: 6, smg: 4, mg: 5, shotgun: 9, pistol: 5, sniper: 12 };
 const HIT_CHANCE = { rifle: [0.7, 0.25, 70], semi: [0.65, 0.22, 60], smg: [0.6, 0.08, 40], mg: [0.5, 0.15, 70], shotgun: [0.8, 0.05, 25], pistol: [0.55, 0.08, 35], sniper: [0.85, 0.5, 150] };   // [chance close (8 blocks), chance far, "far" in blocks]
 const preciseHits = () => setting("bullets", "precise") !== "pack";
+// v9.23: Battle pace (War Table -> Settings -> General). How likely a round is to hit, on top of weapon and range:
+// battles were over in seconds (two squads of 12 meeting in the open: decided in ~16 s, half of all rounds hitting at
+// 25 blocks). Normal (the default) is about half as deadly: firefights last, cover and numbers and the plan decide them.
+// Fast is the old pace; Slow is longer still. (Snipers and point blank stay deadly: the cut is the same everywhere.)
+const PACE = { fast: 1, normal: 0.4, slow: 0.25 };
+const battlePace = () => PACE[String(setting("pace", "normal"))] ?? PACE.normal;
 const NOT_HITTABLE = ["war:corpse", WAYPOINT, FLAG, "war:blank", "war:bomb", "war:shell", "minecraft:item", "minecraft:xp_orb", "minecraft:arrow", "minecraft:armor_stand"];
 function hittable(o, shooter) {
   try {
@@ -4268,7 +4279,7 @@ function armorHit(v, head) {
 const PIERCE = ["glass", "pane", "leaves", "wool", "carpet", "planks", "_door", "trapdoor", "fence", "sign", "banner", "hay", "ladder", "scaffolding", "bamboo", "ice", "barrel", "bookshelf", "chest", "crafting_table"];
 const SPARK = ["stone", "brick", "iron", "copper", "deepslate", "andesite", "diorite", "granite", "basalt", "blackstone", "concrete", "terracotta", "quartz", "prismarine", "obsidian", "anvil", "chain", "lantern", "rail", "cauldron", "tuff"];
 const pierces = (id) => !id.includes("iron") && PIERCE.some((k) => id.includes(k));
-function hitscan(e, spec, from, dir, range, weapon) {
+function hitscan(e, spec, from, dir, range, weapon, missed = false) {
   const dim = e.dimension, n = Math.hypot(dir.x, dir.y, dir.z) || 1, u = { x: dir.x / n, y: dir.y / n, z: dir.z / n };
   let blockD = range, pierceAt = Infinity, stopId = "";
   try {
@@ -4290,6 +4301,7 @@ function hitscan(e, spec, from, dir, range, weapon) {
   try {
     const hits = dim.getEntitiesFromRay(from, u, pierceAt < Infinity ? { maxDistance: blockD + 0.3, ignoreBlockCollision: true } : { maxDistance: blockD + 0.3 }).sort((a, b) => a.distance - b.distance);   // (v9.19: past the pane it went through)
     for (const r of hits) { if (r.distance > blockD + 0.3) break; if (hittable(r.entity, e)) { hit = r; break; } }
+    if (hit && missed && Math.random() >= battlePace()) hit = undefined;   // (v9.23: a round the dice called a miss, into a crowd: the Battle pace decides whether it finds someone else (Fast: always, as before))
   } catch {}
   const end = hit ? hit.distance : blockD;
   if (RD.size) try { rdShot(dim, from, u, end); } catch {}                // (v9.14: rounds kick the bodies they pass through)
@@ -4437,19 +4449,24 @@ function fireGun(e, spec, t, aim) {
     const w = onNestW(e) ?? sd(e).weapon, HC = HIT_CHANCE[w] ?? HIT_CHANCE.rifle;
     let p = HC[0] + (HC[1] - HC[0]) * Math.max(0, Math.min(1, (l - 8) / Math.max(1, HC[2] - 8)));
     p /= Math.max(1, spec.spread / ((GUN_SPEC[w] ?? spec).spread || spec.spread));   // (shaky: wounded, pinned, just turned)
+    p *= battlePace();                                                 // v9.23: Battle pace (War Table -> Settings)
     try { const v = t.getVelocity(); if (Math.hypot(v.x, v.z) > 0.08) p *= 0.8; } catch {}
     if ((poseOf.get(t.id) ?? 0) >= 1) p *= 0.85;
     const ux = dx / n, uy = dy / n, uz = dz / n, hz = Math.hypot(ux, uz) || 1, px = -uz / hz, pz = ux / hz;
-    let shot;
+    let shot, missed = false;
     if (Math.random() < p) shot = { x: ux + r() * 0.3, y: uy + r() * 0.3, z: uz + r() * 0.3 };
     else {
-      const off = (0.6 + Math.random() * 0.9) / Math.max(2, l);
-      const sides = [{ x: ux + px * off, y: uy + r() * 0.3, z: uz + pz * off }, { x: ux - px * off, y: uy + r() * 0.3, z: uz - pz * off }, { x: ux + r() * 0.3, y: uy + off, z: uz + r() * 0.3 }].sort(() => Math.random() - 0.5);
+      missed = true;
+      // (v9.23: a miss clears him: 0.75-1.75 blocks to a side or over his head. It used to be 0.6-1.5 from his middle,
+      //  and a "miss" over him at range still went through his head: in a firefight at 60 blocks half of all hits
+      //  were rounds the dice had called misses, so the hit chance did almost nothing)
+      const off = (0.75 + Math.random() * 1.0) / Math.max(2, l), up = (0.9 + Math.random() * 0.9) / Math.max(2, l);
+      const sides = [{ x: ux + px * off, y: uy + r() * 0.3, z: uz + pz * off }, { x: ux - px * off, y: uy + r() * 0.3, z: uz - pz * off }, { x: ux + r() * 0.3, y: uy + up, z: uz + r() * 0.3 }].sort(() => Math.random() - 0.5);
       const reach = l + 1.5;
       shot = sides.find((d) => { const dl = Math.hypot(d.x, d.y, d.z) || 1; return openNow(e.dimension, fv, { x: fv.x + (d.x / dl) * reach, y: fv.y + (d.y / dl) * reach, z: fv.z + (d.z / dl) * reach }); });   // (a miss past him on a side that's open: not into the frame beside him)
       if (!shot) { if (g) g.coverMiss = (g.coverMiss ?? 0) + 1; return false; }                    // (boxed in by cover all round: he's not really in the open)
     }
-    hitscan(e, spec, fv, shot, Math.min(spec.fire + 20, 220), w); noteShot(e); return true;
+    hitscan(e, spec, fv, shot, Math.min(spec.fire + 20, 220), w, !!missed); noteShot(e); return true;
   }
   for (let k = 0; k < 3 && !dir; k++) {
     const dv = { x: dx / n + r(), y: dy / n + r(), z: dz / n + r() };
@@ -4628,9 +4645,16 @@ function gunTick(e, now) {
     if (Math.random() < 0.6 && perc.get(e.id)?.threat) callout(e, "Reloading!");   // (not every reload, and only in a fight)
   }
 }
+// v9.23: whose turn first. A round lands the moment it's fired, so when two men see each other in the same tick the one
+// earlier in the list fired first, every time: in an even fight the army spawned first won 7 battles in 8. The order
+// now starts at a different man each pass and alternates direction: over a fight nobody gets the first shot more often.
+let gunTurn = 0;
 system.runInterval(() => {
-  const now = tick();
-  for (const e of allOf(SOLDIER)) {
+  const now = tick(), all = allOf(SOLDIER), n = all.length;
+  gunTurn = (gunTurn + 7919) % 1000003;
+  const start = n ? gunTurn % n : 0, back = (gunTurn & 1) === 1;
+  for (let k = 0; k < n; k++) {
+    const e = all[back ? (start - k + n) % n : (start + k) % n];
     try {
       const st = gunState.get(e.id);
       if (st && !st.target && !(st.supp && st.supp.until > now) && now < st.check && !(now - st.seen < 42)) continue;   // v5.7: nothing to aim at until his next look
@@ -5005,7 +5029,7 @@ system.runInterval(() => {
         const pass = (percPass.get(e.id) ?? 0) + 1; percPass.set(e.id, pass);
         const hot = isHot(e, now);
         if (!hot && pass % 3) continue;
-        if (pass % (hot ? (lodOn() ? 4 : 2) : 6) && farFromPlayers(e)) continue;                  // (v9.2; v9.22: a huge battle: the far ones look about half as often)
+        if (pass % (hot ? (lodOn() ? 4 : 2) : 6) && farFromPlayers(e, hot)) continue;                  // (v9.2; v9.22: a huge battle: the far ones look about half as often)
         perceive(e, now);
       } catch (err) { oops("perception", err); }
     }
@@ -13692,9 +13716,9 @@ async function perfMenu(p) {
 }
 // ---- quick presets: many settings at once
 const PRESETS = {
-  realistic: { name: "Realistic", desc: "Surrender, shields, kneeling, drills, gore; real damage; radio: important only", set: { ammo: true, isosurr: true, shields: true, poses: true, drills: true, gore: true, nightfx: true, commit: true, radio: 1, r_dmg: 100, r_react: 100 } },
-  arcade: { name: "Arcade", desc: "No surrender, quicker kills, faster reactions, no gore, quiet radio", set: { ammo: false, isosurr: false, shields: true, poses: false, drills: true, gore: false, nightfx: true, commit: true, radio: 0, r_dmg: 150, r_react: 140 } },
-  cinematic: { name: "Cinematic", desc: "Everything that looks good: gore, night flares, kneeling, all radio chatter, more bodies with physics", set: { ammo: true, isosurr: true, shields: true, poses: true, drills: true, gore: true, nightfx: true, commit: true, radio: 2, r_dmg: 100, r_react: 100, perf: "high" } },
+  realistic: { name: "Realistic", desc: "Normal battle pace; surrender, shields, kneeling, drills, gore; real damage; radio: important only", set: { pace: "normal", ammo: true, isosurr: true, shields: true, poses: true, drills: true, gore: true, nightfx: true, commit: true, radio: 1, r_dmg: 100, r_react: 100 } },
+  arcade: { name: "Arcade", desc: "Fast battles, no surrender, quicker kills, faster reactions, no gore, quiet radio", set: { pace: "fast", ammo: false, isosurr: false, shields: true, poses: false, drills: true, gore: false, nightfx: true, commit: true, radio: 0, r_dmg: 150, r_react: 140 } },
+  cinematic: { name: "Cinematic", desc: "Everything that looks good: gore, night flares, kneeling, all radio chatter, more bodies with physics", set: { pace: "normal", ammo: true, isosurr: true, shields: true, poses: true, drills: true, gore: true, nightfx: true, commit: true, radio: 2, r_dmg: 100, r_react: 100, perf: "high" } },
 };
 async function presetMenu(p) {
   const keys = Object.keys(PRESETS);

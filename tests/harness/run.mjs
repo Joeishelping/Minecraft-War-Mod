@@ -472,6 +472,39 @@ const S = {
     report({ ticks: SIM.tick - t0, str1: +up(1).toFixed(2), str2: +up(2).toFixed(2), left1: alive(1).filter((e) => !W.isDowned(e)).length, left2: alive(2).filter((e) => !W.isDowned(e)).length, shots1: shotStats(1), shots2: shotStats(2), bunchAvg: +(M.bunchPairs / M.bunchSamples).toFixed(2), notes: M.notes });
   },
 
+  // v9.23: battle pace and who wins. Two forces at range on open ground (mirror-symmetric low walls), modes:
+  //   meet   both sides advance on each other          attack  side 1 advances on side 2, which holds
+  //   hold   both hold where they are (a shootout)
+  // cover=1 puts side 2 behind a waist-high wall. Ends when one side has <= 25% on its feet (or the time limit).
+  async armies() {
+    SIM.bounds = { x0: -120, x1: 120, z0: -120, z1: 120, y0: -10, y1: 60 };
+    const n1 = Number(opt.n1 ?? 12), n2 = Number(opt.n2 ?? 12), D = Number(opt.dist ?? 60), mode = opt.mode ?? "meet";
+    for (const [x, z] of [[-14, -14], [10, -20], [0, -6], [18, -8]]) for (const k of [1, -1]) fill(Math.min(x * k, x * k + 3 * k), 0, z * k, Math.max(x * k, x * k + 3 * k), 0, z * k, "cobblestone");   // a few low walls, mirrored
+    if (opt.cover) { const zc = (opt.flip ? -1 : 1) * (D / 2 - 2); fill(-16, 0, zc, 16, 0, zc, "cobblestone"); }                                                         // side 2's wall
+    spawnPlayer({ x: Number(opt.px ?? 50), y: 0, z: Number(opt.pz ?? 0) });   // (the same distance from both sides: soldiers far from every player think less often)
+    const W8 = ["rifle", "smg", "semi", "mg", "rifle", "semi", "smg", "rifle"];
+    const place = (f, n, z0, dir, func) => { const out = []; for (let i = 0; i < n; i++) { const e = soldier(f, { x: dir * ((i % 8) * 2.5 - 8.75), y: 0, z: z0 + dir * (Math.floor(i / 8) * 2.5 + 0.5) }, W8[i % 8], 1, func); /* (point-mirrored like the walls) */ try { e.setRotation({ x: 0, y: dir < 0 ? 0 : 180 }); } catch {} out.push(e); } return out; };   // (each side facing the other)
+    if (opt.pace) MC.world.setDynamicProperty("war:set_pace", opt.pace);   // (Battle pace setting)
+    const fl = opt.flip ? -1 : 1;   // (flip=1: faction 1 on the north side instead: is it the side or the faction?)
+    if (Number(opt.seed ?? 0) % 2) { place(2, n2, fl * D / 2, fl, "hold"); place(1, n1, -fl * D / 2, -fl, "hold"); } else { place(1, n1, -fl * D / 2, -fl, "hold"); place(2, n2, fl * D / 2, fl, "hold"); }   // (who's first in the lists: alternated)
+    W.setRelPair(1, 2, "1", false);
+    step(20);
+    const go = [];
+    if (mode === "meet" || mode === "attack") go.push(order(1, { x: 0, y: 0, z: fl * D / 2 }));
+    if (mode === "meet") go.push(order(2, { x: 0, y: 0, z: -fl * D / 2 }));
+    await Promise.all(go);   // (both told at once)
+    const dmgBy = {}; MC.world.afterEvents.entityHurt.subscribe((ev) => { try { if (ev.hurtEntity.typeId !== SOLDIER) return; const a = ev.damageSource.damagingEntity; const k = `${ev.damageSource.cause}:${a ? (a.typeId === SOLDIER ? W.sd(a).weapon : a.typeId) : "-"}`; dmgBy[k] = (dmgBy[k] ?? 0) + Math.round(ev.damage); } catch {} });
+    const t0 = SIM.tick, up = (f) => alive(f).filter((e) => !W.isDowned(e)).length;
+    let firstHit = -1;
+    for (let t = 0; t < Number(opt.ticks ?? 6000); t += 10) {
+      step(10);
+      if (firstHit < 0 && (up(1) < n1 || up(2) < n2)) firstHit = SIM.tick - t0;
+      if (up(1) <= n1 * 0.25 || up(2) <= n2 * 0.25) break;
+    }
+    const u1 = up(1) / n1, u2 = up(2) / n2;
+    report({ ticks: SIM.tick - t0, firstHit, winner: u1 > u2 ? 1 : u2 > u1 ? 2 : 0, up1: up(1), up2: up(2), dead1: n1 - alive(1).length, dead2: n2 - alive(2).length, down1: alive(1).length - up(1), down2: alive(2).length - up(2), dmgBy, miss: globalThis.__MS, pAvg: globalThis.__P ? +(globalThis.__P.sum / globalThis.__P.n).toFixed(3) : undefined, shots1: shotStats(1), shots2: shotStats(2) });
+  },
+
   // v6.0: a march that runs into an enemy position off to the side: do they deal with it, then carry on (no ping-pong)?
   async marchContact() {
     SIM.bounds = { x0: -80, x1: 80, z0: -30, z1: 220, y0: -10, y1: 60 };
