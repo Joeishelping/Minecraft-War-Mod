@@ -2741,6 +2741,8 @@ KS.mouths = async (o, ox, oz) => {
 };
 // v9.23: battle pace on the real game: two lines of n facing each other `dist` apart, holding; ends when one side has
 // <= 25% on its feet (or `max` ticks). pace=normal|fast|slow sets the Battle pace for this run.
+// world-level state (settings, faction data) as the soldiers see it
+KS.wdp = async () => { const o = {}; for (const id of world.getDynamicPropertyIds()) { const v = world.getDynamicProperty(id); const t = typeof v === "string" ? v.slice(0, 160) : v; if (!/^war:(chron|purge|blk|dp|idr|cache)/.test(id)) o[id] = t; } return o; };
 KS.pace = async (o, ox, oz) => {
   const n = Number(o.n ?? 10), D = Number(o.dist ?? 50), max = Number(o.max ?? 4800);
   if (o.pace) sdp(world, "war:set_pace", String(o.pace));
@@ -2751,13 +2753,16 @@ KS.pace = async (o, ox, oz) => {
   const W8 = ["rifle", "smg", "semi", "mg", "rifle", "semi", "smg", "rifle"], a = [], b = [];
   for (let i = 0; i < n; i++) {
     const x = (i % 8) * 2.5 - 8.75;
-    const s1 = kitSoldier(1, { x: ox - x, y: Y, z: oz - D / 2 - Math.floor(i / 8) * 2.5 + 0.5 }, W8[i % 8], "hold"); s1.setRotation({ x: 0, y: 0 }); a.push(s1);
-    const s2 = kitSoldier(2, { x: ox + x, y: Y, z: oz + D / 2 + Math.floor(i / 8) * 2.5 + 0.5 }, W8[i % 8], "hold"); s2.setRotation({ x: 0, y: 180 }); b.push(s2);
+    const fl = o.flip ? -1 : 1;   // (flip=1: faction 1 on the other side: is it the side or the faction?)
+    const mk1 = () => { const s1 = kitSoldier(1, { x: ox - fl * x, y: Y, z: oz - fl * (D / 2 + Math.floor(i / 8) * 2.5) + 0.5 }, W8[i % 8], "hold"); s1.setRotation({ x: 0, y: fl > 0 ? 0 : 180 }); a.push(s1); };
+    const mk2 = () => { const s2 = kitSoldier(2, { x: ox + fl * x, y: Y, z: oz + fl * (D / 2 + Math.floor(i / 8) * 2.5) + 0.5 }, W8[i % 8], "hold"); s2.setRotation({ x: 0, y: fl > 0 ? 180 : 0 }); b.push(s2); };
+    if (o.order) { mk2(); mk1(); } else { mk1(); mk2(); }   // (order=1: faction 2 spawned first)
   }
   const up = (L) => L.filter((e) => e.isValid && !downed.has(e.id) && !isDown(e)).length;
   const t0 = tick(); let firstDown = -1, t = 0;
+  if (globalThis.__FD) globalThis.__FD = {};
   await kitLoop(max, () => { t = tick() - t0; if (firstDown < 0 && (up(a) < n || up(b) < n)) firstDown = t; return up(a) <= n * 0.25 || up(b) <= n * 0.25; });
-  const r = { pace: String(setting("pace", "normal")), seconds: +((tick() - t0) / 20).toFixed(1), firstDownS: +(firstDown / 20).toFixed(1), up1: up(a), up2: up(b), winner: up(a) > up(b) ? 1 : up(b) > up(a) ? 2 : 0, ...kitShotStats(t0) };
+  const r = { pace: String(setting("pace", "normal")), seconds: +((tick() - t0) / 20).toFixed(1), firstDownS: +(firstDown / 20).toFixed(1), up1: up(a), up2: up(b), winner: up(a) > up(b) ? 1 : up(b) > up(a) ? 2 : 0, ...kitShotStats(t0), fd: globalThis.__FD };
   sdp(world, "war:set_pace", undefined);
   for (const e of [...a, ...b]) try { e.remove(); } catch {}
   return r;

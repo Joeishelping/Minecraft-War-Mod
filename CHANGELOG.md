@@ -1,5 +1,23 @@
 # War Engine changelog
 
+## v9.24.0 (Battle reports, far-off vehicles, men who hold their ground)
+
+- Battle report: when a fight near you goes quiet for 15 s, the chat tells you how it went: who held the field (or had
+  the better of it), what each side lost (killed, wounded, surrendered, out of how many), who landed the most hits and
+  the longest hit of the fight. Skirmishes pass without one. War Table -> Settings has a switch to turn it off.
+- Your shots count, and now you see it: when your shot or blow drops a soldier or kills him, the action bar says who
+  and how far ("Pvt. Bryant killed · 31 blocks").
+- Far sight for vehicles: tanks, trucks, gunboats, boats, planes and helicopters past 62 blocks are drawn out to 250,
+  like the soldiers. Each is drawn from its own model, seen from the side you're looking at it from (front, back, side
+  or three-quarter), and glides with it, aircraft included.
+- Men holding a position stand longer. In an Attack / Defend mission the defenders used to break and raise a white
+  flag 16 s in. Squads holding ground (a post, a hold, a sentry line, at their spot) now only break once two-thirds
+  of them are gone and they're clearly losing, and raise a white flag only with two men left, four to one against
+  them, badly hurt and after at least half a minute of fighting. Each man breaks half as often on his own. The same
+  mission now lasts 30-50 s, and the defenders sometimes win it. A squad caught on the march breaks as before.
+- Battle pace and you: at Normal pace soldiers' hits on players are toned down only half as much as their hits on
+  each other, so the enemy stays a threat to you.
+
 ## v9.23.0 (Battles that last, and fights that are fair)
 
 - Battles were over in seconds, and an even-looking fight was a coin flip. Measured: two squads of 12 meeting in the
