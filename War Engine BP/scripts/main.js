@@ -5680,6 +5680,8 @@ function narrowAt(dim, pts, i, loc) {
   for (let k = Math.max(0, i - 1); k < Math.min(pts.length - 1, i + 3); k++) if (isGate(pts[k], pts[k + 1]) || onStairs(dim, pts[k + 1]) || edgeAt(dim, pts[k + 1])) return true;
   return false;
 }
+const PROGMEM = new Map(); // soldier id -> { i, t }: his furthest point along his march's route, and when he got there (v9.25)
+system.runInterval(() => { if (PROGMEM.size > 3000) PROGMEM.clear(); }, 1200);
 function tightAt(dim, pts, i, loc) {
   if (isIndoorsAt(dim, loc) || onStairs(dim, loc)) return true;
   for (let k = Math.max(0, i - 1); k < Math.min(pts.length - 1, i + 4); k++) if (isGate(pts[k], pts[k + 1]) || onStairs(dim, pts[k + 1]) || edgeAt(dim, pts[k + 1])) return true;   // a ladder, a door, a drop, stairs, v6.0: a bridge / ledge (a step up a hill isn't)
@@ -5752,9 +5754,9 @@ system.runInterval(() => {
     const progOf = new Map(members.map((e) => [e.id, routeProgress(m, e.location, e.id)]));
     // (v9.25: a man who's made no progress for 10 s is stuck (the stuck-handling deals with him): the squad doesn't
     //  wait for him. Three men snagged on one spot used to hold everyone else beside them, "bunched up and confused")
-    m.progMem ??= new Map();
-    for (const [id, i0] of progOf) { const pm = m.progMem.get(id); if (!pm || i0 > pm.i + 1) m.progMem.set(id, { i: i0, t: now }); }
-    const moving = [...progOf].filter(([id]) => now - (m.progMem.get(id)?.t ?? now) < 200).map(([, i0]) => i0);
+    //  (kept outside the march itself: marches are saved as plain data)
+    for (const [id, i0] of progOf) { const pm = PROGMEM.get(id); if (!pm || i0 > pm.i + 1 || i0 < pm.i - 8) PROGMEM.set(id, { i: i0, t: now }); }
+    const moving = [...progOf].filter(([id]) => now - (PROGMEM.get(id)?.t ?? now) < 200).map(([, i0]) => i0);
     const prog = (moving.length >= Math.ceil(members.length / 3) ? moving : [...progOf.values()]).sort((a, b) => b - a);
     const lead = prog[0], tail = prog[Math.floor((prog.length - 1) * 0.7)];
     // real contact (an enemy soldier or player, never a mob): the squad stops and fights for up to ~20 s, then moves on
@@ -9652,6 +9654,19 @@ function sideBySide(e, m, pts, k, tgt) {
 const marchWatch = new Map(); // id -> { i, t, n, path }
 const forceGlide = new Map(); // id -> tick until which his route is walked by the script even in the open
 const walkWatch = new Map(); // id -> { x, z, t }: where he was when the route driver last saw him walking (v9.25)
+const tgtOf = (e) => { const m = marker(Number(gdp(e, "war:goal") ?? 0)); return m ? m.location : undefined; };
+// rough going between him and his marker (a step up or down, grass, flowers, snow, leaf litter): where Minecraft's own
+// walking stalls. On a clean floor it doesn't, and carrying a man there only slowed him down.
+function roughTo(dim, a, b) {
+  if (!b) return false;
+  if (Math.abs(b.y - a.y) >= 0.5) return true;
+  const L = Math.hypot(b.x - a.x, b.z - a.z) || 1;
+  for (const k of [0, 1, 2]) {
+    const x = a.x + ((b.x - a.x) / L) * k, z = a.z + ((b.z - a.z) / L) * k, y = Math.floor(a.y + 0.01);
+    try { const f = tBlock(dim, x, y, z), u = tBlock(dim, x, y - 1, z); if (f && !f.isAir) return true; if (!u || u.isAir || u.isLiquid) return true; } catch { return true; }
+  }
+  return false;
+}
 system.runInterval(() => { if (walkWatch.size > 2000) walkWatch.clear(); }, 600);
 function marchStuck(e, m, pts, i, now) {
   let w = marchWatch.get(e.id);
@@ -9987,11 +10002,11 @@ system.runInterval(() => {
         continue;
       }
       // v9.25: Minecraft's own walking stalls on rough ground (a slope, a bush, a block of grass it won't path over)
-      // with the marker in plain reach. Not moving for half a second when he should be: he's carried past it.
+      // with the marker in plain reach. Not moving for a second when he should be: he's carried past it.
       if (!remote) {
         const l0 = e.location, wk = walkWatch.get(e.id);
-        if (!wk || now - wk.t > 16 || Math.hypot(l0.x - wk.x, l0.z - wk.z) > 0.6) walkWatch.set(e.id, { x: l0.x, z: l0.z, t: now });
-        else if (now - wk.t >= 12 && wantsWalk(e, Number(gdp(e, "war:goal") ?? 0))) { forceGlide.set(e.id, now + 50); walkWatch.delete(e.id); v9stat("walkStall"); }
+        if (!wk || now - (wk.seen ?? wk.t) > 8 || Math.hypot(l0.x - wk.x, l0.z - wk.z) > 0.3) walkWatch.set(e.id, { x: l0.x, z: l0.z, t: now, seen: now });
+        else { wk.seen = now; if (now - wk.t >= 20 && wantsWalk(e, Number(gdp(e, "war:goal") ?? 0)) && roughTo(e.dimension, l0, tgtOf(e))) { forceGlide.set(e.id, now + 40); walkWatch.delete(e.id); v9stat("walkStall"); } }
       }
       gliders.delete(e.id);
       let tgt = pts[ahead >= 0 ? ahead : driveAhead(pts, i, 7)];
