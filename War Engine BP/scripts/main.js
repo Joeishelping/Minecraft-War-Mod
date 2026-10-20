@@ -1668,16 +1668,23 @@ function rdStep(s) {
       const a = o.pts[i].p, b = o.pts[j].p, ab = vsub(b, a), L2 = vdot(ab, ab) || 1e-6;
       const k = Math.max(0, Math.min(1, vdot(vsub(q.p, a), ab) / L2)), c = vadd(a, vmul(ab, k)), n = vsub(q.p, c), d = vlen(n);
       if (d >= 0.24) continue;
-      const nn = d > 1e-4 ? vmul(n, 1 / d) : V3(0, 1, 0), up = nn.y > -0.2 ? V3(nn.x * 0.4, Math.max(nn.y, 0.6), nn.z * 0.4) : nn;   // (mostly up: he lands on it)
-      const L = vlen(up) || 1; q.p = vadd(c, vmul(up, 0.24 / L));
+      // v9.25: he lands on what's under him; what's above him only shoves him aside. (Both used to push up: two bodies
+      // dropped on one spot climbed over each other every tick, a ladder of bodies 10 blocks into the air.)
+      const nn = d > 1e-4 ? vmul(n, 1 / d) : V3(0, 1, 0);
+      let up;
+      if (q.p.y >= c.y - 0.02) up = V3(nn.x * 0.9, Math.max(nn.y, 0.45), nn.z * 0.9);   // (on top, but sliding off the side of it: a heap spreads)
+      else { const h = Math.hypot(nn.x, nn.z); up = h > 0.05 ? V3(nn.x / h, 0, nn.z / h) : V3(Math.cos(q.p.x * 37), 0, Math.sin(q.p.x * 37)); }
+      const L = vlen(up) || 1, goal = vadd(c, vmul(up, 0.24 / L)), mvv = vsub(goal, q.p), ml = vlen(mvv);
+      q.p = ml > 0.06 ? vadd(q.p, vmul(mvv, 0.06 / ml)) : goal;                                     // (a little each tick: a pile settles, it doesn't pop)
       if (q.o.y < q.p.y - 0.02 && q.p.y - q.o.y > 0) q.o = V3(q.o.x, Math.min(q.o.y, q.p.y), q.o.z);
-      q.o = V3(q.p.x - (q.p.x - q.o.x) * 0.6, Math.max(q.o.y, q.p.y - 0.01), q.p.z - (q.p.z - q.o.z) * 0.6);   // (friction on him)
+      q.o = V3(q.p.x - (q.p.x - q.o.x) * 0.8, Math.max(q.o.y, q.p.y - 0.01), q.p.z - (q.p.z - q.o.z) * 0.8);   // (friction on him)
     }
   }
   let mv = 0;
   for (let i = 0; i < s.pts.length; i++) {                                                         // (nothing ends up inside a block)
     const q = s.pts[i], r = s.rad[i];
     if (rdSolid(s, q.p.x, q.p.y - r, q.p.z) && !rdSolid(s, q.p.x, q.p.y - r + 1, q.p.z)) { const ny = Math.floor(q.p.y - r) + 1 + r; q.o = V3(q.o.x, q.o.y + (ny - q.p.y), q.o.z); q.p = V3(q.p.x, ny, q.p.z); }
+    if (s.ylim !== undefined && q.p.y > s.ylim) { q.p = V3(q.p.x, s.ylim, q.p.z); q.o = V3(q.o.x, Math.max(q.o.y, s.ylim), q.o.z); }   // (v9.25: never higher than a blow could throw him)
     mv = Math.max(mv, vlen(vsub(q.p, q.o)));
   }
   s.t++; s.still = mv < (s.t > 50 ? 0.03 : 0.006) ? s.still + 1 : 0;
@@ -1709,6 +1716,19 @@ function rdLay(s) {
 function rdStart(c, gibIdx, pts, vel, mask, squirt) {
   const s = { c, dim: c.dimension, gib: gibIdx, cells: RD_CELLS, t: 0, still: 0, sent: gibIdx ? [] : RD_BODY_PROPS.map(() => 0), squirt,
     pts: pts.map((p, i) => ({ p, o: vsub(p, vel[i]) })) };
+  // v9.25: a man who died inside a block (stuck in a wall, a tree) is laid out from the nearest open spot beside it, not
+  // pushed up through the blocks; and no body rises more than its blow can throw it (a blast raises that, see rdBlast)
+  const hip = vmul(vadd(pts[0], pts[pts.length > 1 ? 1 : 0]), 0.5);
+  if (rdSolid(s, hip.x, hip.y, hip.z)) {
+    let best;
+    for (const [dx, dz] of [[1, 0], [-1, 0], [0, 1], [0, -1], [1, 1], [-1, 1], [1, -1], [-1, -1]]) for (const dy of [0, 1, -1]) {
+      const x = Math.floor(hip.x + dx) + 0.5, y = hip.y + dy, z = Math.floor(hip.z + dz) + 0.5;
+      if (!rdSolid(s, x, y, z) && !rdSolid(s, x, y + 0.9, z)) { const d = Math.abs(dx) + Math.abs(dz) + Math.abs(dy) * 1.5; if (!best || d < best.d) best = { d, off: V3(x - hip.x, dy, z - hip.z) }; }
+    }
+    if (best) for (const q of s.pts) { q.p = vadd(q.p, best.off); q.o = vadd(q.o, best.off); }
+  }
+  const lowY = Math.min(...s.pts.map((q) => q.p.y)), up0 = Math.max(0, ...s.pts.map((q) => q.p.y - q.o.y));
+  s.ylim = lowY + 2.2 + (up0 * up0) / (2 * RD_G);
   if (gibIdx) { const L = vlen(vsub(pts[1], pts[0])); s.cons = [[0, 1, L, L]]; s.rad = [0.12, 0.12]; s.mass = [1, 1]; }
   else { s.cons = rdCons(false, mask); s.rad = RD_RAD; s.mass = RD_MASS; s.hinges = [[3, 9, 5, -1], [2, 10, 6, -1], [1, 11, 7, 1], [0, 12, 8, 1]].filter(([, , e]) => !(mask & { 5: 2, 6: 4, 7: 8, 8: 16 }[e])); }
   RD.set(c.id, s); s.act = true;
@@ -1762,6 +1782,7 @@ function rdBlast(dim, at, power) {                                              
       const dv = vsub(q.p, at), L = vlen(dv); if (L > power * 2.2) continue;
       const k = Math.min(0.9, (power * 2.2 - L) * 0.16), n = vnorm(V3(dv.x, Math.max(0.3, dv.y + 0.4), dv.z));
       q.o = vsub(q.o, vmul(n, k * (0.8 + Math.random() * 0.4)));
+      const vy = (k * 1.2 * n.y), lift = (vy * vy) / (2 * RD_G) + 1.5; s.ylim = Math.max(s.ylim ?? -1e9, q.p.y + lift);   // (thrown: as high as the blast can throw)
       s.act = true; s.still = 0; s.t = Math.min(s.t, 60);
     }
   }

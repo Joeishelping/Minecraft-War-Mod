@@ -537,6 +537,24 @@ KS.ragdoll = async (o, ox, oz) => {
   const after = nb ? { moved: Math.round(Math.hypot(nb.location.x - p0.x, nb.location.z - p0.z) * 10) / 10, sameEntity: nb.id === b0.id, tracked: RD.has(nb.id) } : "gone";
   return { peakActive: peak, allStillAfterTicks: firstStill, bodies: rep, blastMoved: after };
 };
+// v9.25: men bunched on one spot (stuck, confused) killed together: does any body fly off? (the highest any body got)
+KS.pile = async (o, ox, oz) => {
+  floorAt(ox - 10, oz - 10, ox + 10, oz + 10);
+  for (const c of ow().getEntities({ type: "war:corpse" })) { try { c.remove(); } catch {} }
+  const n = Number(o.n ?? 8), sp = Number(o.spread ?? 0.5);
+  if (o.wall) kfill(ox + 1, Y, oz - 2, ox + 1, Y + 3, oz + 2, "stone_bricks");
+  const men = []; for (let i = 0; i < n; i++) men.push(kitSoldier(1, { x: ox + 0.5 + (Math.random() - 0.5) * sp + (o.wall && i < 2 ? 0.9 : 0), y: Y, z: oz + 0.5 + (Math.random() - 0.5) * sp }, "rifle", "hold"));
+  await kitWait(10);
+  if (o.wall) for (const v of men.slice(0, 2)) try { v.teleport({ x: ox + 1.5, y: Y + 0.5, z: oz + 0.5 }); } catch {}   // (two stuck inside the wall)
+  men.forEach((v, i) => { if (o.oneshot || i % 2) killHow.set(v.id, { limb: 0, dir: { x: Math.random() - 0.5, y: 0, z: Math.random() - 0.5 }, power: 0.3 }); killReal(v); });
+  let maxY = 0, maxAt = -1;
+  for (let k = 0; k < 200; k++) {
+    await kitWait(1);
+    for (const s of RD.values()) { for (const q of s.pts) { const h = q.p.y - Y; if (h > maxY) { maxY = h; maxAt = k; } } }
+  }
+  const bodies = ow().getEntities({ type: "war:corpse", location: { x: ox, y: Y, z: oz }, maxDistance: 60 }).map((c) => Math.round((c.location.y - Y) * 100) / 100);
+  return { maxPointY: Math.round(maxY * 100) / 100, maxAt, bodiesY: bodies.sort((a, b) => b - a) };
+};
 // v9.11: 20 men killed in the same instant: how long does the ragdoll work take per tick?
 KS.ragperf = async (o, ox, oz) => {
   floorAt(ox - 15, oz - 15, ox + 15, oz + 15);
