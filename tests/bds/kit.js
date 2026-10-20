@@ -537,6 +537,77 @@ KS.ragdoll = async (o, ox, oz) => {
   const after = nb ? { moved: Math.round(Math.hypot(nb.location.x - p0.x, nb.location.z - p0.z) * 10) / 10, sameEntity: nb.id === b0.id, tracked: RD.has(nb.id) } : "gone";
   return { peakActive: peak, allStillAfterTicks: firstStill, bodies: rep, blastMoved: after };
 };
+// v9.25: a long march over the real land (hills, trees, water: no test floor) into an ambush set beside the route. Every
+// 2 s: how far along they are, how spread, how many moving, how many have the enemy, who's firing, who's down, what
+// they say they're doing. Stuck = a man under orders who hasn't moved 1 block in 5 s.
+function groundAt(x, z) {
+  for (let y = 200; y > 40; y--) { const b = ow().getBlock({ x, y, z }); if (!b || b.isAir || b.typeId.includes("leaves") || b.typeId.includes("log") || b.typeId.includes("grass") && !b.typeId.includes("grass_block") || b.typeId.includes("flower") || b.typeId.includes("fern") || b.typeId.includes("snow_layer") || b.typeId.includes("vine")) continue; return { y: y + 1, liquid: b.isLiquid }; }
+  return { y: Y, liquid: false };
+}
+KS.wild = async (o, ox, oz) => {
+  const N = Number(o.n ?? 10), E = Number(o.e ?? 6), x0 = ox + Number(o.dx ?? 0);
+  const start = { x: x0, z: oz - 170 }, dest = { x: x0, z: oz + 40 };
+  const g0 = groundAt(start.x, start.z), g1 = groundAt(dest.x, dest.z);
+  const men = []; for (let i = 0; i < N; i++) { const x = start.x + (i % 5) * 2 - 4, z = start.z - Math.floor(i / 5) * 2, g = groundAt(x, z); men.push(kitSoldier(1, { x: x + 0.5, y: g.y, z: z + 0.5 }, ["rifle", "smg", "semi", "mg", "rifle"][i % 5], "hold")); }
+  const amb = []; const ax = x0 + Number(o.side ?? 14), az = oz - 20;
+  for (let i = 0; i < E; i++) { const x = ax + (i % 3) * 2, z = az + Math.floor(i / 3) * 3, g = groundAt(x, z); amb.push(kitSoldier(2, { x: x + 0.5, y: g.y, z: z + 0.5 }, ["rifle", "semi", "mg"][i % 3], "hold")); }
+  setRelPair(1, 2, "1", false);
+  await kitWait(20);
+  await kitOrder(1, { x: dest.x + 0.5, y: g1.y, z: dest.z + 0.5 });
+  if (globalThis.__GR) globalThis.__GR = {};
+  const t0 = tick(), up = (L) => L.filter((e) => e.isValid && !downed.has(e.id) && !isDown(e)), last = new Map(), stillSince = new Map();
+  const tl = [], NS = {}, DBS = {}, prevAt = new Map(); let stuckMax = 0, maxStuckAt;
+  await kitLoop(Number(o.ticks ?? 3600), () => {
+    const now = tick(), t = now - t0, U = up(men);
+    for (const e of U) { const l = e.location, p = last.get(e.id); if (!p || Math.hypot(l.x - p.x, l.z - p.z) > 1) { last.set(e.id, { x: l.x, z: l.z }); stillSince.set(e.id, now); } }
+    for (const e of U) { const l = e.location, q = prevAt.get(e.id) ?? l; prevAt.set(e.id, { x: l.x, z: l.z }); const still = Math.hypot(l.x - q.x, l.z - q.z) < 0.4, k = (still ? "STILL " : "move ") + (notes.get(e.id)?.text ?? "-").replace(/[0-9(),]+/g, "").slice(0, 26); NS[k] = (NS[k] ?? 0) + 1; if (still && globalThis.__DB) { const kb = k + " @" + (globalThis.__DB.get(e.id) ?? "-") + " st" + (getJSON(e, "war:st", {}).g ?? "") + " mk" + (() => { const m = marker(Number(gdp(e, "war:goal") ?? 0)); return m ? Math.round(dist(m.location, l)) : "-"; })(); DBS[kb] = (DBS[kb] ?? 0) + 1; } }
+    if (t % 40 < 10) {
+      const cz = U.reduce((a, e) => a + e.location.z, 0) / Math.max(1, U.length), cx = U.reduce((a, e) => a + e.location.x, 0) / Math.max(1, U.length);
+      const spread = Math.max(0, ...U.map((e) => Math.hypot(e.location.x - cx, e.location.z - cz)));
+      const stuck = U.filter((e) => now - (stillSince.get(e.id) ?? now) > 100 && !perc.get(e.id)?.threat);
+      const stuckFight = U.filter((e) => now - (stillSince.get(e.id) ?? now) > 100 && perc.get(e.id)?.threat);
+      if (stuck.length > stuckMax) { stuckMax = stuck.length; maxStuckAt = stuck.map((e) => `${Math.round(e.location.x - ox)},${Math.round(e.location.y)},${Math.round(e.location.z - oz)}:${(notes.get(e.id)?.text ?? "").slice(0, 26)}`); }
+      const thr = U.filter((e) => perc.get(e.id)?.threat).length, fire = U.filter((e) => now - (lastFired(e.id) ?? -999) < 40).length;
+      const nh = {}; for (const e of U) { const k = (notes.get(e.id)?.text ?? "-").slice(0, 22); nh[k] = (nh[k] ?? 0) + 1; }
+      if (o.t1 !== undefined && t >= Number(o.t1) * 20 && t <= Number(o.t2 ?? 9999) * 20) for (const e of U) { const g = gliders.get(e.id), m = marker(Number(gdp(e, "war:goal") ?? 0)); tl.push(`   #${men.indexOf(e)} ${(e.location.x - ox).toFixed(1)},${e.location.y.toFixed(1)},${(e.location.z - oz).toFixed(1)} mk${m ? (m.location.x - ox).toFixed(1) + "," + m.location.y.toFixed(1) + "," + (m.location.z - oz).toFixed(1) : "-"} gl${g ? `k${g.k}/${g.pts.length}${g.paused ? "P" : ""}b${g.blocked ?? 0}w${g.wait ?? 0}` : "-"} fg${(forceGlide.get(e.id) ?? 0) > now ? 1 : 0} gb${(glideBan.get(e.id) ?? 0) > now ? 1 : 0} @${globalThis.__DB?.get(e.id) ?? ""} st${getJSON(e, "war:st", {}).g ?? ""} [${(notes.get(e.id)?.text ?? "").slice(0, 24)}]`); }
+      if (o.detail && thr) for (const e of U) { const th = perc.get(e.id)?.threat, gs = gunState.get(e.id), v = e.getVelocity(); tl.push(`   #${men.indexOf(e)} ${Math.round(e.location.x - ox)},${Math.round(e.location.y)},${Math.round(e.location.z - oz)} v${Math.hypot(v.x, v.z).toFixed(2)} th${th?.isValid ? Math.round(dist(th.location, e.location)) + (canHit(e, th) ? "LOS" : "x") : "-"} tg${gs?.target ? "Y" : "-"} f${sd(e).func} ord${gdp(e, "war:ordergoal") !== undefined ? 1 : 0} lock${combatLock.has(e.id) ? 1 : 0} [${(notes.get(e.id)?.text ?? "").slice(0, 30)}]`); }
+      tl.push(`${(t / 20).toFixed(0)}s z${Math.round(cz - oz)} sp${spread.toFixed(0)} up${U.length}/${up(amb).length} thr${thr} fire${fire} stuck${stuck.length}/${stuckFight.length} ${Object.entries(nh).sort((a, b) => b[1] - a[1]).slice(0, 3).map(([k, v]) => `${k}x${v}`).join(";")}`);
+    }
+    return up(men).length === 0 || up(amb).length === 0 && up(men).filter((e) => Math.hypot(e.location.x - dest.x, e.location.z - dest.z) < 14).length >= Math.ceil(up(men).length * 0.8);
+  });
+  const r = { dbs: Object.entries(DBS).sort((a, b) => b[1] - a[1]).slice(0, 30), notes: Object.entries(NS).sort((a, b) => b[1] - a[1]).slice(0, 24), gr: globalThis.__GR, ground: [g0.y, g1.y, g0.liquid, g1.liquid], secs: Math.round((tick() - t0) / 20), menUp: up(men).length, ambUp: up(amb).length, there: up(men).filter((e) => Math.hypot(e.location.x - dest.x, e.location.z - dest.z) < 14).length, stuckMax, maxStuckAt, ...kitShotStats(t0), tl };
+  for (const e of [...men, ...amb]) try { e.remove(); } catch {}
+  return r;
+};
+// v9.25: one man on real ground walking to a marker 6 blocks ahead (straight, walkable): does Minecraft's walking take
+// him there? mode fixed: the marker stays put; hop: moved 0.5 along every 4 ticks (as the route driver does)
+KS.mkwild = async (o, ox, oz) => {
+  const res = {};
+  for (const mode of ["fixed", "hop", "hop2"]) {
+    const out = [];
+    for (let k = 0; k < 12; k++) {
+      const x = ox + (k % 4) * 9, z = oz - 160 + Math.floor(k / 4) * 50 + (mode === "hop" ? 15 : mode === "hop2" ? 30 : 0), g = groundAt(x, z);
+      const e = kitSoldier(1, { x: x + 0.5, y: g.y, z: z + 0.5 }, "rifle", "hold");
+      await kitWait(10);
+      const g2 = groundAt(x, z + 6), tgt = { x: x + 0.5, y: g2.y, z: z + 6.5 };
+      if (!straightReach(ow(), e.location, tgt)) { out.push("noreach"); try { e.remove(); } catch {} continue; }
+      if (o.nobrain) held.set(e.id, { by: "kit" });
+      const slot = myMarker(e, tgt, "war:mymk", 0.1); setGoal(e, slot); setGroups(e, { g: "g_wp", s: "s_4" });
+      const z0 = e.location.z;
+      for (let t = 0; t < 40; t++) { await kitWait(1); if (mode !== "fixed" && t % 4 === 0) myMarker(e, { x: tgt.x, y: groundAt(Math.floor(tgt.x), Math.floor(e.location.z + 6)).y, z: e.location.z + 6 }, "war:mymk", mode === "hop2" ? 1.5 : 0.1); }
+      out.push(+(e.location.z - z0).toFixed(1) + (o.nobrain ? "" : ":" + (notes.get(e.id)?.text ?? "").slice(0, 12)));
+      held.delete(e.id); try { e.remove(); } catch {}
+    }
+    res[mode] = out.join(" ");
+  }
+  return res;
+};
+// a map of the land around a spot: per column, the ground's height and what's on it (debugging the wild march)
+KS.look = async (o, ox, oz) => {
+  const cx = ox + Number(o.x ?? 0), cz = oz + Number(o.z ?? 0), R = Number(o.r ?? 5), rows = [];
+  for (let z = cz - R; z <= cz + R; z++) { const row = []; for (let x = cx - R; x <= cx + R; x++) { const g = groundAt(x, z); const at = ow().getBlock({ x, y: g.y, z }), un = ow().getBlock({ x, y: g.y - 1, z }); row.push(`${g.y}${(un?.typeId ?? "?").replace("minecraft:", "").slice(0, 4)}${at && !at.isAir ? "+" + at.typeId.replace("minecraft:", "").slice(0, 4) : ""}`); } rows.push(`${z - oz}: ` + row.join(" ")); }
+  return { rows };
+};
 // v9.25: men bunched on one spot (stuck, confused) killed together: does any body fly off? (the highest any body got)
 KS.pile = async (o, ox, oz) => {
   floorAt(ox - 10, oz - 10, ox + 10, oz + 10);
@@ -1033,7 +1104,7 @@ system.afterEvents.scriptEventReceive.subscribe((ev) => {
   const o = Object.fromEntries(args.map((a) => a.split("=")));
   if (!KS[name]) { console.warn(`WARTEST {"error":"unknown scenario ${name}"}`); return; }
   (async () => {
-    const ox = 3000 + (kitSlot++ % 6) * 800, oz = 0;
+    const ox = o.ox !== undefined ? Number(o.ox) : 3000 + (kitSlot++ % 6) * 800, oz = o.oz !== undefined ? Number(o.oz) : 0;   // (ox/oz: somewhere of the test's own choosing, e.g. untouched land)
     KIT = { name, ox, oz, trace: o.trace, dbg: o.dbg }; if (o.trace) globalThis.__planStats = { exp: 0, ms: 0, reads: 0, ticks: 0, done: 0, dropped: 0, doneT: 0 };
     try {
       for (const e of [...allOf(SOLDIER), ...allOf(WAYPOINT), ...allOf(HOUND)]) { try { e.remove(); } catch {} }   // (leftovers of an interrupted run)

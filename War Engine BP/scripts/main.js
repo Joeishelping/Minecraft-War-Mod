@@ -4533,7 +4533,9 @@ function fireGun(e, spec, t, aim) {
       for (const [oy, os] of [[sp, 0], [-sp, 0], [0, sp], [0, -sp]]) { const dv = { x: dx / n + px * os, y: dy / n + oy, z: dz / n + pz * os }, dl = Math.hypot(dv.x, dv.y, dv.z) || 1; if (openNow(e.dimension, fv, { x: fv.x + (dv.x / dl) * Math.max(0.5, l - 1), y: fv.y + (dv.y / dl) * Math.max(0.5, l - 1), z: fv.z + (dv.z / dl) * Math.max(0.5, l - 1) })) clear++; }
       g.expo = clear / 4; g.expoT = tick(); g.expoId = t.id;
     }
-    if (g && g.expo < 1) { g.coverMiss = (g.coverMiss ?? 0) + 1; return false; }
+    // (v9.25: half behind cover is still a target, only a harder one. He used to hold fire unless all four lines were
+    //  clear: through trees, over a crest, past a fence post that is almost never, and a man with the enemy in plain
+    //  view stood there for minutes without a shot while they shot him. The misses still only go past on an open side.)
     if (g) g.coverMiss = 0;
     // v8.1: hit or miss is a CHANCE (as in most shooters), by weapon and range: a rifle is good at range, an SMG only
     // close. Less when he's wounded or pinned (a shakier aim), at a moving or kneeling man. A hit goes into his body;
@@ -4542,6 +4544,7 @@ function fireGun(e, spec, t, aim) {
     let p = HC[0] + (HC[1] - HC[0]) * Math.max(0, Math.min(1, (l - 8) / Math.max(1, HC[2] - 8)));
     p /= Math.max(1, spec.spread / ((GUN_SPEC[w] ?? spec).spread || spec.spread));   // (shaky: wounded, pinned, just turned)
     p *= paceFor(t);                                                   // v9.23: Battle pace (War Table -> Settings)
+    if (g && g.expo < 1) p *= 0.35 + 0.65 * g.expo;                    // (v9.25: partly behind cover: fewer hits)
     try { const v = t.getVelocity(); if (Math.hypot(v.x, v.z) > 0.08) p *= 0.8; } catch {}
     if ((poseOf.get(t.id) ?? 0) >= 1) p *= 0.85;
     const ux = dx / n, uy = dy / n, uz = dz / n, hz = Math.hypot(ux, uz) || 1, px = -uz / hz, pz = ux / hz;
@@ -5671,6 +5674,12 @@ const marchActive = (e) => !downed.has(e.id) && !pows.has(e.id) && !isRiding(e) 
 // does the route need careful single-file following from point i on (for a soldier at loc)?
 // standing on stairs or a slab (castle wall stairs, a staircase in a house): Minecraft's walking gets confused there
 function onStairs(dim, p) { try { const b = tBlock(dim, p.x, Math.floor(p.y + 0.01) - 1, p.z), c = tBlock(dim, p.x, Math.floor(p.y + 0.01), p.z); return [b, c].some((x) => !!x && (x.typeId.includes("stairs") || x.typeId.includes("slab"))); } catch { return false; } }
+// v9.25: a real choke point (indoors, stairs, a ladder, a door, a drop): where men have to go one at a time
+function narrowAt(dim, pts, i, loc) {
+  if (isIndoorsAt(dim, loc) || onStairs(dim, loc)) return true;
+  for (let k = Math.max(0, i - 1); k < Math.min(pts.length - 1, i + 3); k++) if (isGate(pts[k], pts[k + 1]) || onStairs(dim, pts[k + 1]) || edgeAt(dim, pts[k + 1])) return true;
+  return false;
+}
 function tightAt(dim, pts, i, loc) {
   if (isIndoorsAt(dim, loc) || onStairs(dim, loc)) return true;
   for (let k = Math.max(0, i - 1); k < Math.min(pts.length - 1, i + 4); k++) if (isGate(pts[k], pts[k + 1]) || onStairs(dim, pts[k + 1]) || edgeAt(dim, pts[k + 1])) return true;   // a ladder, a door, a drop, stairs, v6.0: a bridge / ledge (a step up a hill isn't)
@@ -8505,7 +8514,7 @@ function followPersonal(e, now) {
   if ((pr.kind === "advance" || pr.kind === "engage") && stackAtDoor(e, pr, i, now)) { pr.hold = now + 25; pr.progT = now; note(e, "stacking up at the door"); return { g: "g_none", t: "t_mid", urgent: false }; }   // (v9.0)
   if ((pr.kind === "advance" || pr.kind === "engage") && stackAtStairs(e, pr, i, now)) { pr.hold = now + 25; pr.progT = now; note(e, "stacking up at the stairs"); return { g: "g_none", t: "t_mid", urgent: false }; }   // (v6.9.2)
   if (t?.isValid && (pr.kind === "advance" || pr.kind === "engage")) {
-    if (shotAt(e, sd(e), t, now) && !tightAt(e.dimension, pr.pts, i, e.location)) { pr.hold = now + 30; pr.progT = now; note(e, "firing on the way"); return { g: "g_none", t: "t_mid", urgent: false }; }   // (never stops on the stairs: the men behind need them)
+    if (shotAt(e, sd(e), t, now) && shotWorks(e, t) && !tightAt(e.dimension, pr.pts, i, e.location)) { pr.hold = now + 30; pr.progT = now; note(e, "firing on the way"); return { g: "g_none", t: "t_mid", urgent: false }; }   // (never stops on the stairs: the men behind need them)
   }
   note(e, { exit: "getting out of the building", advance: "moving to the enemy's level", refuge: "taking refuge inside", patrol: "patrolling", reinforce: "reinforcing", regroup: "regrouping", medic: "going to the wounded", rally: "falling back to the rally point" }[pr.kind] ?? "on the move");
   const slot = myMarker(e, pr.pts[lookahead(pr.pts, i, 5)]);           // (the route driver keeps it moving between thoughts)
@@ -8948,9 +8957,12 @@ function buildingRole(e, d, now, S, B, t) {
 // he's free to use judgment: he goes to the nearest of them along a real route (doors, stairs, round the building),
 // and the route stops him the moment he has a shot. Not a man holding a roof or wall over them, not one watching a
 // stairhead, not a squad badly outnumbered.
+// (v9.25: "can hit" counts only when his rounds actually go: a line the eyes have but the muzzle doesn't, again and
+//  again, is no shot, and he moves)
+const shotWorks = (e, t) => canHit(e, t) && (gunState.get(e.id)?.coverMiss ?? 0) < 6;
 function closeIn(e, d, now, S, B, t, anchor) {
   if (!GUNS.includes(d.weapon) || d.func === "post" || !freeOf(e) || String(gdp(e, "war:stance") ?? "aggressive") !== "aggressive" || !S?.known?.size) return undefined;
-  if (t?.isValid && canHit(e, t)) { B.closeT = undefined; return undefined; }
+  if (t?.isValid && shotWorks(e, t)) { B.closeT = undefined; return undefined; }
   if (now - (S.fightT ?? S.contactT ?? now) < 300 || (S.ratio ?? 1) < 0.7) return undefined;
   if (B.stair && now - B.stair.t < 400) return undefined;
   const l = e.location;
@@ -8966,7 +8978,7 @@ function closeIn(e, d, now, S, B, t, anchor) {
 // the balcony, to the rail, to the next window), instead of standing there firing into the ceiling
 function seekShot(e, d, now, S, B, t) {
   if (!GUNS.includes(d.weapon) || d.func === "post" || !S?.known?.size) return undefined;
-  if (t?.isValid && canHit(e, t)) { B.seekT = undefined; return undefined; }
+  if (t?.isValid && shotWorks(e, t)) { B.seekT = undefined; return undefined; }
   const g = gunState.get(e.id);
   if (now - (g?.lastShot ?? -999) < 80) return undefined;
   const near = [...S.known.values()].some((q) => dist(q, e.location) < 35);
@@ -9631,6 +9643,8 @@ function sideBySide(e, m, pts, k, tgt) {
 // few blocks ahead of where he was (the last resort: nothing else got him on, and nobody waits for him).
 const marchWatch = new Map(); // id -> { i, t, n, path }
 const forceGlide = new Map(); // id -> tick until which his route is walked by the script even in the open
+const walkWatch = new Map(); // id -> { x, z, t }: where he was when the route driver last saw him walking (v9.25)
+system.runInterval(() => { if (walkWatch.size > 2000) walkWatch.clear(); }, 600);
 function marchStuck(e, m, pts, i, now) {
   let w = marchWatch.get(e.id);
   if (!w || w.path !== pts || i > w.i || flat(e.location, w.at) > 2.5) { marchWatch.set(e.id, { i: Math.max(i, w?.path === pts ? w.i : 0), t: now, n: 0, path: pts, at: { ...e.location } }); return false; }
@@ -9675,7 +9689,10 @@ function driveAhead(pts, i, maxLen) {
   }
   return Math.min(pts.length - 1, j);
 }
-function queuedBehind(e, pts, i) {
+// (v9.25: open: only a man right on top of him ahead makes him wait; carried over rough ground in the open, the whole
+//  squad used to go single file, a body length apart, stop-start, at a third of walking pace)
+const laneOf2 = (id) => { let h = 0; for (let i = 0; i < id.length; i++) h = (h * 31 + id.charCodeAt(i)) | 0; return [0, 0.8, -0.8, 1.5, -1.5][Math.abs(h) % 5]; };
+function queuedBehind(e, pts, i, open = false) {
   const nx = pts[Math.min(pts.length - 1, i + 1)], end = pts[pts.length - 1];
   const hx = nx.x - e.location.x, hz = nx.z - e.location.z, hl = Math.hypot(hx, hz);
   const myEnd = r3(end, e.location), f = Number(P(e, "war:faction") ?? 0);
@@ -9686,7 +9703,7 @@ function queuedBehind(e, pts, i) {
     // v6.3: a man of another squad coming the other way isn't a queue: they pass each other (in a gap, both sides used
     // to wait for the other one, then shove through, jammed on one spot)
     if (myM) { const oM = marchOfE(o); if (oM && oM !== myM && !oM.final && Math.cos((oM.heading ?? 0) - (myM.heading ?? 0)) < -0.3) continue; }
-    if (Math.abs(ol.y - e.location.y) > 1.2 || Math.hypot(ol.x - e.location.x, ol.z - e.location.z) > 1.2) continue;
+    if (Math.abs(ol.y - e.location.y) > 1.2 || Math.hypot(ol.x - e.location.x, ol.z - e.location.z) > (open ? 0.75 : 1.2)) continue;
     const ox = ol.x - e.location.x, oz = ol.z - e.location.z;
     if (Math.hypot(ox, oz) < 0.4) { if (o.id < e.id) return true; continue; }  // on the same spot: one of them waits
     if (hl > 0.2 && (ox * hx + oz * hz) / hl < 0.15) continue;               // not in front of him
@@ -9950,13 +9967,23 @@ system.runInterval(() => {
           myMarker(e, e.location); note(e, atDoor ? "stacking up at the door" : "stacking up at the stairs");
           continue;
         }
-        const queued = queuedBehind(e, pts, i);
+        // (v9.25: in the open nobody waits for anyone: carried over rough ground, each man keeps a lane of his own beside
+        //  the route, so the squad goes as a body of men, not a queue on one line that jammed at every step up a slope)
+        const open = !remote && !narrowAt(e.dimension, pts, i, e.location);
+        const queued = !open && queuedBehind(e, pts, i);
         const wait = queued ? (g?.wait ?? 0) + 4 : 0;
         const k = g && g.pts === pts ? g.k : glideStart(pts, i, e.location);
-        gliders.set(e.id, { yaw: g?.yaw, pts, k, t: now, paused: queued && wait < 50 && floorUnder(e.dimension, e.location.x, e.location.y, e.location.z), wait, blocked: g && g.pts === pts ? g.blocked : 0 });   // (v6.2: blocked kept: it was reset every refresh, so a man below his route was never let go)   // (never paused over a gap)   // never waits more than 2.5 s for anyone (no deadlocks)
+        gliders.set(e.id, { yaw: g?.yaw, pts, k, t: now, paused: queued && wait < 50 && floorUnder(e.dimension, e.location.x, e.location.y, e.location.z), wait, blocked: g && g.pts === pts ? g.blocked : 0, lane: open ? laneOf2(e.id) : 0 });   // (v6.2: blocked kept: it was reset every refresh, so a man below his route was never let go)   // (never paused over a gap)   // never waits more than 2.5 s for anyone (no deadlocks)
         myMarker(e, e.location);
         note(e, queued && wait < 50 ? "waiting his turn" : remote ? "marching (out of range)" : "on the way through");
         continue;
+      }
+      // v9.25: Minecraft's own walking stalls on rough ground (a slope, a bush, a block of grass it won't path over)
+      // with the marker in plain reach. Not moving for half a second when he should be: he's carried past it.
+      if (!remote) {
+        const l0 = e.location, wk = walkWatch.get(e.id);
+        if (!wk || now - wk.t > 16 || Math.hypot(l0.x - wk.x, l0.z - wk.z) > 0.6) walkWatch.set(e.id, { x: l0.x, z: l0.z, t: now });
+        else if (now - wk.t >= 12 && wantsWalk(e, Number(gdp(e, "war:goal") ?? 0))) { forceGlide.set(e.id, now + 50); walkWatch.delete(e.id); v9stat("walkStall"); }
       }
       gliders.delete(e.id);
       let tgt = pts[ahead >= 0 ? ahead : driveAhead(pts, i, 7)];
@@ -10732,7 +10759,11 @@ system.runInterval(() => {
     try {
       const pts = g.pts;
       if (g.k >= pts.length) { gliders.delete(id); continue; }
-      const b = pts[g.k], a = pts[Math.max(0, g.k - 1)];
+      let b = pts[g.k]; const a = pts[Math.max(0, g.k - 1)];
+      if (g.lane && !b.climb && !b.w && !a.w && !b.open) {                 // (v9.25: his own lane beside the route, where there's ground for it)
+        const sx = b.x - a.x, sz = b.z - a.z, sl = Math.hypot(sx, sz);
+        if (sl > 0.3) { const c = { x: b.x - (sz / sl) * g.lane, z: b.z + (sx / sl) * g.lane }; if (glideFree(e.dimension, c.x, b.y, c.z) && floorUnder(e.dimension, c.x, b.y, c.z) && glideFree(e.dimension, (c.x + b.x) / 2, b.y, (c.z + b.z) / 2)) b = { ...b, x: c.x, z: c.z }; }
+      }
       const p = e.location;
       const dx = b.x - p.x, dz = b.z - p.z, L = Math.hypot(dx, dz);
       if (b.climb && L < 0.35) { beginClimb(e, pts, g.k); gliders.delete(id); continue; }   // at the ladder: the climber takes him (v5.7: walked right up to it first)
