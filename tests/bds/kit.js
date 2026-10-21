@@ -544,13 +544,22 @@ function groundAt(x, z) {
   for (let y = 200; y > 40; y--) { const b = ow().getBlock({ x, y, z }); if (!b || b.isAir || b.typeId.includes("leaves") || b.typeId.includes("log") || b.typeId.includes("grass") && !b.typeId.includes("grass_block") || b.typeId.includes("flower") || b.typeId.includes("fern") || b.typeId.includes("snow_layer") || b.typeId.includes("vine")) continue; return { y: y + 1, liquid: b.isLiquid }; }
   return { y: Y, liquid: false };
 }
+// a spot a man can stand on near (x, z): open at feet and head (not inside a tree trunk or a bush)
+function standSpot(x, z) {
+  for (const [dx, dz] of [[0, 0], [1, 0], [-1, 0], [0, 1], [0, -1], [2, 0], [-2, 0], [0, 2], [0, -2], [2, 2], [-2, -2]]) {
+    const g = groundAt(x + dx, z + dz); let ok = true;
+    for (const yy of [g.y, g.y + 1]) { const b = ow().getBlock({ x: x + dx, y: yy, z: z + dz }); if (b && !b.isAir && !passable(b)) ok = false; }
+    if (ok) return { x: x + dx + 0.5, y: g.y, z: z + dz + 0.5 };
+  }
+  const g = groundAt(x, z); return { x: x + 0.5, y: g.y, z: z + 0.5 };
+}
 KS.wild = async (o, ox, oz) => {
   const N = Number(o.n ?? 10), E = Number(o.e ?? 6), x0 = ox + Number(o.dx ?? 0);
   const start = { x: x0, z: oz - 170 }, dest = { x: x0, z: oz + 40 };
   const g0 = groundAt(start.x, start.z), g1 = groundAt(dest.x, dest.z);
-  const men = []; for (let i = 0; i < N; i++) { const x = start.x + (i % 5) * 2 - 4, z = start.z - Math.floor(i / 5) * 2, g = groundAt(x, z); men.push(kitSoldier(1, { x: x + 0.5, y: g.y, z: z + 0.5 }, ["rifle", "smg", "semi", "mg", "rifle"][i % 5], "hold")); }
+  const men = []; for (let i = 0; i < N; i++) { const x = start.x + (i % 5) * 2 - 4, z = start.z - Math.floor(i / 5) * 2; men.push(kitSoldier(1, standSpot(x, z), ["rifle", "smg", "semi", "mg", "rifle"][i % 5], "hold")); }
   const amb = []; const ax = o.hill ? dest.x - 2 : x0 + Number(o.side ?? 14), az = o.hill ? dest.z - 2 : oz + Number(o.az ?? -20);   // (hill=1: they hold the objective itself)
-  for (let i = 0; i < E; i++) { const x = ax + (i % 3) * 2, z = az + Math.floor(i / 3) * 3, g = groundAt(x, z); amb.push(kitSoldier(2, { x: x + 0.5, y: g.y, z: z + 0.5 }, ["rifle", "semi", "mg"][i % 3], "hold")); }
+  for (let i = 0; i < E; i++) { const x = ax + (i % 3) * 2, z = az + Math.floor(i / 3) * 3; amb.push(kitSoldier(2, standSpot(x, z), ["rifle", "semi", "mg"][i % 3], "hold")); }
   setRelPair(1, 2, "1", false);
   await kitWait(20);
   await kitOrder(1, { x: dest.x + 0.5, y: g1.y, z: dest.z + 0.5 });
@@ -606,8 +615,8 @@ KS.mkwild = async (o, ox, oz) => {
 // many up, shots, hits; every 5 s each side's centre, spread and what they're doing; stuck = no 1 block in 5 s.
 KS.wildmeet = async (o, ox, oz) => {
   const N = Number(o.n ?? 8), D = Number(o.dist ?? 120), x0 = ox + Number(o.dx ?? 0);
-  const A = { x: x0, z: oz - D / 2 }, B = { x: x0, z: oz + D / 2 };
-  const W5 = ["rifle", "smg", "semi", "mg", "rifle"], side = (f, at) => { const L = []; for (let i = 0; i < N; i++) { const x = at.x + (i % 4) * 2 - 3, z = at.z + Math.floor(i / 4) * 2 * (f === 1 ? -1 : 1), g = groundAt(x, z); L.push(kitSoldier(f, { x: x + 0.5, y: g.y, z: z + 0.5 }, W5[i % 5], "hold")); } return L; };
+  const A = { x: x0, z: oz - 20 - D }, B = { x: x0, z: oz - 20 };   // (inside the test's loaded area: -180..+50)
+  const W5 = ["rifle", "smg", "semi", "mg", "rifle"], side = (f, at) => { const L = []; for (let i = 0; i < N; i++) { const x = at.x + (i % 4) * 2 - 3, z = at.z + Math.floor(i / 4) * 2 * (f === 1 ? -1 : 1); L.push(kitSoldier(f, standSpot(x, z), W5[i % 5], "hold")); } return L; };
   const s1 = (o.order ? 1 : 0) % 2 ? side(2, B) : side(1, A), s2 = (o.order ? 1 : 0) % 2 ? side(1, A) : side(2, B), a = s1[0] && P(s1[0], "war:faction") === 1 ? s1 : s2, b = a === s1 ? s2 : s1;
   setRelPair(1, 2, "1", false);
   await kitWait(20);
@@ -623,6 +632,7 @@ KS.wildmeet = async (o, ox, oz) => {
       const st = [...up(a), ...up(b)].filter((e) => now - (stillSince.get(e.id) ?? now) > 100 && !perc.get(e.id)?.threat);
       if (st.length > stuckMax) { stuckMax = st.length; stuckAt = st.map((e) => `f${P(e, "war:faction")} ${Math.round(e.location.x - ox)},${Math.round(e.location.y)},${Math.round(e.location.z - oz)}:${(notes.get(e.id)?.text ?? "").slice(0, 24)}`); }
       tl.push(`${Math.round(t / 20)}s ${row.join(" | ")}`);
+      if (o.t1 !== undefined && t >= Number(o.t1) * 20 && t <= Number(o.t2 ?? 9999) * 20) for (const e of [...up(a), ...up(b)]) { const pr = personal.get(e.id), th = perc.get(e.id)?.threat; tl.push(`   f${P(e, "war:faction")} ${(e.location.x - ox).toFixed(1)},${e.location.y.toFixed(1)},${(e.location.z - oz).toFixed(1)} still${Math.round((now - (stillSince.get(e.id) ?? now)) / 20)} pr${pr ? `${pr.kind}:${pr.pts ? pr.idx + "/" + pr.pts.length : pr.planning ? "plan" : "-"}${(pr.hold ?? 0) > now ? "H" : ""}` : "-"} gl${(() => { const g = gliders.get(e.id); return g ? `k${g.k}${g.paused ? "P" : ""}b${g.blocked ?? 0}w${g.wait ?? 0}L${g.lane ?? 0}` : "-"; })()} gb${(glideBan.get(e.id) ?? 0) > now ? 1 : 0} @${globalThis.__GL?.get(e.id) ?? ""} th${th?.isValid ? Math.round(dist(th.location, e.location)) + (canHit(e, th) ? "L" : "x") : "-"} [${(notes.get(e.id)?.text ?? "").slice(0, 30)}]`); }
     }
     return !up(a).length || !up(b).length;
   });
@@ -631,6 +641,12 @@ KS.wildmeet = async (o, ox, oz) => {
   return r;
 };
 // a map of the land around a spot: per column, the ground's height and what's on it (debugging the wild march)
+// the blocks in a small box, layer by layer (y from low to high): "." air, "~" water, else the first 4 letters of the block
+KS.box = async (o, ox, oz) => {
+  const cx = ox + Number(o.x ?? 0), cz = oz + Number(o.z ?? 0), cy = Number(o.y ?? 64), R = Number(o.r ?? 2), out = [];
+  for (let y = cy - 1; y <= cy + 2; y++) { out.push(`y${y}`); for (let z = cz - R; z <= cz + R; z++) { const row = []; for (let x = cx - R; x <= cx + R; x++) { const b = ow().getBlock({ x, y, z }); row.push(!b ? "?" : b.isAir ? "...." : b.isLiquid ? "~~~~" : b.typeId.replace("minecraft:", "").slice(0, 10).padEnd(10) + (passable(b) ? "P" : "_")); } out.push(`${z - oz}: ${row.join(" ")}`); } }
+  return { out };
+};
 KS.look = async (o, ox, oz) => {
   const cx = ox + Number(o.x ?? 0), cz = oz + Number(o.z ?? 0), R = Number(o.r ?? 5), rows = [];
   for (let z = cz - R; z <= cz + R; z++) { const row = []; for (let x = cx - R; x <= cx + R; x++) { const g = groundAt(x, z); const at = ow().getBlock({ x, y: g.y, z }), un = ow().getBlock({ x, y: g.y - 1, z }); row.push(`${g.y}${(un?.typeId ?? "?").replace("minecraft:", "").slice(0, 4)}${at && !at.isAir ? "+" + at.typeId.replace("minecraft:", "").slice(0, 4) : ""}`); } rows.push(`${z - oz}: ` + row.join(" ")); }

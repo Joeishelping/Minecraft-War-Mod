@@ -5765,6 +5765,7 @@ system.runInterval(() => {
     m.hold = contact;
     m.idx = m.path.length - 1;
     m.paceIdx = tail + 24;                                        // (route points: ~24 blocks of route ahead of the tail at most)
+    m.leadIdx = lead;
     if (lead > (m.bestIdx ?? 0)) { m.wides = 0; m.edgeMsg = m.frontier ? m.edgeMsg : false; }
     if (lead > (m.bestIdx ?? 0) || contact) { m.bestIdx = Math.max(m.bestIdx ?? 0, lead); m.progT = now; }
     for (const e of all) {
@@ -9963,7 +9964,10 @@ system.runInterval(() => {
         own = (!!cu && goal === cu && !formMode.has(e.id)) || isRemote(e);   // (v6.2: out of range: always carried)
         if (own && !isRemote(e)) {
           // v7.2: the squad's in a real fight: hold here (the brain moves the men who see the enemy)
-          if (m.hold && !m.final) { gliders.delete(e.id); myMarker(e, e.location); note(e, "holding (contact)"); marchWatch.delete(e.id); continue; }
+          // (v9.26: not the men strung out behind: they close up to the front first, instead of freezing 20 blocks back
+          //  where they add nothing to the fight)
+          if (m.hold && !m.final && i >= (m.leadIdx ?? 0) - 8) { gliders.delete(e.id); myMarker(e, e.location); note(e, "holding (contact)"); marchWatch.delete(e.id); continue; }
+          if (m.hold && !m.final) note(e, "closing up");
           // far out in front of the squad: ease off till it closes up (never on a stair or in a doorway)
           if (!m.final && i > (m.paceIdx ?? Infinity) && !tightAt(e.dimension, pts, i, e.location)) { gliders.delete(e.id); myMarker(e, e.location); note(e, "waiting for the squad"); marchWatch.delete(e.id); continue; }
           if (marchStuck(e, m, pts, i, now)) continue;
@@ -10750,6 +10754,25 @@ function combatMove(e, d, now, melee, anchor, leash) {
 const gliders = new Map(); // id -> { pts, k (index of the point he's heading to), t (last refresh), paused, wait }
 const GLIDE_SPEED = 0.21;  // blocks per tick (~4.2 blocks/s: v9.22, a player's walk; was 3.4)
 const glideBan = new Map(); // id -> tick until which the glider leaves him alone (it was blocked)
+const glideFails = new Map(); // id -> { n, t, at }: carried and blocked at the same spot, again and again (v9.26)
+// the glider can't take him on: off it, and the brain / settle work out a new way. Blocked at the same spot again and again
+// (every new route from there hits the same step): his own walking gets a proper try, then he scrambles a few points on
+function glideGiveUp(e, id, g, pts, p, now) {
+  gliders.delete(id); glideBan.set(id, now + 60); personal.delete(id); travelTo.delete(id);
+  const gf = glideFails.get(id), n = gf && now - gf.t < 300 && flat(gf.at, p) < 2 ? gf.n + 1 : 1;
+  glideFails.set(id, { n, t: now, at: { x: p.x, z: p.z } });
+  if (n === 2) glideBan.set(id, now + 200);
+  else if (n >= 3) {
+    for (let kk = g.k + 2; kk < Math.min(pts.length, g.k + 8); kk++) {
+      const q = pts[kk]; if (q.climb || q.w) continue;
+      const fq = { x: Math.floor(q.x) + 0.5, y: Math.floor(q.y + 0.01), z: Math.floor(q.z) + 0.5 };
+      if (Math.abs(fq.y - p.y) > 2.5 || !glideFree(e.dimension, fq.x, fq.y, fq.z) || !floorUnder(e.dimension, fq.x, fq.y, fq.z)) continue;
+      try { e.teleport(fq); glideFails.delete(id); glideBan.delete(id); note(e, "scrambling up"); v9stat("scramble"); } catch {}
+      break;
+    }
+  }
+}
+system.runInterval(() => { if (glideFails.size > 2000) glideFails.clear(); }, 1200);
 // a cell he can be carried into: open (or a stair / slab / open-able door / ladder / water) at feet and head
 function cellOpen(b) {
   if (!b) return false;
@@ -10767,7 +10790,7 @@ function floorUnder(dim, x, y, z) {
   try {
     const fy = Math.floor(y + 0.01), here = tBlock(dim, x, fy, z), under = tBlock(dim, x, fy - 1, z);
     if (here && !here.isAir && (TI(here.typeId).stairs || TI(here.typeId).climb)) return true;   // on a stair / slab / ladder
-    return !!under && !under.isAir && (!passable(under) || TI(under.typeId).climb || TI(under.typeId).stairs) || !!under?.isLiquid;
+    return !!under && !under.isAir && (!passable(under) || TI(under.typeId).climb || TI(under.typeId).stairs || /snow_layer|carpet/.test(under.typeId)) || !!under?.isLiquid;   // (v9.26: a snow layer or a carpet holds him up: on a snowy slope every step looked like thin air)
   } catch { return true; }
 }
 function glideStart(pts, i, loc) {
@@ -10841,13 +10864,16 @@ system.runInterval(() => {
         } else {
           g.blocked = (g.blocked ?? 0) + 1;
           if (g.blocked > 10) {
-            gliders.delete(id); glideBan.set(id, now + 60); personal.delete(id); travelTo.delete(id);   // (the brain / settle work out a new way)
+            glideGiveUp(e, id, g, pts, p, now);
             // v6.2: on a bridge / ledge he can't just be left there: a fresh short route from exactly where he stands
             if (dangerNear(e.dimension, e.location)) { const tgt = pts[Math.min(pts.length - 1, g.k + 3)]; if (tgt) { glideBan.delete(id); planPersonalTo(e, "settle", { x: tgt.x, y: tgt.y, z: tgt.z }, now); } }
           }
           continue;
         }
       }
+      // (v9.26: a "step" that goes nowhere (slid along a wall into the corner) is a blocked step, not progress: it used
+      //  to reset the count, and he stood there being moved by nothing for good)
+      if (L > 0.05 && Math.hypot(tx - p.x, tz - p.z) < 0.01 && Math.abs(y - p.y) < 0.05) { g.blocked = (g.blocked ?? 0) + 1; if (g.blocked > 10) glideGiveUp(e, id, g, pts, p, now); continue; }
       g.blocked = 0;
       const gt = gunState.get(id)?.target;                          // (v7.0: a target in sight: he faces him as he goes, and can fire)
       const aimT = gt?.isValid && dist(gt.location, e.location) < 40;
