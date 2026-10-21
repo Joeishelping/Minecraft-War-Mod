@@ -9991,7 +9991,9 @@ system.runInterval(() => {
       // (v6.2: also mid-glide: queued for the last point, he'd wait his turn there forever behind whoever stands on it)
       const endK = `${Math.floor(pts[pts.length - 1].x)},${Math.floor(pts[pts.length - 1].z)}`;
       if (remote && (i >= pts.length - 2 || remoteSettled.get(e.id)?.endsWith(`|${endK}`))) { gliders.delete(e.id); remoteSpread(e, now, endK); continue; }   // the end of the known route: his own spot (and he stays on it)
-      const tight = !pts.guess && (glideBan.get(e.id) ?? 0) <= now && (remote || ahead < 0 || (forceGlide.get(e.id) ?? 0) > now || tightAt(e.dimension, pts, i, e.location));
+      // (v9.26: on rough ground (slopes, grass, flowers, snow, leaf litter) he's carried from the start: Minecraft's own
+      //  walking stalls there every few steps, and carried he goes at the same pace, in a lane of his own)
+      const tight = !pts.guess && (glideBan.get(e.id) ?? 0) <= now && (remote || ahead < 0 || (forceGlide.get(e.id) ?? 0) > now || tightAt(e.dimension, pts, i, e.location) || roughTo(e.dimension, e.location, pts[Math.min(pts.length - 1, i + 3)]));
       if (tight || ahead < 0 || onPassage(e)) stepping.add(e.id);         // (v7.2: the edge guard watches only men where there's an edge to mind)
       if (tight) {
         const g = gliders.get(e.id);

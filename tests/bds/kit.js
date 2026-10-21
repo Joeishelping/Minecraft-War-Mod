@@ -569,7 +569,7 @@ KS.wild = async (o, ox, oz) => {
   await kitLoop(Number(o.ticks ?? 3600), () => {
     const now = tick(), t = now - t0, U = up(men);
     for (const e of U) { const l = e.location, p = last.get(e.id); if (!p || Math.hypot(l.x - p.x, l.z - p.z) > 1) { last.set(e.id, { x: l.x, z: l.z }); stillSince.set(e.id, now); } }
-    for (const e of U) { const l = e.location, q = prevAt.get(e.id) ?? l; prevAt.set(e.id, { x: l.x, z: l.z }); const still = Math.hypot(l.x - q.x, l.z - q.z) < 0.4, k = (still ? "STILL " : "move ") + (notes.get(e.id)?.text ?? "-").replace(/[0-9(),]+/g, "").slice(0, 26); NS[k] = (NS[k] ?? 0) + 1; if (still && globalThis.__DB) { const kb = k + " @" + (globalThis.__DB.get(e.id) ?? "-") + " st" + (getJSON(e, "war:st", {}).g ?? "") + " mk" + (() => { const m = marker(Number(gdp(e, "war:goal") ?? 0)); return m ? Math.round(dist(m.location, l)) : "-"; })(); DBS[kb] = (DBS[kb] ?? 0) + 1; } }
+    for (const e of U) { const l = e.location, q = prevAt.get(e.id) ?? l; prevAt.set(e.id, { x: l.x, z: l.z }); const still = Math.hypot(l.x - q.x, l.z - q.z) < 0.4, k = (still ? "STILL " : "move ") + (notes.get(e.id)?.text ?? "-").replace(/[0-9(),]+/g, "").slice(0, 26); NS[k] = (NS[k] ?? 0) + 1; if (still && globalThis.__DB) { const kb = k + " @" + (globalThis.__DB.get(e.id) ?? "-") + "/" + (gliders.has(e.id) ? globalThis.__GL?.get(e.id) ?? "g?" : "-") + " st" + (getJSON(e, "war:st", {}).g ?? "") ; DBS[kb] = (DBS[kb] ?? 0) + 1; } }
     if (t % 40 < 10) {
       const cz = U.reduce((a, e) => a + e.location.z, 0) / Math.max(1, U.length), cx = U.reduce((a, e) => a + e.location.x, 0) / Math.max(1, U.length);
       const spread = Math.max(0, ...U.map((e) => Math.hypot(e.location.x - cx, e.location.z - cz)));
@@ -622,6 +622,7 @@ KS.wildmeet = async (o, ox, oz) => {
   await kitWait(20);
   const gA = groundAt(A.x, A.z), gB = groundAt(B.x, B.z);
   await Promise.all([kitOrder(1, { x: B.x + 0.5, y: gB.y, z: B.z + 0.5 }), kitOrder(2, { x: A.x + 0.5, y: gA.y, z: A.z + 0.5 })]);
+  if (globalThis.__GR) globalThis.__GR = {};
   const t0 = tick(), up = (L) => L.filter((e) => e.isValid && !downed.has(e.id) && !isDown(e)), last = new Map(), stillSince = new Map(), tl = [], NS = {};
   let stuckMax = 0, stuckAt;
   await kitLoop(Number(o.ticks ?? 3600), () => {
@@ -636,7 +637,7 @@ KS.wildmeet = async (o, ox, oz) => {
     }
     return !up(a).length || !up(b).length;
   });
-  const r = { ground: [gA.y, gB.y], secs: Math.round((tick() - t0) / 20), up1: up(a).length, up2: up(b).length, stuckMax, stuckAt, ...kitShotStats(t0), notes: Object.entries(NS).sort((x, y) => y[1] - x[1]).slice(0, 16), tl };
+  const r = { gr: globalThis.__GR, ground: [gA.y, gB.y], secs: Math.round((tick() - t0) / 20), up1: up(a).length, up2: up(b).length, stuckMax, stuckAt, ...kitShotStats(t0), notes: Object.entries(NS).sort((x, y) => y[1] - x[1]).slice(0, 16), tl };
   for (const e of [...a, ...b]) try { e.remove(); } catch {}
   return r;
 };
