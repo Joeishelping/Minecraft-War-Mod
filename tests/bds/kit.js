@@ -549,7 +549,7 @@ KS.wild = async (o, ox, oz) => {
   const start = { x: x0, z: oz - 170 }, dest = { x: x0, z: oz + 40 };
   const g0 = groundAt(start.x, start.z), g1 = groundAt(dest.x, dest.z);
   const men = []; for (let i = 0; i < N; i++) { const x = start.x + (i % 5) * 2 - 4, z = start.z - Math.floor(i / 5) * 2, g = groundAt(x, z); men.push(kitSoldier(1, { x: x + 0.5, y: g.y, z: z + 0.5 }, ["rifle", "smg", "semi", "mg", "rifle"][i % 5], "hold")); }
-  const amb = []; const ax = x0 + Number(o.side ?? 14), az = oz - 20;
+  const amb = []; const ax = o.hill ? dest.x - 2 : x0 + Number(o.side ?? 14), az = o.hill ? dest.z - 2 : oz + Number(o.az ?? -20);   // (hill=1: they hold the objective itself)
   for (let i = 0; i < E; i++) { const x = ax + (i % 3) * 2, z = az + Math.floor(i / 3) * 3, g = groundAt(x, z); amb.push(kitSoldier(2, { x: x + 0.5, y: g.y, z: z + 0.5 }, ["rifle", "semi", "mg"][i % 3], "hold")); }
   setRelPair(1, 2, "1", false);
   await kitWait(20);
@@ -601,6 +601,34 @@ KS.mkwild = async (o, ox, oz) => {
     res[mode] = out.join(" ");
   }
   return res;
+};
+// v9.26: two squads on real land ordered across to each other's side: they meet somewhere in the middle. Per side: how
+// many up, shots, hits; every 5 s each side's centre, spread and what they're doing; stuck = no 1 block in 5 s.
+KS.wildmeet = async (o, ox, oz) => {
+  const N = Number(o.n ?? 8), D = Number(o.dist ?? 120), x0 = ox + Number(o.dx ?? 0);
+  const A = { x: x0, z: oz - D / 2 }, B = { x: x0, z: oz + D / 2 };
+  const W5 = ["rifle", "smg", "semi", "mg", "rifle"], side = (f, at) => { const L = []; for (let i = 0; i < N; i++) { const x = at.x + (i % 4) * 2 - 3, z = at.z + Math.floor(i / 4) * 2 * (f === 1 ? -1 : 1), g = groundAt(x, z); L.push(kitSoldier(f, { x: x + 0.5, y: g.y, z: z + 0.5 }, W5[i % 5], "hold")); } return L; };
+  const s1 = (o.order ? 1 : 0) % 2 ? side(2, B) : side(1, A), s2 = (o.order ? 1 : 0) % 2 ? side(1, A) : side(2, B), a = s1[0] && P(s1[0], "war:faction") === 1 ? s1 : s2, b = a === s1 ? s2 : s1;
+  setRelPair(1, 2, "1", false);
+  await kitWait(20);
+  const gA = groundAt(A.x, A.z), gB = groundAt(B.x, B.z);
+  await Promise.all([kitOrder(1, { x: B.x + 0.5, y: gB.y, z: B.z + 0.5 }), kitOrder(2, { x: A.x + 0.5, y: gA.y, z: A.z + 0.5 })]);
+  const t0 = tick(), up = (L) => L.filter((e) => e.isValid && !downed.has(e.id) && !isDown(e)), last = new Map(), stillSince = new Map(), tl = [], NS = {};
+  let stuckMax = 0, stuckAt;
+  await kitLoop(Number(o.ticks ?? 3600), () => {
+    const now = tick(), t = now - t0;
+    for (const e of [...up(a), ...up(b)]) { const l = e.location, p = last.get(e.id); if (!p || Math.hypot(l.x - p.x, l.z - p.z) > 1) { last.set(e.id, { x: l.x, z: l.z }); stillSince.set(e.id, now); } const k = `${P(e, "war:faction")}:${(notes.get(e.id)?.text ?? "-").replace(/[0-9(),]+/g, "").slice(0, 24)}`; NS[k] = (NS[k] ?? 0) + 1; }
+    if (t % 100 < 10) {
+      const row = [a, b].map((L, i) => { const U = up(L); if (!U.length) return `f${i + 1}: none`; const cx = U.reduce((q, e) => q + e.location.x, 0) / U.length, cz = U.reduce((q, e) => q + e.location.z, 0) / U.length; const st = U.filter((e) => now - (stillSince.get(e.id) ?? now) > 100); const thr = U.filter((e) => perc.get(e.id)?.threat).length, fire = U.filter((e) => now - (lastFired(e.id) ?? -999) < 40).length; return `f${i + 1} up${U.length} z${Math.round(cz - oz)} sp${Math.round(Math.max(0, ...U.map((e) => Math.hypot(e.location.x - cx, e.location.z - cz))))} thr${thr} fire${fire} stuck${st.length}`; });
+      const st = [...up(a), ...up(b)].filter((e) => now - (stillSince.get(e.id) ?? now) > 100 && !perc.get(e.id)?.threat);
+      if (st.length > stuckMax) { stuckMax = st.length; stuckAt = st.map((e) => `f${P(e, "war:faction")} ${Math.round(e.location.x - ox)},${Math.round(e.location.y)},${Math.round(e.location.z - oz)}:${(notes.get(e.id)?.text ?? "").slice(0, 24)}`); }
+      tl.push(`${Math.round(t / 20)}s ${row.join(" | ")}`);
+    }
+    return !up(a).length || !up(b).length;
+  });
+  const r = { ground: [gA.y, gB.y], secs: Math.round((tick() - t0) / 20), up1: up(a).length, up2: up(b).length, stuckMax, stuckAt, ...kitShotStats(t0), notes: Object.entries(NS).sort((x, y) => y[1] - x[1]).slice(0, 16), tl };
+  for (const e of [...a, ...b]) try { e.remove(); } catch {}
+  return r;
 };
 // a map of the land around a spot: per column, the ground's height and what's on it (debugging the wild march)
 KS.look = async (o, ox, oz) => {

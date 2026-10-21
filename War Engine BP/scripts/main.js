@@ -5776,6 +5776,13 @@ system.runInterval(() => {
       if (slot) setCatchup(e, slot);
     }
     const last = m.path[m.path.length - 1];
+    // v9.26: the next leg is worked out while they're still on this one (from where this one ends), so it's ready when
+    // they get there: on a hillside that planning took long enough for the whole squad to stand at the end of the
+    // route for half a minute
+    { const lt0 = m.legT;
+      if (!m.path.guess && lt0 && !lt0.final && m.legs?.length > 1 && Math.hypot(lt0.x - last.x, lt0.z - last.z) <= 8 && prog[0] >= m.path.length - 16 && prog[0] < m.path.length - 4 && !last.climb) {
+        m.legs.shift(); m.keep = m.path.length - 1; requestPlan(id, m, { x: last.x, y: last.y, z: last.z }); v9stat("legAhead"); changed = true; continue;
+      } }
     // (v6.0: the squad stops ~3 blocks short of its markers: "at the end" when the front is within a few points of it;
     // waiting for the exact last point froze long marches at the end of a leg)
     const atEnd = !m.path.guess && (flat(last, c) < 8 || prog[0] >= m.path.length - 4);   // (v6.2: a guessed straight line is never "arrived")   // (v6.2: a guessed straight line is never "arrived": it said "in position" 100 blocks short)
@@ -10002,11 +10009,11 @@ system.runInterval(() => {
         continue;
       }
       // v9.25: Minecraft's own walking stalls on rough ground (a slope, a bush, a block of grass it won't path over)
-      // with the marker in plain reach. Not moving for a second when he should be: he's carried past it.
+      // with the marker in plain reach. Not moving for half a second there when he should be: he's carried on for 3 s.
       if (!remote) {
         const l0 = e.location, wk = walkWatch.get(e.id);
         if (!wk || now - (wk.seen ?? wk.t) > 8 || Math.hypot(l0.x - wk.x, l0.z - wk.z) > 0.3) walkWatch.set(e.id, { x: l0.x, z: l0.z, t: now, seen: now });
-        else { wk.seen = now; if (now - wk.t >= 20 && wantsWalk(e, Number(gdp(e, "war:goal") ?? 0)) && roughTo(e.dimension, l0, tgtOf(e))) { forceGlide.set(e.id, now + 40); walkWatch.delete(e.id); v9stat("walkStall"); } }
+        else { wk.seen = now; if (now - wk.t >= 12 && wantsWalk(e, Number(gdp(e, "war:goal") ?? 0)) && roughTo(e.dimension, l0, tgtOf(e))) { forceGlide.set(e.id, now + 60); walkWatch.delete(e.id); v9stat("walkStall"); } }
       }
       gliders.delete(e.id);
       let tgt = pts[ahead >= 0 ? ahead : driveAhead(pts, i, 7)];
