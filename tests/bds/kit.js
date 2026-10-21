@@ -641,6 +641,28 @@ KS.wildmeet = async (o, ox, oz) => {
   for (const e of [...a, ...b]) try { e.remove(); } catch {}
   return r;
 };
+// v9.26: you walk 150 blocks over real land with 6 men following you (Follow me): how far behind are they, does anyone
+// get left behind or stuck, and how long after you stop are they all with you?
+KS.wildfollow = async (o, ox, oz) => {
+  const x0 = ox + Number(o.dx ?? 0), z0 = oz - 170, g0 = groundAt(x0, z0);
+  const ld = ow().spawnEntity("minecraft:armor_stand", { x: x0 + 0.5, y: g0.y, z: z0 + 0.5 });
+  globalThis.__fakeLeader = (id) => (id === ld.id ? ld : undefined);
+  const fs = [0, 1, 2, 3, 4, 5].map((i) => { const e = kitSoldier(1, standSpot(x0 - 3 + (i % 3) * 2, z0 - 3 - Math.floor(i / 3) * 2), "rifle", "hold"); sdp(e, "war:squad", 0); giveFunction(e, "follow", ld); return e; });
+  await kitWait(60);
+  const v = Number(o.v ?? 0.2), tl = []; let sum = 0, n = 0, worst = 0;
+  const gaps = () => fs.filter((e) => e.isValid).map((e) => flat(e.location, ld.location));
+  for (let k = 0; k < Math.round(150 / v); k++) {
+    const l = ld.location, nz = l.z + v, g = groundAt(Math.floor(l.x), Math.floor(nz));
+    ld.teleport({ x: l.x, y: g.y, z: nz }); await kitWait(1);
+    if (k > 60 && k % 10 === 0) { const G = gaps(), m = G.reduce((a, b) => a + b, 0) / Math.max(1, G.length); sum += m; n++; worst = Math.max(worst, ...G); }
+    if (k % 100 === 0) tl.push(`${Math.round(k / 20)}s you z${Math.round(ld.location.z - oz)} gaps ${gaps().map((q) => Math.round(q)).join(",")} [${fs.map((e) => (notes.get(e.id)?.text ?? "").slice(0, 14)).join("|")}]`);
+  }
+  let t = 0; for (; t < 600; t += 10) { await kitWait(10); if (gaps().every((q) => q < 6)) break; }
+  const r = { avgGap: +(sum / Math.max(1, n)).toFixed(1), worst: Math.round(worst), allWithYou: t >= 600 ? `no (${gaps().map((q) => Math.round(q)).join(",")})` : `${(t / 20).toFixed(1)} s`, tl };
+  globalThis.__fakeLeader = undefined;
+  for (const e of [...fs, ld]) try { e.remove(); } catch {}
+  return r;
+};
 // a map of the land around a spot: per column, the ground's height and what's on it (debugging the wild march)
 // the blocks in a small box, layer by layer (y from low to high): "." air, "~" water, else the first 4 letters of the block
 KS.box = async (o, ox, oz) => {
