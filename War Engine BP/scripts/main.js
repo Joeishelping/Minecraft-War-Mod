@@ -14380,6 +14380,7 @@ function trailAdd(p, now) {
   try {
     if (isRiding(p)) return;
     const l = p.location; let T = TRAIL.get(p.id);
+    if (T && T.t === now && T.pts.length) return;                    // (kept once a tick: followers, crews and riders all feed it)
     if (!T) { T = { pts: [], t: now }; TRAIL.set(p.id, T); }
     T.t = now;
     const w = inWater(p);

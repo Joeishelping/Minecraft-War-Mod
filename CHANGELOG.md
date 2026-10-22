@@ -1,6 +1,6 @@
 # War Engine changelog
 
-## v9.27.0 (Out of the hole, and trucks and horses over real land)
+## v9.27.0 (Out of the hole: trucks, horses and swamp marches over real land)
 
 - **Trucks driven by their crew cross real land.** A truck with soldiers at the wheel following you over natural
   terrain never moved: its physics ran it into the first slope, bank or tree, and after 20 s the crew got out and
@@ -9,6 +9,13 @@
   cliff. Stuck, it backs out and tries again; at a ledge it can't take it's put a little further along your trail; wedged
   in a gully it's set down where it fits. 150 blocks over hills: about 20 blocks behind you on average, with you within
   a few seconds of you stopping (it never got there before), the whole crew still aboard.
+- **Marches through swamps and over hills, without the long stops.** Three things held squads up on real land:
+  while the next stretch of the route was being worked out, men out in front stood "waiting for the squad" until it
+  came; one search for a stretch through a swamp could run on for half a minute; and an old saved march could take over
+  a new march's men, so two or three marches drove the same squad, each working out the same route. Now pacing keeps
+  going while the route is worked out, each stretch gets a few seconds and then they go as far as it got, and a new
+  march has its men to itself. 210 blocks through a swamp: 8 of 10 there in 102 s (none within 2 minutes before); a hill
+  attack over real land: the top taken in about 2 minutes with 6 men up there (4 men in over 3 minutes before).
 - **Soldiers in a seat don't suffocate.** Riding a vehicle or a mount pressed against a wall, a soldier took suffocation
   damage until he died.
 - **Mounted followers ride your trail.** On rough land one or two horses in every group stuck on a bank and fell 100+
