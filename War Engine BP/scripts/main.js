@@ -14674,38 +14674,143 @@ async function guideBook(p) {
 
 // ---- v9.19: soldiers drive the troop boat, the gunboat and the transport truck themselves when no player has the
 // wheel: after the player they follow (anyone aboard on "Follow me" / "Escort", e.g. put aboard with Mount up or
-// Board), else to where their order sends them. They slow as they close in and stop a few blocks off; a truck takes
-// one-block steps, a boat only goes where there's water.
+// Board), else to where their order sends them. They slow as they close in and stop a few blocks off; a truck goes
+// along your trail over the land as it lies (truckStep), a boat only goes where there's water.
 const CREW_DRIVEN = ["war:boat", "war:gunboat", "war:truck"];
-function crewDest(riders, dimId) {
+function crewDest(riders, dimId, loc) {
   for (const r of riders) {
     if (r.typeId !== SOLDIER) continue;
     try {
       const d = sd(r);
-      if ((d.func === "follow" || d.func === "escort") && d.leader) { const p = findPlayer(d.leader); if (p && p.dimension.id === dimId) return { at: p.location, stop: 6 }; }
+      if ((d.func === "follow" || d.func === "escort") && d.leader) {
+        const p = findPlayer(d.leader); if (!p || p.dimension.id !== dimId) continue;
+        // (v9.27: along your trail, a few blocks ahead of where the truck is on it: round the hills and trees the way you
+        //  went. Driven straight at you, it ran into the first slope or tree and the crew got out and walked.)
+        trailAdd(p, tick());                                                         // (his trail is kept while a crew drives after him too)
+        const T = TRAIL.get(d.leader);
+        if (T?.pts.length > 4 && loc && flat(p.location, loc) > 10) {
+          let bi = -1, bd = 14;
+          for (let i = T.pts.length - 1; i >= 0; i--) { const q = T.pts[i]; if (q.dim !== dimId) continue; const d0 = Math.hypot(q.x - loc.x, q.z - loc.z); if (d0 < bd) { bd = d0; bi = i; } }
+          if (bi >= 0) { const q = T.pts[Math.min(T.pts.length - 1, bi + 8)]; return { at: q, stop: 1, trail: true, T, bi, far: flat(p.location, loc) }; }
+        }
+        return { at: p.location, stop: 6 };
+      }
       const rt = rideTo.get(r.id); if (rt) return { at: rt, stop: 4 };
     } catch {}
   }
   return undefined;
 }
+// v9.27: does a ground vehicle's box (its collision box) fit, at its place or at another, without overlapping a block?
+const VEH_BOX = { "war:truck": [1.3, 2.4], "war:tank": [1.5, 2.2] };   // (a little inside its collision box: it may brush a bank)
+function vehFits(v, at) {
+  const b = VEH_BOX[v.typeId]; if (!b) return true;
+  const l = at ?? v.location, dim = v.dimension, hw = b[0] - 0.05;
+  for (let by = Math.floor(l.y + 0.05); by <= Math.floor(l.y + b[1] - 0.05); by++)
+    for (let bx = Math.floor(l.x - hw); bx <= Math.floor(l.x + hw); bx++)
+      for (let bz = Math.floor(l.z - hw); bz <= Math.floor(l.z + hw); bz++) {
+        try { const k = dim.getBlock({ x: bx, y: by, z: bz }); if (k && !k.isAir && !k.isLiquid && !passable(k) && !k.typeId.includes("leaves")) return false; } catch { return false; }   // (it pushes through leaves)
+      }
+  return true;
+}
+// the nearest place (within 6 blocks, about its level) where it fits, standing on something: it's set down there
+function unwedge(v) {
+  const l = v.location, dim = v.dimension, x0 = Math.floor(l.x) + 0.5, z0 = Math.floor(l.z) + 0.5, y0 = Math.floor(l.y + 0.3);
+  for (let r = 1; r <= 6; r++)
+    for (let dx = -r; dx <= r; dx++)
+      for (let dz = -r; dz <= r; dz++) {
+        if (Math.max(Math.abs(dx), Math.abs(dz)) !== r) continue;
+        for (const dy of [0, 1, -1, 2, -2, 3]) {
+          const at = { x: x0 + dx, y: y0 + dy, z: z0 + dz };
+          if (!solidAt(dim, { x: at.x, y: at.y - 0.5, z: at.z }) || !vehFits(v, at)) continue;
+          try { v.teleport(at, { keepVelocity: false }); return true; } catch { return false; }
+        }
+      }
+  return false;
+}
+// v9.27: a truck with a soldier at the wheel is carried a step a tick over the land as it lies: up a one-block rise,
+// down a drop of up to three, round whatever it doesn't fit past. (Left to its physics on real land it ran into the
+// first slope or trunk and sat there till the crew gave up and walked.)
+function truckFloor(dim, x, y, z) {
+  try { if (dim.getBlock({ x, y, z })?.isLiquid) return false; } catch { return false; }       // (not into water: it'd drown)
+  for (let bx = Math.floor(x - 1.45); bx <= Math.floor(x + 1.45); bx++)                        // (anything under its box holds it up)
+    for (let bz = Math.floor(z - 1.45); bz <= Math.floor(z + 1.45); bz++) {
+      try { const k = dim.getBlock({ x: bx, y: Math.floor(y - 0.5), z: bz }); if (k && !k.isAir && !k.isLiquid && !passable(k)) return true; } catch {}
+    }
+  return false;
+}
+// where a step of s along yaw puts it (its new place), or undefined (it doesn't fit there, or it's a cliff)
+function truckAt(v, loc, yaw, s) {
+  const dim = v.dimension, f = fwdFromYaw(yaw), x = loc.x + f.x * s, z = loc.z + f.z * s, base = Math.floor(loc.y + 0.05);
+  if (vehFits(v, { x, y: base, z })) {
+    if (truckFloor(dim, x, base, z)) return { x, y: Math.max(base, loc.y - 0.35), z };
+    for (let dy = 1; dy <= 3; dy++) {
+      if (!vehFits(v, { x, y: base - dy, z })) return undefined;
+      if (truckFloor(dim, x, base - dy, z)) return { x, y: Math.max(base - dy, loc.y - 0.35), z };
+    }
+    return undefined;                                                                         // (a cliff: not over it)
+  }
+  if (vehFits(v, { x, y: base + 1, z }) && truckFloor(dim, x, base + 1, z) && vehFits(v, { x: loc.x, y: base + 1, z: loc.z })) return { x, y: base + 1, z };
+  return undefined;
+}
+// (a ledge it can't get up, a gap it doesn't fit through, and backing off and trying again hasn't helped: it's put down
+//  a little further along your trail, where it fits, the way men stuck on a route are)
+function truckHop(v, want) {
+  const P0 = want.T.pts, dim = v.dimension;
+  for (let i = want.bi + 3; i < Math.min(P0.length, want.bi + 24); i++) {
+    const q = P0[i]; if (q.dim !== dim.id) continue;
+    for (const dy of [0, 1, -1, 2]) {
+      const at = { x: q.x, y: q.y + dy, z: q.z };
+      if (!vehFits(v, at) || !truckFloor(dim, at.x, at.y, at.z)) continue;
+      const n = P0[Math.min(P0.length - 1, i + 3)], yaw = (Math.atan2(-(n.x - q.x), n.z - q.z) * 180) / Math.PI;
+      try { v.teleport(at, { rotation: { x: 0, y: Number.isFinite(yaw) ? yaw : v.getRotation().y }, keepVelocity: false }); return true; } catch { return false; }
+    }
+  }
+  return false;
+}
+function truckStep(v, want, loc, L) {
+  const cur = v.getRotation().y, wantYaw = (Math.atan2(-(want.at.x - loc.x), want.at.z - loc.z) * 180) / Math.PI;
+  const off = Math.abs(((wantYaw - cur + 540) % 360) - 180);
+  const sp = ((want.far ?? 0) > 20 ? 0.4 : 0.3) * Math.min(1, (L - want.stop) / 8 + 0.3) * (off > 70 ? 0.35 : off > 35 ? 0.7 : 1);   // (well behind you: it puts its foot down)
+  const yaw = turnToward(cur, wantYaw, 6);
+  for (const k of [0, 30, -30, 60, -60, 90, -90]) {                                              // (straight on, else round it)
+    const y2 = k ? turnToward(cur, wantYaw + k, 9) : yaw, n = truckAt(v, loc, k ? wantYaw + k : y2, k ? sp * 0.6 : sp);
+    if (!n) continue;
+    try { v.teleport(n, { rotation: { x: 0, y: y2 }, keepVelocity: false }); } catch {}
+    return true;
+  }
+  try { v.setRotation({ x: 0, y: yaw }); } catch {}
+  return false;
+}
 function crewDrive(v, riders, st, loc, vel, boat) {
-  const want = crewDest(riders, v.dimension.id); if (!want) return { x: 0, z: 0 };
+  const want = crewDest(riders, v.dimension.id, loc); if (!want) return { x: 0, z: 0 };
   const dx = want.at.x - loc.x, dz = want.at.z - loc.z, L = Math.hypot(dx, dz);
-  if (L <= want.stop) return { x: 0, z: 0 };
+  if (L <= want.stop) { st.stuckAt = undefined; return { x: 0, z: 0 }; }
+  // (v9.27: no headway for 2 s with somewhere to go: it backs out, turning, for a second and a half, then tries again)
+  const now = tick();
+  if ((st.backUntil ?? 0) > now) {
+    const yb = turnToward(v.getRotation().y, st.backYaw, 4);
+    if (!boat) { const n = truckAt(v, loc, yb + 180, 0.12); try { v.teleport(n ?? loc, { rotation: { x: 0, y: yb }, keepVelocity: false }); } catch {} return { x: 0, z: 0 }; }
+    v.setRotation({ x: 0, y: yb }); const fb = fwdFromYaw(yb); return { x: -fb.x * 0.12, z: -fb.z * 0.12 };
+  }
+  if (!st.stuckAt || flat(st.stuckAt, loc) > 1) { if (st.stuckAt && flat(st.stuckAt, loc) > 4) st.backs = 0; st.stuckAt = { x: loc.x, z: loc.z, t: now }; }
+  else if (now - st.stuckAt.t > 40) {
+    // (wedged: in a gully or against a trunk, overlapping blocks, it can't move at all, not even back: it's set down
+    //  at the nearest place it fits. And backing out three times over without getting anywhere counts as wedged too.)
+    st.backs = (st.backs ?? 0) + 1; st.stuckAt = undefined;
+    if (!boat && want.trail && st.backs > 1 && truckHop(v, want)) { st.backs = 0; v9stat("truckHop"); return { x: 0, z: 0 }; }
+    if (!boat && (!vehFits(v) || st.backs > 3) && unwedge(v)) { st.backs = 0; v9stat("truckUnwedged"); return { x: 0, z: 0 }; }
+    st.backUntil = now + 30; st.backYaw = v.getRotation().y + (Math.random() < 0.5 ? 50 : -50); v9stat("truckBackOut");
+  }
+  if (!boat) { truckStep(v, want, loc, L); return { x: 0, z: 0 }; }
   let inWater = false;
-  if (boat) { try { inWater = !!v.dimension.getBlock({ x: loc.x, y: loc.y - 0.1, z: loc.z })?.isLiquid || !!v.dimension.getBlock(loc)?.isLiquid; } catch {} }
-  const max = boat ? (inWater ? (v.typeId === "war:gunboat" ? 0.5 : 0.4) : 0.04) : 0.28;
+  try { inWater = !!v.dimension.getBlock({ x: loc.x, y: loc.y - 0.1, z: loc.z })?.isLiquid || !!v.dimension.getBlock(loc)?.isLiquid; } catch {}
+  const max = inWater ? (v.typeId === "war:gunboat" ? 0.5 : 0.4) : 0.04;
   const wantYaw = (Math.atan2(-dx, dz) * 180) / Math.PI, cur = v.getRotation().y;
   const off = Math.abs(((wantYaw - cur + 540) % 360) - 180);
-  const yaw = turnToward(cur, wantYaw, boat ? 5 : 3.5);
+  const yaw = turnToward(cur, wantYaw, 5);
   v.setRotation({ x: 0, y: yaw });
   let sp = max * Math.min(1, (L - want.stop) / 8 + 0.25) * (off > 90 ? 0.25 : off > 45 ? 0.6 : 1);
-  if (!boat && solidAt(v.dimension, { x: loc.x, y: loc.y - 0.2, z: loc.z })) {      // a one-block step ahead: up it goes
-    const f0 = fwdFromYaw(yaw), ahead = { x: loc.x + f0.x * 1.8, y: loc.y + 0.5, z: loc.z + f0.z * 1.8 };
-    if (solidAt(v.dimension, ahead) && !solidAt(v.dimension, { x: ahead.x, y: loc.y + 1.5, z: ahead.z }) && !solidAt(v.dimension, { x: ahead.x, y: loc.y + 2.5, z: ahead.z })) { try { v.applyImpulse({ x: 0, y: 0.45, z: 0 }); } catch {} }
-    else if (solidAt(v.dimension, ahead)) sp *= 0.3;                                  // (a wall: it eases off and turns)
-  }
-  if (boat && !inWater) sp = Math.min(sp, 0.04);
+  if (!inWater) sp = Math.min(sp, 0.04);
   const f = fwdFromYaw(yaw);
   return { x: f.x * sp, z: f.z * sp };
 }

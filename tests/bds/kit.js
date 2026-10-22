@@ -707,6 +707,38 @@ KS.pit = async (o, ox, oz) => {
   for (const e of men) try { e.remove(); } catch {}
   return r;
 };
+// v9.27: a truck with 3 men aboard following you 150 blocks over real land (you walk a real route): does it keep up,
+// get stuck on trees and slopes, lose its men?
+KS.wildtruck = async (o, ox, oz) => {
+  const x0 = ox + Number(o.dx ?? 0), z0 = oz - 170, g0 = groundAt(x0, z0), v = Number(o.v ?? 0.2), tl = [];
+  const ld = ow().spawnEntity("minecraft:armor_stand", { x: x0 + 0.5, y: g0.y, z: z0 + 0.5 });
+  globalThis.__fakeLeader = (id) => (id === ld.id ? ld : undefined);
+  const V0 = globalThis.__viewers; globalThis.__viewers = () => { try { return [{ d: "minecraft:overworld", x: ld.location.x, z: ld.location.z }]; } catch { return []; } };
+  const sp = standSpot(x0 + 3, z0 - 6), tr = ow().spawnEntity(o.v2 ?? "war:truck", sp);
+  const crew = [0, 1, 2].map((i) => { const e = kitSoldier(1, standSpot(x0 + 5 + i, z0 - 4), "rifle", "hold"); giveFunction(e, "follow", ld); return e; });
+  await kitWait(10);
+  const rd = tr.getComponent("minecraft:rideable"); for (const e of crew) { try { e.teleport(tr.location); rd.addRider(e); } catch {} }
+  await kitWait(10);
+  let route; planRoute(ow(), { x: x0 + 0.5, y: g0.y, z: z0 + 0.5 }, { x: x0 + 0.5, z: z0 + 150.5 }, (pts) => { route = pts ?? []; }, { max: 200000, maxRadius: 300 });
+  for (let k = 0; k < 600 && !route; k++) await kitWait(1);
+  const along = []; for (let i = 1; i < (route?.length ?? 0); i++) { const a0 = route[i - 1], b0 = route[i], L = Math.hypot(b0.x - a0.x, b0.z - a0.z) || 1e-6; for (let s0 = 0; s0 < L; s0 += v) along.push({ x: a0.x + (b0.x - a0.x) * s0 / L, y: s0 / L < 0.5 ? a0.y : b0.y, z: a0.z + (b0.z - a0.z) * s0 / L }); }
+  let sum = 0, n = 0, worst = 0; const ON0 = new Map();
+  for (let k = 0; k < along.length; k++) {
+    ld.teleport(along[k]); await kitWait(1);
+    const g = flat(tr.location, ld.location);
+    if (k > 60 && k % 10 === 0) { sum += g; n++; worst = Math.max(worst, g); }
+    if (k % 100 === 0) tl.push(`${Math.round(k / 20)}s you z${Math.round(ld.location.z - oz)} truck gap ${Math.round(g)} y${Math.round(tr.location.y)} aboard ${rd.getRiders().length}`);
+    if (o.detail) for (const e of crew) { try { const on = `${isRiding(e) ? "on" : "OFF"} hp${Math.round(e.getComponent("health")?.currentValue ?? -1)}${downed.has(e.id) ? " DOWN" : ""}`, w0 = ON0.get(e.id); if (w0 !== on) tl.push(`  ${k} ${e.id.slice(-4)} ${on} note ${notes.get(e.id)?.text} at ${Math.round(e.location.x - ox)},${Math.round(e.location.y)},${Math.round(e.location.z - oz)}`); ON0.set(e.id, on); } catch { if (ON0.get(e.id) !== "gone") tl.push(`  ${k} gone`); ON0.set(e.id, "gone"); } }
+    if (o.detail && k % 40 === 0) { const rs = rd.getRiders(), w = crewDest(rs, tr.dimension.id, tr.location), st = vstate.get(tr.id), vv = tr.getVelocity(); tl.push(`  ${k} r0 ${rs[0]?.typeId} fn ${rs[0] ? sd(rs[0]).func : "-"} want ${w ? `${Math.round(w.at.x - tr.location.x)},${Math.round(w.at.z - tr.location.z)} tr${w.trail ? 1 : 0}` : "none"} vel ${vv.x.toFixed(2)},${vv.z.toFixed(2)} at ${Math.round(tr.location.x - ox)},${Math.round(tr.location.z - oz)} st ${st ? "y" : "n"} trail ${TRAIL.get(ld.id)?.pts.length ?? 0}`);
+      if (w) { const l = tr.location, yw = (Math.atan2(-(w.at.x - l.x), w.at.z - l.z) * 180) / Math.PI, f = fwdFromYaw(yw), b = Math.floor(l.y + 0.05), q = []; for (const s0 of [0, 0.3, 1]) for (let dy = -1; dy <= 2; dy++) { const at = { x: l.x + f.x * s0, y: b + dy, z: l.z + f.z * s0 }; q.push(`${s0}/${dy}:${vehFits(tr, at) ? "F" : "-"}${truckFloor(tr.dimension, at.x, at.y, at.z) ? "f" : "-"}`); } tl.push(`    y${l.y.toFixed(2)} rot ${Math.round(tr.getRotation().y)} want ${Math.round(yw)} at ${JSON.stringify(truckAt(tr, l, yw, 0.3))} ${q.join(" ")}`); }
+    }
+  }
+  let t = 0; for (; t < 600; t += 10) { await kitWait(10); if (flat(tr.location, ld.location) < 10) break; }
+  const r = { routeLen: along.length, avgGap: +(sum / Math.max(1, n)).toFixed(1), worst: Math.round(worst), withYou: t >= 600 ? `no (${Math.round(flat(tr.location, ld.location))})` : `${(t / 20).toFixed(1)} s`, aboard: rd.getRiders().length, tl };
+  globalThis.__fakeLeader = undefined; globalThis.__viewers = V0;
+  for (const e of [...crew, tr, ld]) try { e.remove(); } catch {}
+  return r;
+};
 // a map of the land around a spot: per column, the ground's height and what's on it (debugging the wild march)
 // the blocks in a small box, layer by layer (y from low to high): "." air, "~" water, else the first 4 letters of the block
 KS.box = async (o, ox, oz) => {

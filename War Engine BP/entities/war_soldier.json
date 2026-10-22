@@ -18104,6 +18104,15 @@
         "value": 64,
         "max": 64
       },
+      "minecraft:damage_sensor": {
+        "triggers": [
+          {
+            "cause": "suffocation",
+            "deals_damage": "no",
+            "on_damage": { "filters": { "test": "is_riding", "subject": "self", "value": true } }
+          }
+        ]
+      },
       "minecraft:breathable": {
         "breathes_water": false,
         "breathes_air": true,
