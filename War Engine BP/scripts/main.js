@@ -3422,6 +3422,7 @@ async function warTable(player, pre) {
     sdp(world, "war:set_bands", !!sr.formValues[12]);
     for (const e of allOf(SOLDIER)) { try { setP(e, "war:role", roleFor(e)); } catch {} }
     if (sr.formValues[13]) { learned = {}; saveLearned(); player.sendMessage("§eEvery faction's learned tactics were reset to the defaults."); }
+    else if (sr.formValues[9]) { const fs = Object.keys(getLearned()).map(Number).filter((f) => f > 0); player.sendMessage(fs.length ? "§eBattle learning, so far:\n" + fs.map(learnSummary).join("\n") : "§eBattle learning is on: each faction learns from every fight from now on (shown here when you save the settings)."); }   // (v9.26)
     sdp(world, "war:set_abc", !!sr.formValues[14]);
     sdp(world, "war:set_radio", Number(sr.formValues[15] ?? 1));
     sdp(world, "war:set_diag", !!sr.formValues[16]);
@@ -11117,6 +11118,8 @@ function reflexMove(e, d, now, anchor, leash) {
 }
 
 // ================================================================ v5.8: battle learning
+const deadIds = new Set(); // soldiers who died (not merely unloaded): the learning counts them as down (v9.26)
+world.afterEvents.entityDie.subscribe((ev) => { try { const e = ev.deadEntity; if (e.typeId === SOLDIER || e.typeId === "minecraft:player") { deadIds.add(e.id); if (deadIds.size > 3000) deadIds.clear(); } } catch {} });
 // Each faction learns its own tactics from its own fights (an evolution strategy, the kind used to train game AI):
 // every time a squad makes contact it fights with a slightly varied copy of the faction's weights (how much it values
 // firing, advancing, cover, peeking, suppressing, flanking, assaulting, falling back...). When the fight is over it is
@@ -11144,13 +11147,27 @@ function learnStart(S, f, n, known, now) {
   S.bw = w;
   S.eng = { f, t0: now, n0: n, eps, enemies: new Set(known.map((q) => q.ent.id)) };
 }
+// v9.26: what a faction has learned, in words: how many fights it learned from and the habits that moved most
+const LEARN_WORDS = { fire: "standing and shooting", expo: "staying in the open", adv: "pushing forward", close: "closing in", timing: "waiting for the moment", assault: "assaulting", cover: "taking cover", peek: "peeking out to shoot", supp: "suppressing fire", fall: "falling back", flankShare: "flanking", ratioFix: "caution when outnumbered", headK: "going for headshots" };
+function learnSummary(f) {
+  const L = getLearned()[f];
+  if (!L?.n) return `${factionLabel(f)}§7: no battles learned from yet`;
+  const def = BW_DEF();
+  const moves = Object.entries(LEARN_SPACE).map(([k, [lo, hi]]) => [k, ((L.mean[k] ?? def[k]) - def[k]) / (hi - lo)]).filter(([, d]) => Math.abs(d) >= 0.01).sort((a, b) => Math.abs(b[1]) - Math.abs(a[1])).slice(0, 3);
+  const txt = moves.length ? moves.map(([k, d]) => `${d > 0 ? "§amore" : "§cless"}§7 ${LEARN_WORDS[k] ?? k}`).join(", ") : "nothing changed much yet";
+  return `${factionLabel(f)}§7: ${L.n} fight${L.n === 1 ? "" : "s"} learned from (doing ${L.base >= 0 ? "well" : "badly"} lately): ${txt}`;
+}
 function learnEnd(S, nNow, now) {
   const g = S.eng;
   S.eng = undefined; S.bw = undefined;
   if (!g || !learnOn() || now - g.t0 < 100 || !g.enemies.size) return;   // too short / nobody seen: nothing to learn
-  let down = 0;
-  for (const id of g.enemies) { const o = world.getEntity(id); if (!o?.isValid || downed.has(id) || pows.has(id) || (o.typeId === SOLDIER && gdp(o, "war:surr"))) down++; }
-  const score = down / g.enemies.size - Math.max(0, g.n0 - nNow) / Math.max(1, g.n0);
+  // (v9.26: an enemy who's gone out of the loaded land isn't a kill, nor one we can count at all: only the ones we
+  //  know about are scored; a squad that's gone off is counted by the men it still has, not as wiped out)
+  let down = 0, seen = 0;
+  for (const id of g.enemies) { const o = world.getEntity(id); if (!o?.isValid) { if (deadIds.has(id)) { down++; seen++; } continue; } seen++; if (downed.has(id) || pows.has(id) || (o.typeId === SOLDIER && gdp(o, "war:surr"))) down++; }
+  if (!seen) return;
+  if (nNow === 0 && S.ours?.length) nNow = S.ours.filter((o) => { try { return o.isValid && !downed.has(o.id); } catch { return false; } }).length;
+  const score = down / seen - Math.max(0, g.n0 - nNow) / Math.max(1, g.n0);
   const all = getLearned(), L = all[g.f] ?? (all[g.f] = { mean: {}, base: 0, n: 0 });
   const adv = score - L.base;
   L.base += 0.15 * (score - L.base);

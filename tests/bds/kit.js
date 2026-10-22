@@ -669,6 +669,27 @@ KS.wildfollow = async (o, ox, oz) => {
   for (const e of [...fs, ld]) try { e.remove(); } catch {}
   return r;
 };
+// v9.26: battle learning, switched on: a few short fights; does each faction's learned record change?
+KS.learnprobe = async (o, ox, oz) => {
+  sdp(world, "war:set_learn", true); learned = {}; saveLearned();
+  const fights = [];
+  floorAt(ox - 30, oz - 40, ox + 30, oz + 40);
+  for (let i = 0; i < Number(o.k ?? 3); i++) {
+    const a = [], b = [], up = (L) => L.filter((e) => e.isValid && !downed.has(e.id) && !isDown(e)).length;
+    for (let j = 0; j < 5; j++) { a.push(kitSoldier(1, { x: ox - 6 + j * 3 + 0.5, y: Y, z: oz - 18 + 0.5 }, ["rifle", "smg", "semi", "mg", "rifle"][j], "hold")); b.push(kitSoldier(2, { x: ox - 6 + j * 3 + 0.5, y: Y, z: oz + 18 + 0.5 }, ["rifle", "smg", "semi", "mg", "rifle"][j], "hold")); }
+    setRelPair(1, 2, "1", false);
+    const t0 = tick(); await kitLoop(Number(o.max ?? 3000), () => !up(a) || !up(b));
+    await kitWait(300);                                  // ("area clear": the fight is scored with everyone still there)
+    fights.push(`${Math.round((tick() - t0) / 20)}s ${up(a)}-${up(b)}`);
+    for (const e of [...a, ...b]) try { e.remove(); } catch {}
+    await kitWait(40);
+  }
+  const L = getLearned(), out = {};
+  for (const f of Object.keys(L)) { const m = L[f]; out[f] = { n: m.n, base: +m.base.toFixed(3), moved: Object.entries(m.mean).map(([k, v]) => [k, +(v - (BW_DEF()[k] ?? 0)).toFixed(3)]).filter(([, d]) => Math.abs(d) > 0.0005) }; }
+  const words = [1, 2].map((f) => learnSummary(f).replace(/§./g, ""));
+  sdp(world, "war:set_learn", undefined);
+  return { fights, learned: out, words };
+};
 // a map of the land around a spot: per column, the ground's height and what's on it (debugging the wild march)
 // the blocks in a small box, layer by layer (y from low to high): "." air, "~" water, else the first 4 letters of the block
 KS.box = async (o, ox, oz) => {

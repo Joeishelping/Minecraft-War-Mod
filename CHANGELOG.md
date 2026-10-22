@@ -1,5 +1,26 @@
 # War Engine changelog
 
+## v9.26.0 (Following you over real land, hills, snow, and battle learning you can see)
+
+Tested again on a real generated world (hills, dark forests, snowy mountains, swamps), with your followers, attacks on
+hilltops and two squads meeting in the open.
+
+- **Men following you keep up.** Over rough land they used to fall 30-60 blocks behind you: each man worked out a route
+  to a place that kept moving, followed a few steps of it and started again. Now your trail is kept (where you walked,
+  block by block) and a man who's fallen behind runs along it, at a sprint. 150 blocks over hills: 14 blocks behind you
+  on average (was 31), all back with you 2 s after you stop (was 8.5).
+- **Marches over hills.** On rough ground a marching man is carried from the start (Minecraft's own walking stalls there
+  every few steps); the next leg of a long march is worked out while they're still on this one, so nobody stands at the
+  end of the route waiting; on contact, men strung out behind close up to the front instead of freezing where they are.
+  Taking a hilltop over real land: twice as many men up there in the same time as v9.25.
+- **Snowy slopes and dead-end steps.** A snow layer under a man now holds him up (on a snowy mountain every step looked
+  like thin air: men stood still 30-40 s). A step that goes nowhere counts as blocked instead of progress, and a man
+  blocked at the same spot again and again tries his own walking, then scrambles on to the next free spot.
+- **Battle learning works, and now you can see it.** Tested: with it switched on, each faction's habits shift fight by
+  fight (e.g. more assaulting after winning that way). When you save the settings with learning on, the chat says what
+  each faction has learned so far ("12 fights learned from: more taking cover, less pushing forward..."). Fixed: an enemy
+  who just walked out of the loaded land counted as a kill, and a squad that left counted as wiped out.
+
 ## v9.25.0 (They march over real land, and they fight back)
 
 Everything here was found by testing on a real generated world (hills, forests, swamps, lakes) instead of the flat
