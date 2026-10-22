@@ -1,5 +1,14 @@
 # War Engine changelog
 
+## v9.27.0 (Out of the hole)
+
+- **Men climb out of holes.** A soldier who ended up in a pit with sheer sides (a natural hole, a ravine floor, a crater,
+  a dip under a dark-oak canopy) and had somewhere to be never got out: the route search failed over and over and the
+  rescue never came. Now, after five seconds of getting nowhere, walled in two blocks high or more on nearly every side,
+  he climbs the wall to the nearest place to stand on the rim, on the side nearest where he's going (holes 2, 3 and 5
+  deep: out in 14-36 s, then on to his objective). Not while he's fighting from it: a hole is cover.
+- Checked: 40 soldiers fighting over real hills and forest run at 19 TPS on the test server.
+
 ## v9.26.0 (Following you over real land, hills, snow, and battle learning you can see)
 
 Tested again on a real generated world (hills, dark forests, snowy mountains, swamps), with your followers, attacks on
