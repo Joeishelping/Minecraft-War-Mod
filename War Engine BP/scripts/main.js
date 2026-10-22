@@ -5530,6 +5530,14 @@ function startMarch(player, pool, dest, then) {
   for (let i = 0; i < nLanes; i++) { const s = makeWaypoint(dim, from, false); if (s) m.lanes.push(s); }
   if (!m.lanes.length) return undefined;
   const id = `m${tick()}_${m.lanes[0]}`;
+  // (v9.27: these men and these markers are this march's alone. A march saved from before (its men out of range) still
+  //  listed marker slots that had since been freed and given to new marches, and so took their men too: two or three
+  //  marches drove the same squad, each planning the same route and pulling the men about)
+  { const mine = new Set(m.members), ls = new Set(m.lanes);
+    for (const [oid, om] of Object.entries(getMarches())) {
+      om.lanes = (om.lanes ?? []).filter((s) => !ls.has(s)); om.members = (om.members ?? []).filter((x) => !mine.has(x));
+      if (!om.lanes.length || !om.members.length) { for (const s of om.lanes) if (laneOf.get(s) === oid) laneOf.delete(s); delete getMarches()[oid]; }
+    } }
   getMarches()[id] = m;
   for (const s of m.lanes) laneOf.set(s, id);
   // don't stand around while the route is worked out: start walking toward the destination
@@ -5547,7 +5555,7 @@ function startMarch(player, pool, dest, then) {
 function requestPlan(id, m, from, wide = false) {
   const dim = world.getDimension(m.dim);
   m.planning = true;
-  const far = Math.hypot(m.dest.x - from.x, m.dest.z - from.z) > 160;   // (v6.2: was 280: at the game's real script speed a 200-block fine search took ages and hit its size cap)
+  const far = Math.hypot(m.dest.x - from.x, m.dest.z - from.z) > 64;   // (v9.27: was 160: a 95-block final stretch through a swamp, searched block by block in one go, took 32 s)   // (v6.2: was 280: at the game's real script speed a 200-block fine search took ages and hit its size cap)
   // (v6.2: also when only the final leg is left of an earlier coarse plan, e.g. one cut short by unloaded land: a fine
   // search all the way to a far destination took a minute of planning while the squad stood at the end of its route)
   if ((!m.legs || m.legs.length <= 1) && far) {
@@ -5573,8 +5581,9 @@ function planLeg(id, m, from, wide) {
   const target = m.legs?.[0] ?? m.dest;
   const lastLeg = !m.legs || m.legs.length <= 1;
   m.legT = { x: target.x, y: target.y, z: target.z, final: lastLeg };
-  planRoute(dim, from, lastLeg ? m.dest : { x: target.x, z: target.z }, (pts, partial, frontier) => {
+  const job = planRoute(dim, from, lastLeg ? m.dest : { x: target.x, z: target.z }, (pts, partial, frontier) => {
     const mm = getMarches()[id];
+    if (mm) mm.timedOut = !!(partial && job?.timedOut);           // (out of time, not out of road: no dead end)
     if (!mm) return;
     mm.planning = false;
     mm.replans++;
@@ -5602,7 +5611,10 @@ function planLeg(id, m, from, wide) {
     }
     mm.progT = tick();
     saveMarches();
-  }, { step: 1, maxRadius: 300, max: 120000, weight: wide ? 1.0 : 1.15, dead: m.dead, prio: true });
+  }, { step: 1, maxRadius: 300, max: 120000, weight: wide ? 1.0 : 1.15, dead: m.dead, prio: true, secs: lastLeg ? 15 : 8 });
+  // (v9.27: a leg toward one of the coarse plan's waypoints gets 8 s (the last one 15 s): in a swamp one such search ran
+  //  on for 25 s+ while the whole squad stood at the end of the last leg. Then they go as far as it got, and it's worked
+  //  out on from there.)
 }
 function markDeadEnd(m, at, small = false) {
   const near = (m.dead ?? []).filter((z) => Math.hypot(z.x - at.x, z.z - at.z) < 30).length;
@@ -5741,7 +5753,10 @@ system.runInterval(() => {
       if (cu === undefined) continue;
       if (!marchActive(e) || (flat(e.location, m.pos) < 12 && Math.abs(e.location.y - m.pos.y) < 2.5)) { sdp(e, "war:catchup", undefined); driveOn.delete(e.id); }
     }
-    if (m.final || m.planning || !m.path) continue;
+    // (v9.27: while the next leg is worked out the route so far is kept, and so is the pacing along it: frozen at where
+    //  it was when the planning began, men ahead of it stood "waiting for the squad" until the plan came, 25 s in a swamp)
+    if (m.final || !m.path || (m.planning && m.keep === undefined)) continue;
+    const replanning = m.planning;
     const dim = world.getDimension(m.dim);
     let cx = 0, cy = 0, cz = 0;
     for (const e of members) { cx += e.location.x; cy += e.location.y; cz += e.location.z; }
@@ -5777,6 +5792,7 @@ system.runInterval(() => {
       const slot = myMarker(e, m.path[Math.min(m.path.length - 1, lookahead(m.path, pi, 4))], "war:mymk", 1.5);   // the route driver moves it on from here
       if (slot) setCatchup(e, slot);
     }
+    if (replanning) continue;
     const last = m.path[m.path.length - 1];
     // v9.26: the next leg is worked out while they're still on this one (from where this one ends), so it's ready when
     // they get there: on a hillside that planning took long enough for the whole squad to stand at the end of the
@@ -5819,6 +5835,8 @@ system.runInterval(() => {
           if (!beyond) { changed = true; continue; }
         } else m.edgeMsg = false;
         requestPlan(id, m, c);
+      } else if (m.timedOut) {
+        m.timedOut = false; requestPlan(id, m, { x: last.x, y: last.y, z: last.z });   // (the search ran out of time there: on from it)
       } else {
         markDeadEnd(m, last);                                    // the route ran out short of the target: a dead end
         requestPlan(id, m, c, true);
@@ -6461,7 +6479,7 @@ function planRoute(dim, start, goal, onDone, opts = {}) {
   const sx = snap(start.x), sz = snap(start.z);
   const gy = Number.isFinite(goal.y) ? Math.floor(goal.y) : undefined;
   const job = { dim, goal: { x: Math.floor(goal.x), z: Math.floor(goal.z), y: step > 1 ? undefined : gy }, cells: new Map(), open: new Heap(), g: new Map(), came: new Map(),
-    closed: new Set(), best: undefined, bestH: Infinity, exp: 0, max: opts.max ?? 9000, onDone, origin: { x: sx, z: sz }, maxRadius,
+    closed: new Set(), best: undefined, bestH: Infinity, exp: 0, max: opts.max ?? 9000, onDone, origin: { x: sx, z: sz }, maxRadius, until: opts.secs ? tick() + opts.secs * 20 : undefined,
     step, weight: opts.weight ?? 1.25, dead: opts.dead ?? [], goalFn: opts.goalFn, accept: opts.accept, prio: !!opts.prio,
     danger: opts.danger?.length ? opts.danger : undefined, exposed: new Map(), rays: 0 };
   // v6.1: number keys relative to the start (text keys for every searched cell were the planner's memory hog: a long
@@ -6502,7 +6520,7 @@ function exposedCost(job, b) {
   return v;
 }
 function finishJob(job, endKey, partial = false) {
-  { const ps = globalThis.__planStats; if (ps) { ps.done++; ps.doneT += tick() - (job.t0 ?? tick()); } }
+  { const ps = globalThis.__planStats; if (ps) { ps.done++; ps.doneT += tick() - (job.t0 ?? tick()); if (job.prio) (ps.jobs ??= []).push(`${job.exp}n/${tick() - (job.t0 ?? tick())}t${partial ? "P" : ""}${endKey === undefined ? "X" : ""} r${Math.round(job.maxRadius)} s${job.step} ${job.origin.x},${job.origin.z}>${job.goal.x},${job.goal.z} @${tick() % 100000}`); } }
   const pts = [];
   let k = endKey;
   while (k !== undefined) { const { x, z, y } = job.dec(k); const c = job.cells.get(k); pts.push({ x: x + 0.5, y: c && c.y !== undefined ? c.y : y, z: z + 0.5, w: !!c?.w, climb: !!c?.climb, open: !!c?.open }); k = job.came.get(k); }
@@ -6542,7 +6560,8 @@ system.runInterval(() => {
     let share = Math.max(40, Math.floor(PLAN_BUDGET / planJobs.length)) * (job.prio ? 3 : 1);
     let finished = false;
     while (share-- > 0 && budget-- > 0 && freshReads < readBudget && ((budget & 31) || Date.now() - tStart < MS)) {
-      if (!job.open.size || job.exp >= job.max || job.cells.size > Math.min(40000, job.max * 3 + 2000) || job.open.size > Math.min(25000, job.max * 2 + 1000) || planCells > PLAN_CELLS_MAX) {   // (v8.2: size caps per search AND for all searches together: a pile of big searches went over the game's script memory limit and crashed it)
+      if (job.until !== undefined && tick() > job.until) job.timedOut = true;
+      if (!job.open.size || job.exp >= job.max || job.timedOut || job.cells.size > Math.min(40000, job.max * 3 + 2000) || job.open.size > Math.min(25000, job.max * 2 + 1000) || planCells > PLAN_CELLS_MAX) {   // (v8.2: size caps per search AND for all searches together: a pile of big searches went over the game's script memory limit and crashed it)
         // no full route: go as far as we can toward the goal (re-planned later)
         const bk = job.best.key ?? job.nkey(job.best.x, job.best.z, 0);
         if (job.bestH < Math.hypot(job.goal.x - job.origin.x, job.goal.z - job.origin.z) - 6) finishJob(job, bk, true); else { try { job.onDone(undefined, true, !!job.hitUnloaded); } catch {} }

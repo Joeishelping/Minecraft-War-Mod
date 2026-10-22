@@ -1,7 +1,19 @@
 # War Engine changelog
 
-## v9.27.0 (Out of the hole)
+## v9.27.0 (Out of the hole, and trucks and horses over real land)
 
+- **Trucks driven by their crew cross real land.** A truck with soldiers at the wheel following you over natural
+  terrain never moved: its physics ran it into the first slope, bank or tree, and after 20 s the crew got out and
+  walked (if they hadn't suffocated in their seats against the bank first). Now it drives along your trail, over the
+  land as it lies: up one-block rises, down drops of up to three, pushing through leaves, never into water or off a
+  cliff. Stuck, it backs out and tries again; at a ledge it can't take it's put a little further along your trail; wedged
+  in a gully it's set down where it fits. 150 blocks over hills: about 20 blocks behind you on average, with you within
+  a few seconds of you stopping (it never got there before), the whole crew still aboard.
+- **Soldiers in a seat don't suffocate.** Riding a vehicle or a mount pressed against a wall, a soldier took suffocation
+  damage until he died.
+- **Mounted followers ride your trail.** On rough land one or two horses in every group stuck on a bank and fell 100+
+  blocks behind; now they ride the way you went, and a horse that can't get on is put a little further along it.
+  Worst gap 110 -> about 50 blocks, every rider arrives.
 - **Men climb out of holes.** A soldier who ended up in a pit with sheer sides (a natural hole, a ravine floor, a crater,
   a dip under a dark-oak canopy) and had somewhere to be never got out: the route search failed over and over and the
   rescue never came. Now, after five seconds of getting nowhere, walled in two blocks high or more on nearly every side,
