@@ -647,19 +647,25 @@ KS.wildfollow = async (o, ox, oz) => {
   const x0 = ox + Number(o.dx ?? 0), z0 = oz - 170, g0 = groundAt(x0, z0);
   const ld = ow().spawnEntity("minecraft:armor_stand", { x: x0 + 0.5, y: g0.y, z: z0 + 0.5 });
   globalThis.__fakeLeader = (id) => (id === ld.id ? ld : undefined);
+  const V0 = globalThis.__viewers; globalThis.__viewers = () => { try { return [{ d: "minecraft:overworld", x: ld.location.x, z: ld.location.z }]; } catch { return []; } };   // (you're the one watching: they're near you)
   const fs = [0, 1, 2, 3, 4, 5].map((i) => { const e = kitSoldier(1, standSpot(x0 - 3 + (i % 3) * 2, z0 - 3 - Math.floor(i / 3) * 2), "rifle", "hold"); sdp(e, "war:squad", 0); giveFunction(e, "follow", ld); return e; });
   await kitWait(60);
   const v = Number(o.v ?? 0.2), tl = []; let sum = 0, n = 0, worst = 0;
   const gaps = () => fs.filter((e) => e.isValid).map((e) => flat(e.location, ld.location));
-  for (let k = 0; k < Math.round(150 / v); k++) {
-    const l = ld.location, nz = l.z + v, g = groundAt(Math.floor(l.x), Math.floor(nz));
-    ld.teleport({ x: l.x, y: g.y, z: nz }); await kitWait(1);
+  // (you walk a real route, as a player would: round the cliffs, not straight up them)
+  let route; planRoute(ow(), { x: x0 + 0.5, y: g0.y, z: z0 + 0.5 }, { x: x0 + 0.5, z: z0 + 150.5 }, (pts) => { route = pts ?? []; }, { max: 200000, maxRadius: 300 });
+  for (let k = 0; k < 600 && !route; k++) await kitWait(1);
+  if (!route?.length) route = [{ x: x0 + 0.5, y: g0.y, z: z0 + 0.5 }];
+  const along = []; for (let i = 1; i < route.length; i++) { const a0 = route[i - 1], b0 = route[i], L = Math.hypot(b0.x - a0.x, b0.z - a0.z) || 1e-6; for (let s0 = 0; s0 < L; s0 += v) along.push({ x: a0.x + (b0.x - a0.x) * s0 / L, y: s0 / L < 0.5 ? a0.y : b0.y, z: a0.z + (b0.z - a0.z) * s0 / L }); }
+  for (let k = 0; k < along.length; k++) {
+    ld.teleport(along[k]); await kitWait(1);
     if (k > 60 && k % 10 === 0) { const G = gaps(), m = G.reduce((a, b) => a + b, 0) / Math.max(1, G.length); sum += m; n++; worst = Math.max(worst, ...G); }
+    if (o.tr && k >= Number(o.tr) && k <= Number(o.tr) + 200 && k % 10 === 0) { const now = tick(); for (const e of (o.men ? String(o.men).split(",").map((q) => fs[Number(q)]) : fs.slice(0, 3))) { const pr = personal.get(e.id), g = gliders.get(e.id), v0 = e.getVelocity(), here = `${(e.location.x - ox).toFixed(1)},${e.location.y.toFixed(1)},${(e.location.z - oz).toFixed(1)}`, lp = (globalThis.__LP ??= new Map()).get(e.id) ?? e.location, mv0 = flat(lp, e.location); globalThis.__LP.set(e.id, { ...e.location }); tl.push(`  ${k} #${fs.indexOf(e)} ${here} mv${mv0.toFixed(1)} gap${Math.round(flat(e.location, ld.location))} pr${pr ? `${pr.kind}${pr.trail ? "T" : ""}:${pr.planning ? "PLAN" : pr.pts ? pr.idx + "/" + pr.pts.length : "-"}${(pr.hold ?? 0) > now ? "H" : ""}` : "-"} gl${g ? "k" + g.k + (g.paused ? "P" : "") + "b" + (g.blocked ?? 0) : "-"} hur${(HURRY.get(e.id) ?? 0) > now ? 1 : 0} @${globalThis.__DB?.get(e.id) ?? ""}/${globalThis.__GL?.get(e.id) ?? ""} st${getJSON(e, "war:st", {}).g ?? ""}/${getJSON(e, "war:st", {}).s ?? ""} v${Math.hypot(v0.x, v0.z).toFixed(2)} [${(notes.get(e.id)?.text ?? "").slice(0, 22)}]`); } }
     if (k % 100 === 0) tl.push(`${Math.round(k / 20)}s you z${Math.round(ld.location.z - oz)} gaps ${gaps().map((q) => Math.round(q)).join(",")} [${fs.map((e) => (notes.get(e.id)?.text ?? "").slice(0, 14)).join("|")}]`);
   }
   let t = 0; for (; t < 600; t += 10) { await kitWait(10); if (gaps().every((q) => q < 6)) break; }
-  const r = { avgGap: +(sum / Math.max(1, n)).toFixed(1), worst: Math.round(worst), allWithYou: t >= 600 ? `no (${gaps().map((q) => Math.round(q)).join(",")})` : `${(t / 20).toFixed(1)} s`, tl };
-  globalThis.__fakeLeader = undefined;
+  const r = { routeLen: along.length, avgGap: +(sum / Math.max(1, n)).toFixed(1), worst: Math.round(worst), allWithYou: t >= 600 ? `no (${gaps().map((q) => Math.round(q)).join(",")})` : `${(t / 20).toFixed(1)} s`, tl };
+  globalThis.__fakeLeader = undefined; globalThis.__viewers = V0;
   for (const e of [...fs, ld]) try { e.remove(); } catch {}
   return r;
 };

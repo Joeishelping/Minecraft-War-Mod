@@ -8275,12 +8275,23 @@ function catchUp(e, spot, lead, now, ahead) {
   let pr = personal.get(e.id);
   if (pr && pr.kind !== "follow") return followPersonal(e, now) ?? mk(spot);      // (on another errand's route: that first)
   const D = flat(spot, l), open = !isIndoors(e) && !onStairs(e.dimension, l);
-  if (open && Math.abs(spot.y - l.y) <= 1 && D <= 16 && straightReach(e.dimension, l, spot)) {   // a plain walk
+  if (open && Math.abs(spot.y - l.y) <= 1 && D <= 16 && straightReach(e.dimension, l, spot) && !(D > 7 && roughTo(e.dimension, l, spot) && TRAIL.get(sd(e).leader)?.pts.length > 4)) {   // a plain walk (v9.26: not over rough ground with your trail to run along: his own walking stalls there)
     if (pr) { personal.delete(e.id); travelTo.delete(e.id); }
     return mk(ahead ? { x: spot.x + ahead.x * 3, y: spot.y, z: spot.z + ahead.z * 3 } : spot);   // (a little ahead: the game's following stops short)
   }
   const to = { x: lead.x, y: Math.floor(lead.y + 0.01), z: lead.z };
-  if (!pr || (!pr.planning && (!pr.pts || flat(pr.dest, to) > 10 || Math.abs(pr.dest.y - to.y) > 2))) { travelTo.set(e.id, to); planPersonalTo(e, "follow", to, now); pr = personal.get(e.id); }
+  // (v9.26: on your trail: along it, and on along it as you go; off it: a route worked out to you, as before)
+  const lid = sd(e).leader;
+  if (pr?.trail && pr.pts) {
+    const T = TRAIL.get(lid);
+    if (T && T.pts.length > pr.end && T.pts[pr.end - 1] === pr.pts[pr.pts.length - 1]) { for (let i = pr.end; i < T.pts.length; i++) pr.pts.push(T.pts[i]); pr.end = T.pts.length; pr.t = now; pr.dest = to; }
+    else if (T && T.pts.length > pr.end) { personal.delete(e.id); pr = undefined; }   // (the trail was trimmed or started over: pick it up again)
+  }
+  if (!pr || (!pr.trail && !pr.planning && (!pr.pts || flat(pr.dest, to) > 10 || Math.abs(pr.dest.y - to.y) > 2))) {
+    const tr = lid ? trailRoute(e, lid) : undefined;
+    if (tr) { pr = { pts: tr.pts, idx: 0, kind: "follow", t: now, planning: false, dest: to, trail: true, end: tr.end }; personal.set(e.id, pr); travelTo.set(e.id, to); v9stat("onTrail"); }
+    else { travelTo.set(e.id, to); planPersonalTo(e, "follow", to, now); pr = personal.get(e.id); }
+  }
   const r = followPersonal(e, now);
   if (r?.g === "g_wp") return r;
   // no route yet (being worked out): meanwhile a clear stretch his way, if there is one; else he waits for it
@@ -9967,7 +9978,8 @@ system.runInterval(() => {
           // (v9.26: not the men strung out behind: they close up to the front first, instead of freezing 20 blocks back
           //  where they add nothing to the fight)
           if (m.hold && !m.final && i >= (m.leadIdx ?? 0) - 8) { gliders.delete(e.id); myMarker(e, e.location); note(e, "holding (contact)"); marchWatch.delete(e.id); continue; }
-          if (m.hold && !m.final) note(e, "closing up");
+          if (m.hold && !m.final) { note(e, "closing up"); hurry(e.id, now); }
+          else if (!m.final && i < (m.leadIdx ?? 0) - 14) hurry(e.id, now);    // (well behind the front: he hurries to close up)
           // far out in front of the squad: ease off till it closes up (never on a stair or in a doorway)
           if (!m.final && i > (m.paceIdx ?? Infinity) && !tightAt(e.dimension, pts, i, e.location)) { gliders.delete(e.id); myMarker(e, e.location); note(e, "waiting for the squad"); marchWatch.delete(e.id); continue; }
           if (marchStuck(e, m, pts, i, now)) continue;
@@ -9993,7 +10005,9 @@ system.runInterval(() => {
       if (remote && (i >= pts.length - 2 || remoteSettled.get(e.id)?.endsWith(`|${endK}`))) { gliders.delete(e.id); remoteSpread(e, now, endK); continue; }   // the end of the known route: his own spot (and he stays on it)
       // (v9.26: on rough ground (slopes, grass, flowers, snow, leaf litter) he's carried from the start: Minecraft's own
       //  walking stalls there every few steps, and carried he goes at the same pace, in a lane of his own)
-      const tight = !pts.guess && (glideBan.get(e.id) ?? 0) <= now && (remote || ahead < 0 || (forceGlide.get(e.id) ?? 0) > now || tightAt(e.dimension, pts, i, e.location) || roughTo(e.dimension, e.location, pts[Math.min(pts.length - 1, i + 3)]));
+      // (v9.26: and a man on a route of his own whose walking is switched off (his last thought was a pause): carried, or
+      //  he stood there, followers of yours 30 blocks behind you, until his next thought)
+      const tight = !pts.guess && (glideBan.get(e.id) ?? 0) <= now && (remote || ahead < 0 || (forceGlide.get(e.id) ?? 0) > now || tightAt(e.dimension, pts, i, e.location) || roughTo(e.dimension, e.location, pts[Math.min(pts.length - 1, i + 3)]) || (own && pr && getJSON(e, "war:st", {}).g !== "g_wp"));
       if (tight || ahead < 0 || onPassage(e)) stepping.add(e.id);         // (v7.2: the edge guard watches only men where there's an edge to mind)
       if (tight) {
         const g = gliders.get(e.id);
@@ -10755,6 +10769,11 @@ function combatMove(e, d, now, melee, anchor, leash) {
 // depends on Minecraft's pathing or on pushes, so he can't get lost, stuck on a stair edge, or pile into the man ahead.
 const gliders = new Map(); // id -> { pts, k (index of the point he's heading to), t (last refresh), paused, wait }
 const GLIDE_SPEED = 0.21;  // blocks per tick (~4.2 blocks/s: v9.22, a player's walk; was 3.4)
+// v9.26: a man who's fallen behind (following you, closing up to his squad) is carried at a sprint (~6 blocks/s): at
+// walking pace he never closed the gap, and over rough ground men following you were left 30-60 blocks behind
+const HURRY = new Map(); // id -> tick until which he hurries
+const hurry = (id, now, n = 30) => HURRY.set(id, now + n);
+system.runInterval(() => { if (HURRY.size > 2000) HURRY.clear(); }, 1200);
 const glideBan = new Map(); // id -> tick until which the glider leaves him alone (it was blocked)
 const glideFails = new Map(); // id -> { n, t, at }: carried and blocked at the same spot, again and again (v9.26)
 // the glider can't take him on: off it, and the brain / settle work out a new way. Blocked at the same spot again and again
@@ -10823,7 +10842,7 @@ system.runInterval(() => {
       const dx = b.x - p.x, dz = b.z - p.z, L = Math.hypot(dx, dz);
       if (b.climb && L < 0.35) { beginClimb(e, pts, g.k); gliders.delete(id); continue; }   // at the ladder: the climber takes him (v5.7: walked right up to it first)
       if (L < 2.5) { openAt(e.dimension, b); openAt(e.dimension, { x: b.x, y: b.y + 1, z: b.z }); }
-      const stp = Math.min(GLIDE_SPEED, L);
+      const stp = Math.min(GLIDE_SPEED * ((HURRY.get(id) ?? 0) > now ? 1.45 : 1), L);
       const nx = L > 0.001 ? p.x + (dx / L) * stp : b.x, nz = L > 0.001 ? p.z + (dz / L) * stp : b.z;
       const seg = Math.hypot(b.x - a.x, b.z - a.z) || 1;
       const f = 1 - Math.hypot(b.x - nx, b.z - nz) / seg;
@@ -14212,6 +14231,7 @@ WarAPI.registerBehavior({
     if (!sp) {                                                                    // (no place for him just there (a wall, a drop): he makes for you)
       const pd = flat(p.location, e.location);
       if (pd < 5 && Math.abs(p.location.y - e.location.y) < 1.5) return { g: "g_none", t: "t_mid", urgent: false, note: "with you" };
+      if (pd > 8) hurry(e.id, now);
       const mv = catchUp(e, { x: p.location.x, y: Math.floor(p.location.y + 0.01), z: p.location.z }, p.location, now);
       return mv ? { ...mv, t: "t_mid", s: pd > 14 ? "s_7" : "s_6", urgent: true, note: "catching up" } : undefined;
     }
@@ -14221,6 +14241,7 @@ WarAPI.registerBehavior({
       if (personal.get(e.id)?.kind === "follow") { personal.delete(e.id); travelTo.delete(e.id); }
       return { g: "g_none", t: "t_mid", urgent: false, note: `in ${sp.shape}` };
     }
+    if (gap > 8) hurry(e.id, now);
     const mv = catchUp(e, sp, p.location, now, F.head);                           // (v9.20.3: a straight walk, or a real route round whatever's in the way)
     return mv ? { ...mv, t: "t_mid", s: gap > 14 ? "s_7" : "s_6", urgent: true, note: `falling in (${sp.shape})` } : undefined;   // (quicker than you walk, or he never closes up)
   },
@@ -14229,6 +14250,43 @@ system.runInterval(() => { const now = tick(); for (const [k, F] of [...FOLLOW])
 // the follow driver: each tick a man near his place is carried onto it at your pace (like the guard detail), facing
 // the way you're going; a wall, a drop or a step too high and his own walking takes over
 const FOLLOW_ON = new Map();   // id -> tick he was last on the formation
+// v9.26: your trail. Where you've walked (on your feet: not jumping, riding or flying) is kept, the last ~400 blocks of
+// it. A man following you who's fallen behind runs along it: you walked it, so it can be walked, round every cliff and
+// through every gap you took, with no route to work out. (Working one out to a place that kept moving, over rough land,
+// left men 30-60 blocks behind you.)
+const TRAIL = new Map(); // leader id -> { pts: [{x, y, z, w}], t }
+function trailAdd(p, now) {
+  try {
+    if (isRiding(p)) return;
+    const l = p.location; let T = TRAIL.get(p.id);
+    if (!T) { T = { pts: [], t: now }; TRAIL.set(p.id, T); }
+    T.t = now;
+    const w = inWater(p);
+    if (!w && p.isOnGround === false && p.typeId === "minecraft:player") return;   // (in mid-jump: not a point of the trail)
+    const q = T.pts[T.pts.length - 1], y = Math.floor(l.y + 0.01);
+    if (q && (q.dim !== p.dimension.id || Math.hypot(l.x - q.x, l.z - q.z) > 12 || Math.abs(y - q.y) > 3)) T.pts.length = 0;   // (a teleport, another dimension: a new trail)
+    // (the middle of the block he's standing on: at the edge of a step you stand half over the air, and a point there
+    //  looked like a step into thin air to the men following, who all stopped at it)
+    let c;
+    for (const [ox, oz] of [[0, 0], [0.3, 0], [-0.3, 0], [0, 0.3], [0, -0.3], [0.3, 0.3], [-0.3, -0.3], [0.3, -0.3], [-0.3, 0.3]]) {
+      const cx = Math.floor(l.x + ox) + 0.5, cz = Math.floor(l.z + oz) + 0.5;
+      if (w || (floorUnder(p.dimension, cx, y, cz) && glideFree(p.dimension, cx, y, cz))) { c = { x: cx, z: cz }; break; }
+    }
+    if (!c) return;
+    if (!q || T.pts.length === 0 || c.x !== q.x || c.z !== q.z || y !== q.y) T.pts.push({ x: c.x, y, z: c.z, w, climb: false, open: false, dim: p.dimension.id });
+    if (T.pts.length > 600) T.pts.splice(0, T.pts.length - 600);
+  } catch {}
+}
+system.runInterval(() => { const now = tick(); for (const [k, T] of [...TRAIL]) if (now - T.t > 1200) TRAIL.delete(k); }, 400);
+// his way along your trail: from the trail point nearest him (within 3 blocks, in sight, about his level) to its end
+function trailRoute(e, leaderId) {
+  const T = TRAIL.get(leaderId); if (!T || T.pts.length < 4) return undefined;
+  const l = e.location, did = e.dimension.id; let bi = -1, bd = 3;
+  for (let i = T.pts.length - 1; i >= 0; i--) { const q = T.pts[i]; if (q.dim !== did) continue; const d0 = Math.hypot(q.x - l.x, q.z - l.z) + Math.abs(q.y - l.y) * 2; if (d0 < bd) { bd = d0; bi = i; } }
+  if (bi < 0 || bi > T.pts.length - 4) return undefined;
+  if (!straightReach(e.dimension, l, T.pts[bi]) && bd > 1) return undefined;
+  return { pts: T.pts.slice(bi), T, end: T.pts.length };
+}
 const KICK = new Map();        // id -> tick he was last made to think at once (you got away from him)
 system.runInterval(() => {
   if (!FOLLOW.size) return;
@@ -14238,6 +14296,7 @@ system.runInterval(() => {
     if (!p?.isValid || now - F.t > 100 || !F.ids?.length) continue;
     try {
       const pl = p.location, last = F.drvLast; F.drvLast = { x: pl.x, z: pl.z };
+      trailAdd(p, now);
       const pace = last ? Math.min(0.6, Math.hypot(pl.x - last.x, pl.z - last.z)) : 0;
       const maxStep = Math.min(0.42, Math.max(0.18, pace * 1.3));
       for (const id of F.ids) {
