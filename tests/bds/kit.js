@@ -623,7 +623,7 @@ KS.wildmeet = async (o, ox, oz) => {
   const gA = groundAt(A.x, A.z), gB = groundAt(B.x, B.z);
   await Promise.all([kitOrder(1, { x: B.x + 0.5, y: gB.y, z: B.z + 0.5 }), kitOrder(2, { x: A.x + 0.5, y: gA.y, z: A.z + 0.5 })]);
   if (globalThis.__GR) globalThis.__GR = {};
-  const t0 = tick(), up = (L) => L.filter((e) => e.isValid && !downed.has(e.id) && !isDown(e)), last = new Map(), stillSince = new Map(), tl = [], NS = {};
+  const t0 = tick(), up = (L) => L.filter((e) => e.isValid && !downed.has(e.id) && !isDown(e)), last = new Map(), stillSince = new Map(), tl = [], NS = {}, w0 = Date.now();
   let stuckMax = 0, stuckAt;
   await kitLoop(Number(o.ticks ?? 3600), () => {
     const now = tick(), t = now - t0;
@@ -632,12 +632,12 @@ KS.wildmeet = async (o, ox, oz) => {
       const row = [a, b].map((L, i) => { const U = up(L); if (!U.length) return `f${i + 1}: none`; const cx = U.reduce((q, e) => q + e.location.x, 0) / U.length, cz = U.reduce((q, e) => q + e.location.z, 0) / U.length; const st = U.filter((e) => now - (stillSince.get(e.id) ?? now) > 100); const thr = U.filter((e) => perc.get(e.id)?.threat).length, fire = U.filter((e) => now - (lastFired(e.id) ?? -999) < 40).length; return `f${i + 1} up${U.length} z${Math.round(cz - oz)} sp${Math.round(Math.max(0, ...U.map((e) => Math.hypot(e.location.x - cx, e.location.z - cz))))} thr${thr} fire${fire} stuck${st.length}`; });
       const st = [...up(a), ...up(b)].filter((e) => now - (stillSince.get(e.id) ?? now) > 100 && !perc.get(e.id)?.threat);
       if (st.length > stuckMax) { stuckMax = st.length; stuckAt = st.map((e) => `f${P(e, "war:faction")} ${Math.round(e.location.x - ox)},${Math.round(e.location.y)},${Math.round(e.location.z - oz)}:${(notes.get(e.id)?.text ?? "").slice(0, 24)}`); }
-      tl.push(`${Math.round(t / 20)}s ${row.join(" | ")}`);
+      tl.push(`${Math.round(t / 20)}s ${row.join(" | ")} ms${typeof scriptAvg === "number" ? scriptAvg.toFixed(1) : "?"}`);
       if (o.t1 !== undefined && t >= Number(o.t1) * 20 && t <= Number(o.t2 ?? 9999) * 20) for (const e of [...up(a), ...up(b)]) { const pr = personal.get(e.id), th = perc.get(e.id)?.threat; tl.push(`   f${P(e, "war:faction")} ${(e.location.x - ox).toFixed(1)},${e.location.y.toFixed(1)},${(e.location.z - oz).toFixed(1)} still${Math.round((now - (stillSince.get(e.id) ?? now)) / 20)} pr${pr ? `${pr.kind}:${pr.pts ? pr.idx + "/" + pr.pts.length : pr.planning ? "plan" : "-"}${(pr.hold ?? 0) > now ? "H" : ""}` : "-"} gl${(() => { const g = gliders.get(e.id); return g ? `k${g.k}${g.paused ? "P" : ""}b${g.blocked ?? 0}w${g.wait ?? 0}L${g.lane ?? 0}` : "-"; })()} gb${(glideBan.get(e.id) ?? 0) > now ? 1 : 0} @${globalThis.__GL?.get(e.id) ?? ""} th${th?.isValid ? Math.round(dist(th.location, e.location)) + (canHit(e, th) ? "L" : "x") : "-"} [${(notes.get(e.id)?.text ?? "").slice(0, 30)}]`); }
     }
     return !up(a).length || !up(b).length;
   });
-  const r = { gr: globalThis.__GR, ground: [gA.y, gB.y], secs: Math.round((tick() - t0) / 20), up1: up(a).length, up2: up(b).length, stuckMax, stuckAt, ...kitShotStats(t0), notes: Object.entries(NS).sort((x, y) => y[1] - x[1]).slice(0, 16), tl };
+  const r = { tps: +((tick() - t0) / ((Date.now() - w0) / 1000)).toFixed(1), gr: globalThis.__GR, ground: [gA.y, gB.y], secs: Math.round((tick() - t0) / 20), up1: up(a).length, up2: up(b).length, stuckMax, stuckAt, ...kitShotStats(t0), notes: Object.entries(NS).sort((x, y) => y[1] - x[1]).slice(0, 16), tl };
   for (const e of [...a, ...b]) try { e.remove(); } catch {}
   return r;
 };
