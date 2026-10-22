@@ -690,6 +690,23 @@ KS.learnprobe = async (o, ox, oz) => {
   sdp(world, "war:set_learn", undefined);
   return { fights, learned: out, words };
 };
+// v9.27: men down in a hole (3 deep, sheer sides: a natural pit, a ravine floor, a crater) ordered somewhere: how long
+// until they're out? depth=d, n=men, mode=march|follow
+KS.pit = async (o, ox, oz) => {
+  floorAt(ox - 30, oz - 30, ox + 50, oz + 30);
+  const D = Number(o.depth ?? 3), N = Number(o.n ?? 3);
+  kfill(ox - 2, Y - D, oz - 2, ox + 2, Y - 1, oz + 2, "air"); kfill(ox - 3, Y - D - 1, oz - 3, ox + 3, Y - D - 1, oz + 3, "stone");
+  for (const [x0, z0, x1, z1] of [[-3, -3, 3, -3], [-3, 3, 3, 3], [-3, -3, -3, 3], [3, -3, 3, 3]]) kfill(ox + x0, Y - D, oz + z0, ox + x1, Y - 1, oz + z1, "stone");
+  terrainForget();
+  const men = []; for (let i = 0; i < N; i++) men.push(kitSoldier(1, { x: ox - 1 + i + 0.5, y: Y - D, z: oz + 0.5 }, "rifle", "hold"));
+  await kitWait(20);
+  await kitOrder(1, { x: ox + 40.5, y: Y, z: oz + 0.5 });
+  const t0 = tick(); let out = -1, there = -1;
+  await kitLoop(Number(o.ticks ?? 2400), () => { const t = tick() - t0; if (out < 0 && men.every((e) => e.location.y >= Y - 0.2)) out = t; if (there < 0 && men.every((e) => flat(e.location, { x: ox + 40.5, z: oz + 0.5 }) < 8)) { there = t; return true; } return false; });
+  const r = { outSecs: out < 0 ? -1 : +(out / 20).toFixed(1), thereSecs: there < 0 ? -1 : +(there / 20).toFixed(1), final: men.map((e) => `${Math.round(e.location.x - ox)},${Math.round(e.location.y - Y)},${Math.round(e.location.z - oz)}:${(notes.get(e.id)?.text ?? "").slice(0, 20)}`) };
+  for (const e of men) try { e.remove(); } catch {}
+  return r;
+};
 // a map of the land around a spot: per column, the ground's height and what's on it (debugging the wild march)
 // the blocks in a small box, layer by layer (y from low to high): "." air, "~" water, else the first 4 letters of the block
 KS.box = async (o, ox, oz) => {

@@ -5937,6 +5937,62 @@ function goalPoint(e) {
   if (d.leader) { const p = findPlayer(d.leader); if (p && p.dimension.id === e.dimension.id) return p.location; }
   return undefined;
 }
+// ---- v9.27: out of a hole. A man down in a pit with sheer sides (a natural hole, a ravine floor, a crater) and
+// somewhere to be had no way out: the route search failed over and over ("finding a way"), and with a search always
+// pending the rescue never came. Five seconds without getting anywhere, walled in two blocks high or more on (nearly)
+// every side: he climbs out, up the wall to the nearest place to stand on the rim, the side nearest where he's going.
+const PIT = new Map(); // id -> { x, y, z, t }: where he was when last seen getting somewhere
+function walledIn(dim, l) {
+  const bx = Math.floor(l.x), by = Math.floor(l.y + 0.01), bz = Math.floor(l.z);
+  let shut = 0;
+  for (const [dx, dz] of [[1, 0], [-1, 0], [0, 1], [0, -1], [1, 1], [-1, -1], [1, -1], [-1, 1]]) {
+    let wall = false;
+    for (let r = 1; r <= 3 && !wall; r++) { const x = bx + dx * r, z = bz + dz * r; if (!passable(tBlock(dim, x + 0.5, by, z + 0.5)) && !passable(tBlock(dim, x + 0.5, by + 1, z + 0.5))) wall = true; else if (!standAt(dim, x, by, z) && !standAt(dim, x, by + 1, z) && !standAt(dim, x, by - 1, z)) break; }   // (two blocks of wall: no stepping up)
+    if (wall) shut++;
+  }
+  return shut >= 7;
+}
+function climbOut(e, goal) {
+  const dim = e.dimension, l = e.location, bx = Math.floor(l.x), by = Math.floor(l.y + 0.01), bz = Math.floor(l.z);
+  let best;
+  for (let r = 1; r <= 4; r++) for (let dx = -r; dx <= r; dx++) for (let dz = -r; dz <= r; dz++) {
+    if (Math.max(Math.abs(dx), Math.abs(dz)) !== r) continue;
+    for (let dy = 2; dy <= 6; dy++) {
+      const x = bx + dx, y = by + dy, z = bz + dz;
+      if (!standAt(dim, x, y, z)) continue;
+      const toward = goal ? Math.hypot(goal.x - (x + 0.5), goal.z - (z + 0.5)) : 0;
+      const sc = r * 2 + dy + toward * 0.05;
+      if (!best || sc < best.sc) best = { sc, x: x + 0.5, y, z: z + 0.5 };
+      break;
+    }
+  }
+  if (!best) return false;
+  const steps = Math.max(2, Math.round(best.y - l.y)), from = { ...l };
+  personal.delete(e.id); travelTo.delete(e.id); gliders.delete(e.id);
+  for (let k = 1; k <= steps; k++) {
+    const f = k / steps;   // (up the wall first, then over the lip)
+    system.runTimeout(() => { try { if (!e.isValid || downed.has(e.id)) return; e.teleport(k < steps ? { x: from.x + (best.x - from.x) * 0.35, y: from.y + (best.y - from.y) * f, z: from.z + (best.z - from.z) * 0.35 } : best); } catch {} }, k * 3);
+  }
+  note(e, "climbing out"); v9stat("climbOut");
+  return true;
+}
+system.runInterval(() => {
+  const now = tick();
+  for (const e of allOf(SOLDIER)) {
+    try {
+      if (downed.has(e.id) || pows.has(e.id) || isRiding(e) || climbing.has(e.id) || inWater(e)) { PIT.delete(e.id); continue; }
+      const l = e.location, p = PIT.get(e.id);
+      if (!p || Math.hypot(l.x - p.x, l.z - p.z) > 4 || Math.abs(l.y - p.y) > 1.5) { PIT.set(e.id, { x: l.x, y: l.y, z: l.z, t: now }); continue; }   // (milling about at the bottom isn't getting anywhere)
+      if (now - p.t < 100) continue;
+      const goal = goalPoint(e);
+      if (!goal || Math.hypot(goal.x - l.x, goal.z - l.z) < 4) { p.t = now; continue; }   // (nowhere to be: he can stay)
+      if (perc.get(e.id)?.threat && combatLock.has(e.id)) continue;                     // (fighting from it: a hole is cover)
+      if (!walledIn(e.dimension, l)) { p.t = now; continue; }
+      if (climbOut(e, goal)) PIT.delete(e.id); else p.t = now;
+    } catch {}
+  }
+  if (PIT.size > 3000) PIT.clear();
+}, 20);
 const wetSince = new Map(); // soldier id -> tick he entered water
 const crossing = new Map();  // soldier id -> true while committed to a planned crossing
 const exitSpot = new Map();  // soldier id -> { slot, at, t } chosen shore (kept until reached)
