@@ -11884,9 +11884,38 @@ function dismountAll(list) {
   }
   return n;
 }
+// v9.27: a mounted man well behind you rides your trail, a few blocks ahead of where he is on it: the way you went, round
+// the hills and through the gaps. (Ridden straight at you, or along a route worked out to a place that kept moving,
+// horses got stuck on the first bank on real land and fell a hundred blocks behind.) Making no headway on it for three
+// seconds, horse and rider are put a little further along it, where a horse fits.
+const RIDE_TRAIL = new Map();   // rider id -> { bi (furthest trail point reached), t }
+function rideTrail(e, p) {
+  try {
+    const now = tick(); trailAdd(p, now);
+    const m = e.getComponent("minecraft:riding")?.entityRidingOn; if (!m) return undefined;
+    const l = m.location, T = TRAIL.get(p.id);
+    if (!T || T.pts.length < 5 || flat(p.location, l) < 10) { RIDE_TRAIL.delete(e.id); return undefined; }
+    let bi = -1, bd = 6;
+    for (let i = T.pts.length - 1; i >= 0; i--) { const q = T.pts[i]; if (q.dim !== m.dimension.id) continue; const d0 = Math.hypot(q.x - l.x, q.z - l.z) + Math.abs(q.y - l.y); if (d0 < bd) { bd = d0; bi = i; } }
+    if (bi < 0) { RIDE_TRAIL.delete(e.id); return undefined; }
+    let R = RIDE_TRAIL.get(e.id);
+    if (!R || R.T !== T || bi > R.bi + 1 || bi < R.bi - 20) { R = { T, bi, t: now }; RIDE_TRAIL.set(e.id, R); }
+    else if (now - R.t > 60) {
+      R.t = now;
+      for (let i = bi + 3; i < Math.min(T.pts.length - 1, bi + 12); i++) {
+        const q = T.pts[i]; if (q.w || !glideFree(m.dimension, q.x, q.y, q.z) || solidAt(m.dimension, { x: q.x, y: q.y + 2.2, z: q.z })) continue;
+        const n = T.pts[i + 1], yaw = (Math.atan2(-(n.x - q.x), n.z - q.z) * 180) / Math.PI;
+        try { m.teleport({ x: q.x, y: q.y, z: q.z }, { rotation: { x: 0, y: yaw }, keepVelocity: false }); MOUNT_HEAD.set(m.id, yaw); R.bi = i; v9stat("rideHop"); } catch {}
+        break;
+      }
+    }
+    return { at: T.pts[Math.min(T.pts.length - 1, bi + 4)], stop: 0.5, route: true, trail: true };
+  } catch { return undefined; }
+}
+system.runInterval(() => { for (const id of [...RIDE_TRAIL.keys()]) if (!mountOf.has(id)) RIDE_TRAIL.delete(id); }, 600);
 // where a mounted soldier wants to go (and how close is close enough)
 function rideDest(e, d) {
-  if ((d.func === "follow" || d.func === "escort") && d.leader) { const p = findPlayer(d.leader); if (p && p.dimension.id === e.dimension.id) return { at: p.location, stop: 4 }; }
+  if ((d.func === "follow" || d.func === "escort") && d.leader) { const p = findPlayer(d.leader); if (p && p.dimension.id === e.dimension.id) return rideTrail(e, p) ?? { at: p.location, stop: 4 }; }
   const rt = rideTo.get(e.id);
   if (rt) return { at: rt, stop: 4 };
   const an = ["hold", "post", "sentry", "stand"].includes(d.func) ? marker(d.goal) : undefined;
@@ -11904,7 +11933,7 @@ system.runInterval(() => {
       const d = sd(e), cd = d.div === "cavalier" ? cavDest(e, d) : undefined;
       let want = cd ?? rideDest(e, d);
       if (!cd && want && d.div === "cavalier" && rideTo.has(id)) want = cavLine(e, d, want);
-      if (want && !want.strike && !isBoatType(m.typeId)) want = rideRoute(e, m, want);          // (v9.14: round walls, along a planned route)
+      if (want && !want.strike && !want.trail && !isBoatType(m.typeId)) want = rideRoute(e, m, want);          // (v9.14: round walls, along a planned route)
       if (want?.strike) cavStrike(e, d, m, want);
       const l = m.location, vel = m.getVelocity();
       let tx = 0, tz = 0;

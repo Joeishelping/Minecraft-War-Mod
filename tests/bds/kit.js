@@ -648,8 +648,9 @@ KS.wildfollow = async (o, ox, oz) => {
   const ld = ow().spawnEntity("minecraft:armor_stand", { x: x0 + 0.5, y: g0.y, z: z0 + 0.5 });
   globalThis.__fakeLeader = (id) => (id === ld.id ? ld : undefined);
   const V0 = globalThis.__viewers; globalThis.__viewers = () => { try { return [{ d: "minecraft:overworld", x: ld.location.x, z: ld.location.z }]; } catch { return []; } };   // (you're the one watching: they're near you)
-  const fs = [0, 1, 2, 3, 4, 5].map((i) => { const e = kitSoldier(1, standSpot(x0 - 3 + (i % 3) * 2, z0 - 3 - Math.floor(i / 3) * 2), "rifle", "hold"); sdp(e, "war:squad", 0); giveFunction(e, "follow", ld); return e; });
+  const fs = [0, 1, 2, 3, 4, 5].map((i) => { const at = standSpot(x0 - 3 + (i % 3) * (o.mount ? 3 : 2), z0 - 3 - Math.floor(i / 3) * (o.mount ? 3 : 2)), e = o.mount ? kitCav(1, at, "rifle", o.mount === "1" ? "minecraft:horse" : o.mount) : kitSoldier(1, at, "rifle", "hold"); sdp(e, "war:squad", 0); giveFunction(e, "follow", ld); return e; });
   await kitWait(60);
+  const mounts = o.mount ? fs.map((e) => e.getComponent("minecraft:riding")?.entityRidingOn?.typeId ?? "-") : undefined;
   const v = Number(o.v ?? 0.2), tl = []; let sum = 0, n = 0, worst = 0;
   const gaps = () => fs.filter((e) => e.isValid).map((e) => flat(e.location, ld.location));
   // (you walk a real route, as a player would: round the cliffs, not straight up them)
@@ -664,8 +665,9 @@ KS.wildfollow = async (o, ox, oz) => {
     if (k % 100 === 0) tl.push(`${Math.round(k / 20)}s you z${Math.round(ld.location.z - oz)} gaps ${gaps().map((q) => Math.round(q)).join(",")} [${fs.map((e) => (notes.get(e.id)?.text ?? "").slice(0, 14)).join("|")}]`);
   }
   let t = 0; for (; t < 600; t += 10) { await kitWait(10); if (gaps().every((q) => q < 6)) break; }
-  const r = { routeLen: along.length, avgGap: +(sum / Math.max(1, n)).toFixed(1), worst: Math.round(worst), allWithYou: t >= 600 ? `no (${gaps().map((q) => Math.round(q)).join(",")})` : `${(t / 20).toFixed(1)} s`, tl };
+  const r = { routeLen: along.length, avgGap: +(sum / Math.max(1, n)).toFixed(1), worst: Math.round(worst), allWithYou: t >= 600 ? `no (${gaps().map((q) => Math.round(q)).join(",")})` : `${(t / 20).toFixed(1)} s`, mounts, mountedEnd: o.mount ? fs.filter((e) => e.isValid && isRiding(e)).length : undefined, tl };
   globalThis.__fakeLeader = undefined; globalThis.__viewers = V0;
+  for (const e of fs) { try { const m = e.getComponent("minecraft:riding")?.entityRidingOn; if (m && !VEHICLES.includes(m.typeId)) m.remove(); } catch {} }
   for (const e of [...fs, ld]) try { e.remove(); } catch {}
   return r;
 };
