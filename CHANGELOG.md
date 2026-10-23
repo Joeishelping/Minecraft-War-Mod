@@ -1,5 +1,30 @@
 # War Engine changelog
 
+## v9.28.0 (Cavalry and village attacks over real land)
+
+Tested on a natural village (houses, fences, paths, farms) and the hills around it: a squad marching 210 blocks to take
+the village from defenders inside the houses, and the same march on horseback.
+
+- **Cavalry marches.** Mounted men were left out of a march altogether: an all-mounted squad sent across real land
+  rode to the first markers a dozen blocks off and stood there for good (20 blocks in two and a half minutes). Now
+  riders ride the march's route with the squad, and a horse is carried along it smoothly at its own pace instead of
+  sticking on every bank and tree root. 140 blocks of hills in 30 s; the ambush at the end wiped out with 9 of 10
+  riders left, still in the saddle.
+- **Horses following you** are carried along your trail the same way: on average 13 blocks behind you over hills (was
+  19-34), with you half a second after you stop, and no more horses blinking forward every few seconds.
+- **No queueing up open hillsides.** A drop on one side of the route counted as a narrow ledge, so a whole squad
+  climbed every natural slope with a bank beside it in single file. Now it's a ledge only when there's no room on
+  either side (a bridge, a wall-top, a cliff path).
+- **Marching over sideways slopes.** A man in his own lane beside the route found no ground at the route's height on a
+  hillside and his glide was given up ~200 times in two minutes; now he steps down the block, or falls back onto the
+  route itself. A man left up on a bank 2-5 blocks above his route jumps down onto it.
+- **Falling back sensibly.** With no rally flag near, a wounded or routed man fell back to wherever he last held: on an
+  attack that could be the start of the march, 210 blocks back. Now it's his post if he holds one nearby, otherwise
+  about 20 blocks behind him along the way he came (or away from the enemy).
+- **Rescues and scouts.** A stuck man is helped up beside the nearest squad mate ahead of him (it was the one furthest
+  along the route, once 40 blocks off down a ravine); a scout on a march goes ahead along its route.
+- Village attack over real land: reached in about 1:45 (was 2:40), taken with 8-10 of 10 men left; a hill attack in 90 s.
+
 ## v9.27.0 (Out of the hole: trucks, horses and swamp marches over real land)
 
 - **Trucks driven by their crew cross real land.** A truck with soldiers at the wheel following you over natural
