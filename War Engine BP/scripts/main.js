@@ -593,7 +593,7 @@ function setGoal(e, slot) {
 }
 const GOAL_SET = new Map();   // soldier id -> the goal slot his tags were last set for (this session)
 system.runInterval(() => { for (const id of [...GOAL_SET.keys()]) if (!world.getEntity(id)) GOAL_SET.delete(id); }, 1200);
-const SLOT_KEYS = ["war:goal", "war:home", "war:mwp", "war:chargegoal", "war:ordergoal", "war:catchup", "war:mymk", "war:fmk"];
+const SLOT_KEYS = ["war:goal", "war:home", "war:mwp", "war:chargegoal", "war:ordergoal", "war:catchup", "war:mymk", "war:fmk", "war:fb"];
 let slotRefs = null; // soldier id -> [slots] (last known, kept while he's out of range)
 function getRefs() { if (!slotRefs) slotRefs = getJSON(world, "war:slotrefs", {}); return slotRefs; }
 const refSeen = new Map(); // soldier id -> tick he was last seen this session
@@ -808,6 +808,31 @@ function cmApply(e, d) {
   sdp(e, "war:weapon", fin); setP(e, "war:ranged", isRangedW(fin)); sdDrop(e);
   try { equip(e, weaponItem(e)); } catch {}
 }
+// v9.27: where a man falls back to with no rally flag near: his post if he's holding one close by; otherwise ~20 blocks
+// back, along his march's route behind him or straight away from the enemy. (It was always his "home" marker: on an
+// attack or a march that's wherever he last held, and men pulled out of a fight in a village set off for a spot 210
+// blocks back where the march began.)
+function fallBackSlot(e, d, now) {
+  const home = Number(gdp(e, "war:home") ?? 0), hm = marker(home), l = e.location;
+  if (ANCHORED.includes(d.func) && hm && hm.dimension.id === e.dimension.id && flat(hm.location, l) < 64) return home;
+  const fb = Number(gdp(e, "war:fb") ?? 0);
+  if (fb && marker(fb) && now - Number(gdp(e, "war:fbT") ?? -9999) < 400) return fb;
+  let to;
+  try {
+    const m = marchOfE(e);
+    if (m?.path && !m.path.guess) { const q = m.path[Math.max(0, routeProgress(m, l, e.id) - 10)]; if (q && flat(q, l) > 6) to = { x: q.x, y: q.y, z: q.z }; }
+    if (!to) {
+      const th = perc.get(e.id)?.threat; let ux = 0, uz = 0;
+      if (th?.isValid) { const dx = l.x - th.location.x, dz = l.z - th.location.z, L = Math.hypot(dx, dz) || 1; ux = dx / L; uz = dz / L; }
+      else { const v = fwdFromYaw(e.getRotation().y); ux = -v.x; uz = -v.z; }
+      to = walkableNear(e.dimension, l.x + ux * 20, l.z + uz * 20, l.y) ?? walkableNear(e.dimension, l.x + ux * 10, l.z + uz * 10, l.y);
+    }
+  } catch {}
+  if (!to) return hm && flat(hm.location, l) < 64 ? home : 0;
+  const s = myMarker(e, to, "war:fb", 2);
+  sdp(e, "war:fbT", now);
+  return s || 0;
+}
 // ================================================================ surrender
 function surrender(e, captor) {
   try { sdDrop(e); } catch {}
@@ -945,7 +970,7 @@ function think(e) {
     const rally = nearestFlag(e.dimension, e.location, (f) => !!P(f, "war:rally") && isFriendly(d.faction, Number(P(f, "war:faction"))), 128);
     // falling back along a real route to the rally flag (not a straight line Minecraft has to work out)
     const mv = rally ? travel(e, rally.location, "rally", now, true) : undefined;
-    const slot = mv?.slot ?? (rally ? slotOf(rally) : Number(gdp(e, "war:home") ?? 0));
+    const slot = mv?.slot ?? (rally ? slotOf(rally) : fallBackSlot(e, d, now));
     if (slot !== d.goal) setGoal(e, slot);
     want = { w: weapon, t: "t_off", g: mv ? mv.g : slot ? "g_wp" : "g_flee", s: speedGroup(e, true), d: "d_off", r: "r_off" }; // no fighting back while falling back
     // v9.7: falling back by bounds. Two or more of the squad pulling back with the enemy in sight: half of them turn and
