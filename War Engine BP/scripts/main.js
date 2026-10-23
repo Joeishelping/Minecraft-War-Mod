@@ -5708,7 +5708,9 @@ function advance(m, c) { void m; void c; }   // (v5.3: the guide position is set
 // change just ahead) and for stragglers, each soldier follows the route himself on his own marker, in single file
 // (the route driver below), so nobody piles onto one spot. Downed, captured or mounted members don't set the pace
 // and nobody waits for them; they rejoin if they get back up.
-const marchActive = (e) => !downed.has(e.id) && !pows.has(e.id) && !isRiding(e) && !sd(e).surr;
+const marchActive = (e) => !downed.has(e.id) && !pows.has(e.id) && (!isRiding(e) || onAnimalMount(e)) && !sd(e).surr;
+// (v9.27: in the saddle he marches with the rest: a passenger in a vehicle doesn't)
+function onAnimalMount(e) { try { const m = e.getComponent("minecraft:riding")?.entityRidingOn; return !!m && !VEHICLES.includes(m.typeId) && !m.typeId.startsWith("war:"); } catch { return false; } }
 // does the route need careful single-file following from point i on (for a soldier at loc)?
 // standing on stairs or a slab (castle wall stairs, a staircase in a house): Minecraft's walking gets confused there
 function onStairs(dim, p) { try { const b = tBlock(dim, p.x, Math.floor(p.y + 0.01) - 1, p.z), c = tBlock(dim, p.x, Math.floor(p.y + 0.01), p.z); return [b, c].some((x) => !!x && (x.typeId.includes("stairs") || x.typeId.includes("slab"))); } catch { return false; } }
@@ -11974,7 +11976,46 @@ function dismountAll(list) {
 // the hills and through the gaps. (Ridden straight at you, or along a route worked out to a place that kept moving,
 // horses got stuck on the first bank on real land and fell a hundred blocks behind.) Making no headway on it for three
 // seconds, horse and rider are put a little further along it, where a horse fits.
-const RIDE_TRAIL = new Map();   // rider id -> { bi (furthest trail point reached), t }
+const RIDE_TRAIL = new Map();   // rider id -> { P (the points), bi (furthest point reached), t }
+// along a line of points (your trail, a march's route) from point bi: the point a few ahead is where he rides; no headway
+// on it for 3 s, horse and rider are put a little further along it, where a horse fits
+function rideAlong(e, m, P0, bi, now) {
+  let R = RIDE_TRAIL.get(e.id);
+  if (!R || R.P !== P0 || bi > R.bi + 1 || bi < R.bi - 20) { R = { P: P0, bi, t: now }; RIDE_TRAIL.set(e.id, R); }
+  else if (now - R.t > 60) {
+    R.t = now;
+    for (let i = bi + 3; i < Math.min(P0.length - 1, bi + 12); i++) {
+      const q = P0[i]; if (q.w || q.climb || (q.dim && q.dim !== m.dimension.id) || !glideFree(m.dimension, q.x, q.y, q.z) || !floorUnder(m.dimension, q.x, q.y, q.z) || solidAt(m.dimension, { x: q.x, y: q.y + 2.2, z: q.z })) continue;
+      const n = P0[i + 1], yaw = (Math.atan2(-(n.x - q.x), n.z - q.z) * 180) / Math.PI;
+      try { m.teleport({ x: q.x, y: q.y, z: q.z }, { rotation: { x: 0, y: yaw }, keepVelocity: false }); MOUNT_HEAD.set(m.id, yaw); R.bi = i; v9stat("rideHop"); } catch {}
+      break;
+    }
+  }
+  return { at: P0[Math.min(P0.length - 1, bi + 4)], stop: 0.5, route: true, trail: true, P: P0, bi };
+}
+// v9.27: a mount on a line of points is carried along it, a step a tick, at its own pace: up a block where the line
+// goes up (a horse jumps that), down where it goes down. Steered by its physics on real land it stuck on every other
+// bank and tree root, and was put further along the line by a hop ~once every 6 s: horses blinking forward.
+// false: the step isn't open (the steering and the hop take over)
+function carryMount(m, C, now) {
+  const P0 = C.P, dim = m.dimension, l = m.location;
+  let k = Math.max(1, C.k ?? C.bi + 1);
+  while (k < P0.length - 1 && Math.hypot(P0[k].x - l.x, P0[k].z - l.z) < 0.6) k++;
+  C.k = k;
+  const b = P0[k], a = P0[k - 1];
+  if (!b || b.w || a?.w || b.climb) return false;
+  const dx = b.x - l.x, dz = b.z - l.z, L = Math.hypot(dx, dz);
+  if (L < 0.05) return k < P0.length - 1;
+  const st = Math.min(C.sp, L), nx = l.x + (dx / L) * st, nz = l.z + (dz / L) * st;
+  const seg = Math.hypot(b.x - a.x, b.z - a.z) || 1, f = 1 - Math.hypot(b.x - nx, b.z - nz) / seg;
+  let y = b.y > a.y ? (f >= 0.3 ? b.y : a.y) : b.y < a.y ? (f >= 0.6 ? b.y : a.y) : b.y;
+  if (y > l.y + 1.1) return false;                                                // (below the line: not lifted onto it)
+  if (!glideFree(dim, nx, y, nz)) { const alt = [b.y, a.y, Math.floor(l.y + 0.01)].find((yy) => yy !== y && yy <= l.y + 1.1 && glideFree(dim, nx, yy, nz)); if (alt === undefined) return false; y = alt; }
+  if (!floorUnder(dim, nx, y, nz) && !(b.y < a.y - 0.5)) { if (glideFree(dim, nx, y - 1, nz) && floorUnder(dim, nx, y - 1, nz)) y -= 1; else return false; }
+  const yaw = (Math.atan2(-dx, dz) * 180) / Math.PI, cur = MOUNT_HEAD.get(m.id) ?? m.getRotation().y, hd = turnToward(cur, yaw, 12);
+  try { m.teleport({ x: nx, y, z: nz }, { rotation: { x: 0, y: hd }, keepVelocity: false }); MOUNT_HEAD.set(m.id, hd); } catch { return false; }
+  return true;
+}
 function rideTrail(e, p) {
   try {
     const now = tick(); trailAdd(p, now);
@@ -11984,18 +12025,20 @@ function rideTrail(e, p) {
     let bi = -1, bd = 6;
     for (let i = T.pts.length - 1; i >= 0; i--) { const q = T.pts[i]; if (q.dim !== m.dimension.id) continue; const d0 = Math.hypot(q.x - l.x, q.z - l.z) + Math.abs(q.y - l.y); if (d0 < bd) { bd = d0; bi = i; } }
     if (bi < 0) { RIDE_TRAIL.delete(e.id); return undefined; }
-    let R = RIDE_TRAIL.get(e.id);
-    if (!R || R.T !== T || bi > R.bi + 1 || bi < R.bi - 20) { R = { T, bi, t: now }; RIDE_TRAIL.set(e.id, R); }
-    else if (now - R.t > 60) {
-      R.t = now;
-      for (let i = bi + 3; i < Math.min(T.pts.length - 1, bi + 12); i++) {
-        const q = T.pts[i]; if (q.w || !glideFree(m.dimension, q.x, q.y, q.z) || solidAt(m.dimension, { x: q.x, y: q.y + 2.2, z: q.z })) continue;
-        const n = T.pts[i + 1], yaw = (Math.atan2(-(n.x - q.x), n.z - q.z) * 180) / Math.PI;
-        try { m.teleport({ x: q.x, y: q.y, z: q.z }, { rotation: { x: 0, y: yaw }, keepVelocity: false }); MOUNT_HEAD.set(m.id, yaw); R.bi = i; v9stat("rideHop"); } catch {}
-        break;
-      }
-    }
-    return { at: T.pts[Math.min(T.pts.length - 1, bi + 4)], stop: 0.5, route: true, trail: true };
+    return rideAlong(e, m, T.pts, bi, now);
+  } catch { return undefined; }
+}
+// v9.27: a rider on a march rides the march's route (he was left out of the march altogether: an all-mounted squad
+// sent across real land rode to the first markers a dozen blocks off and stood there). Well ahead of the squad, he waits.
+// undefined: not on a march (rideDest decides); null: he waits
+function rideMarch(e) {
+  try {
+    const m0 = marchOfE(e); if (!m0?.path || m0.path.guess || m0.final || m0.planning && m0.keep === undefined) return undefined;
+    const mt = e.getComponent("minecraft:riding")?.entityRidingOn; if (!mt) return undefined;
+    const i = routeProgress(m0, mt.location, e.id);
+    if (m0.paceIdx !== undefined && i > m0.paceIdx + 6) { note(e, "waiting for the squad"); return null; }
+    if (m0.hold && i >= (m0.leadIdx ?? 0) - 8) return null;                     // (contact: the fight decides)
+    return rideAlong(e, mt, m0.path, i, tick());
   } catch { return undefined; }
 }
 system.runInterval(() => { for (const id of [...RIDE_TRAIL.keys()]) if (!mountOf.has(id)) RIDE_TRAIL.delete(id); }, 600);
@@ -12017,10 +12060,16 @@ system.runInterval(() => {
       const rd = m.getComponent("minecraft:rideable")?.getRiders() ?? [];
       if (rd[0]?.id !== id || VEHICLES.includes(m.typeId)) continue;           // (a passenger: whoever's in front steers; the add-on's vehicles drive themselves)
       const d = sd(e), cd = d.div === "cavalier" ? cavDest(e, d) : undefined;
-      let want = cd ?? rideDest(e, d);
+      const rmw = cd ? undefined : rideMarch(e);
+      let want = cd ?? (rmw === undefined ? rideDest(e, d) : rmw);
       if (!cd && want && d.div === "cavalier" && rideTo.has(id)) want = cavLine(e, d, want);
       if (want && !want.strike && !want.trail && !isBoatType(m.typeId)) want = rideRoute(e, m, want);          // (v9.14: round walls, along a planned route)
       if (want?.strike) cavStrike(e, d, m, want);
+      if (want?.P && !isBoatType(m.typeId)) {                                   // (on a line of points: carried along it, every tick)
+        const R0 = RIDE_DRV.get(id), C = R0?.carry && R0.carry.P === want.P && Math.abs((R0.carry.bi ?? 0) - want.bi) < 6 ? R0.carry : { P: want.P, bi: want.bi };
+        C.bi = want.bi; C.sp = mountSpeed(m) * 0.85 * (want.pace ?? 1); C.t = tick();
+        if ((CARRY_FAIL.get(id) ?? -99) < tick() - 20) { RIDE_DRV.set(id, { m, e, tx: 0, tz: 0, t: tick(), carry: C, look: R0?.look, onT: R0?.onT }); continue; }
+      }
       const l = m.location, vel = m.getVelocity();
       let tx = 0, tz = 0;
       if (want) {
@@ -12061,7 +12110,9 @@ system.runInterval(() => {
 // at the man he's fighting when that's within ~100 degrees of his horse's line, else ahead. Before, the steering set him
 // level and square every other tick and the game's own look-at tipped him at his target on the ticks between: a head
 // that snapped back and forth ten times a second.
-const RIDE_DRV = new Map();   // rider id -> { m, e, tx, tz, t }
+const RIDE_DRV = new Map();   // rider id -> { m, e, tx, tz, t, carry }
+const CARRY_FAIL = new Map(); // rider id -> tick his mount's carrying along its line last failed (1 s of steering then)
+system.runInterval(() => { for (const id of [...CARRY_FAIL.keys()]) if (!mountOf.has(id)) CARRY_FAIL.delete(id); }, 600);
 // v9.20.3: the same for a soldier in a vehicle's seat (truck, boat, gunboat, helicopter, plane, tank): one look per tick,
 // at the man he's shooting at, else the way the vehicle faces. The game's own look-at tipped him 20-30 degrees down and
 // off his aim on the ticks between the gun's turns: a head that nodded and twitched the whole ride.
@@ -12088,7 +12139,9 @@ system.runInterval(() => {
   for (const [id, R] of RIDE_DRV) {
     try {
       if (now - R.t > 4 || !R.m.isValid || !R.e.isValid || !mountOf.has(id)) { RIDE_DRV.delete(id); continue; }
-      const m = R.m, e = R.e, hd = MOUNT_HEAD.get(m.id) ?? m.getRotation().y;
+      const m = R.m, e = R.e;
+      if (R.carry && now - R.carry.t <= 4 && !carryMount(m, R.carry, now)) { CARRY_FAIL.set(id, now); R.carry = undefined; }
+      const hd = MOUNT_HEAD.get(m.id) ?? m.getRotation().y;
       if (now !== R.t && (R.tx || R.tz)) { const vel = m.getVelocity(); m.applyImpulse({ x: (R.tx - vel.x) * 0.8, y: 0, z: (R.tz - vel.z) * 0.8 }); try { m.setRotation({ x: 0, y: hd }); } catch {} }
       const t = gunState.get(id)?.target?.isValid ? gunState.get(id).target : perc.get(id)?.threat?.isValid ? perc.get(id).threat : undefined;
       const el = e.location, cur = R.look ?? e.getRotation().y;

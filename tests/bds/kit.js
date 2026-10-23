@@ -573,7 +573,8 @@ KS.wild = async (o, ox, oz) => {
   const N = Number(o.n ?? 10), E = Number(o.e ?? 6), x0 = ox + Number(o.dx ?? 0);
   const start = { x: x0, z: oz - 170 }, dest = { x: x0, z: oz + 40 };
   const g0 = groundAt(start.x, start.z), g1 = groundAt(dest.x, dest.z);
-  const men = []; for (let i = 0; i < N; i++) { const x = start.x + (i % 5) * 2 - 4, z = start.z - Math.floor(i / 5) * 2; men.push(kitSoldier(1, standSpot(x, z), ["rifle", "smg", "semi", "mg", "rifle"][i % 5], "hold")); }
+  const men = []; for (let i = 0; i < N; i++) { const x = start.x + (i % 5) * (o.cav ? 3 : 2) - 4, z = start.z - Math.floor(i / 5) * (o.cav ? 3 : 2); men.push(o.cav ? kitCav(1, standSpot(x, z), ["sword", "smg", "rifle", "spear", "pistol"][i % 5], "minecraft:horse") : kitSoldier(1, standSpot(x, z), ["rifle", "smg", "semi", "mg", "rifle"][i % 5], "hold")); }
+  if (o.cav) { await kitWait(60); }
   const amb = []; const ax = o.hill ? dest.x - 2 : x0 + Number(o.side ?? 14), az = o.hill ? dest.z - 2 : oz + Number(o.az ?? -20);   // (hill=1: they hold the objective itself)
   const inside = o.village ? indoorSpots(dest.x, dest.z, Number(o.vr ?? 26), E) : [];   // (village=1: they hold the houses round the objective)
   for (let i = 0; i < E; i++) { const x = ax + (i % 3) * 2, z = az + Math.floor(i / 3) * 3; amb.push(kitSoldier(2, inside[i] ?? standSpot(x, z), ["rifle", "semi", "mg"][i % 3], "hold")); }
@@ -602,7 +603,7 @@ KS.wild = async (o, ox, oz) => {
     }
     return up(men).length === 0 || up(amb).length === 0 && up(men).filter((e) => Math.hypot(e.location.x - dest.x, e.location.z - dest.z) < 14).length >= Math.ceil(up(men).length * 0.8);
   });
-  const r = { dbs: Object.entries(DBS).sort((a, b) => b[1] - a[1]).slice(0, 30), notes: Object.entries(NS).sort((a, b) => b[1] - a[1]).slice(0, 24), gr: globalThis.__GR, ground: [g0.y, g1.y, g0.liquid, g1.liquid], glr: globalThis.__GLR, inside: o.village ? inside.map((q) => `${Math.round(q.x - dest.x)},${q.y},${Math.round(q.z - dest.z)}`) : undefined, secs: Math.round((tick() - t0) / 20), menUp: up(men).length, ambUp: up(amb).length, there: up(men).filter((e) => Math.hypot(e.location.x - dest.x, e.location.z - dest.z) < 14).length, stuckMax, maxStuckAt, ...kitShotStats(t0), tl };
+  const r = { dbs: Object.entries(DBS).sort((a, b) => b[1] - a[1]).slice(0, 30), notes: Object.entries(NS).sort((a, b) => b[1] - a[1]).slice(0, 24), gr: globalThis.__GR, ground: [g0.y, g1.y, g0.liquid, g1.liquid], glr: globalThis.__GLR, inside: o.village ? inside.map((q) => `${Math.round(q.x - dest.x)},${q.y},${Math.round(q.z - dest.z)}`) : undefined, secs: Math.round((tick() - t0) / 20), menUp: up(men).length, ambUp: up(amb).length, there: up(men).filter((e) => Math.hypot(e.location.x - dest.x, e.location.z - dest.z) < 14).length, stuckMax, maxStuckAt, mounted: o.cav ? up(men).filter((e) => isRiding(e)).length : undefined, ...kitShotStats(t0), tl };
   for (const e of [...men, ...amb]) try { e.remove(); } catch {}
   return r;
 };
