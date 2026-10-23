@@ -544,6 +544,22 @@ function groundAt(x, z) {
   for (let y = 200; y > 40; y--) { const b = ow().getBlock({ x, y, z }); if (!b || b.isAir || b.typeId.includes("leaves") || b.typeId.includes("log") || b.typeId.includes("grass") && !b.typeId.includes("grass_block") || b.typeId.includes("flower") || b.typeId.includes("fern") || b.typeId.includes("snow_layer") || b.typeId.includes("vine")) continue; return { y: y + 1, liquid: b.isLiquid }; }
   return { y: Y, liquid: false };
 }
+// spots under a roof (inside the houses) around (cx, cz), spread at least 6 apart, nearest the middle first
+function indoorSpots(cx, cz, R, n) {
+  const cand = [];
+  for (let dz = -R; dz <= R; dz++) for (let dx = -R; dx <= R; dx++) {
+    const x = cx + dx, z = cz + dz, top = groundAt(x, z).y;
+    for (let y = top - 1; y > top - 12; y--) {
+      const f = ow().getBlock({ x, y: y - 1, z }), a = ow().getBlock({ x, y, z }), h = ow().getBlock({ x, y: y + 1, z });
+      if (!f || f.isAir || passable(f) || f.isLiquid || !a || !passable(a) || !h || !passable(h)) continue;
+      let roof = false; for (let k = 2; k <= 5; k++) { const r = ow().getBlock({ x, y: y + k, z }); if (r && !r.isAir && !passable(r)) { roof = true; break; } }
+      if (roof) { cand.push({ x: x + 0.5, y, z: z + 0.5, d: Math.hypot(dx, dz) }); break; }
+    }
+  }
+  cand.sort((a, b) => a.d - b.d);
+  const out = []; for (const c of cand) { if (out.every((q) => Math.hypot(q.x - c.x, q.z - c.z) >= 6)) out.push(c); if (out.length >= n) break; }
+  return out;
+}
 // a spot a man can stand on near (x, z): open at feet and head (not inside a tree trunk or a bush)
 function standSpot(x, z) {
   for (const [dx, dz] of [[0, 0], [1, 0], [-1, 0], [0, 1], [0, -1], [2, 0], [-2, 0], [0, 2], [0, -2], [2, 2], [-2, -2]]) {
@@ -559,11 +575,13 @@ KS.wild = async (o, ox, oz) => {
   const g0 = groundAt(start.x, start.z), g1 = groundAt(dest.x, dest.z);
   const men = []; for (let i = 0; i < N; i++) { const x = start.x + (i % 5) * 2 - 4, z = start.z - Math.floor(i / 5) * 2; men.push(kitSoldier(1, standSpot(x, z), ["rifle", "smg", "semi", "mg", "rifle"][i % 5], "hold")); }
   const amb = []; const ax = o.hill ? dest.x - 2 : x0 + Number(o.side ?? 14), az = o.hill ? dest.z - 2 : oz + Number(o.az ?? -20);   // (hill=1: they hold the objective itself)
-  for (let i = 0; i < E; i++) { const x = ax + (i % 3) * 2, z = az + Math.floor(i / 3) * 3; amb.push(kitSoldier(2, standSpot(x, z), ["rifle", "semi", "mg"][i % 3], "hold")); }
+  const inside = o.village ? indoorSpots(dest.x, dest.z, Number(o.vr ?? 26), E) : [];   // (village=1: they hold the houses round the objective)
+  for (let i = 0; i < E; i++) { const x = ax + (i % 3) * 2, z = az + Math.floor(i / 3) * 3; amb.push(kitSoldier(2, inside[i] ?? standSpot(x, z), ["rifle", "semi", "mg"][i % 3], "hold")); }
   setRelPair(1, 2, "1", false);
   await kitWait(20);
   await kitOrder(1, { x: dest.x + 0.5, y: g1.y, z: dest.z + 0.5 });
   if (globalThis.__GR) globalThis.__GR = {};
+  globalThis.__GLR = {};
   const t0 = tick(), up = (L) => L.filter((e) => e.isValid && !downed.has(e.id) && !isDown(e)), last = new Map(), stillSince = new Map();
   const tl = [], NS = {}, DBS = {}, prevAt = new Map(); let stuckMax = 0, maxStuckAt;
   await kitLoop(Number(o.ticks ?? 3600), () => {
@@ -584,7 +602,7 @@ KS.wild = async (o, ox, oz) => {
     }
     return up(men).length === 0 || up(amb).length === 0 && up(men).filter((e) => Math.hypot(e.location.x - dest.x, e.location.z - dest.z) < 14).length >= Math.ceil(up(men).length * 0.8);
   });
-  const r = { dbs: Object.entries(DBS).sort((a, b) => b[1] - a[1]).slice(0, 30), notes: Object.entries(NS).sort((a, b) => b[1] - a[1]).slice(0, 24), gr: globalThis.__GR, ground: [g0.y, g1.y, g0.liquid, g1.liquid], secs: Math.round((tick() - t0) / 20), menUp: up(men).length, ambUp: up(amb).length, there: up(men).filter((e) => Math.hypot(e.location.x - dest.x, e.location.z - dest.z) < 14).length, stuckMax, maxStuckAt, ...kitShotStats(t0), tl };
+  const r = { dbs: Object.entries(DBS).sort((a, b) => b[1] - a[1]).slice(0, 30), notes: Object.entries(NS).sort((a, b) => b[1] - a[1]).slice(0, 24), gr: globalThis.__GR, ground: [g0.y, g1.y, g0.liquid, g1.liquid], glr: globalThis.__GLR, inside: o.village ? inside.map((q) => `${Math.round(q.x - dest.x)},${q.y},${Math.round(q.z - dest.z)}`) : undefined, secs: Math.round((tick() - t0) / 20), menUp: up(men).length, ambUp: up(amb).length, there: up(men).filter((e) => Math.hypot(e.location.x - dest.x, e.location.z - dest.z) < 14).length, stuckMax, maxStuckAt, ...kitShotStats(t0), tl };
   for (const e of [...men, ...amb]) try { e.remove(); } catch {}
   return r;
 };

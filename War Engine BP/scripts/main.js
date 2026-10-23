@@ -5690,8 +5690,29 @@ function onStairs(dim, p) { try { const b = tBlock(dim, p.x, Math.floor(p.y + 0.
 // v9.25: a real choke point (indoors, stairs, a ladder, a door, a drop): where men have to go one at a time
 function narrowAt(dim, pts, i, loc) {
   if (isIndoorsAt(dim, loc) || onStairs(dim, loc)) return true;
-  for (let k = Math.max(0, i - 1); k < Math.min(pts.length - 1, i + 3); k++) if (isGate(pts[k], pts[k + 1]) || onStairs(dim, pts[k + 1]) || edgeAt(dim, pts[k + 1])) return true;
+  for (let k = Math.max(0, i - 1); k < Math.min(pts.length - 1, i + 3); k++) if (isGate(pts[k], pts[k + 1]) || onStairs(dim, pts[k + 1]) || (edgeAt(dim, pts[k + 1]) && ledgeAt(dim, pts[k], pts[k + 1]))) return true;
   return false;
+}
+// v9.27: a ledge is narrow when there's no room on EITHER side of the way: a drop or a wall both left and right (a plank
+// bridge, a wall-top, a path along a cliff face). A drop on one side only, with open ground on the other, is just a
+// hillside: before, every natural slope with a bank beside the route made the whole squad queue up it in single file.
+const LEDGE = new Map();
+function sideShut(dim, x, y, z) {
+  const at = tBlock(dim, x + 0.5, y, z + 0.5); if (!at) return true;
+  if (!passable(at)) { const up = tBlock(dim, x + 0.5, y + 1, z + 0.5), up2 = tBlock(dim, x + 0.5, y + 2, z + 0.5); return !up || !passable(up) || !up2 || !passable(up2); }   // (a step up beside it is room; a wall isn't)
+  const f1 = tBlock(dim, x + 0.5, y - 1, z + 0.5), f2 = tBlock(dim, x + 0.5, y - 2, z + 0.5);
+  return !!(f1 && passable(f1) && !f1.isLiquid && f2 && passable(f2) && !f2.isLiquid);       // (a drop of two or more)
+}
+function ledgeAt(dim, a, b) {
+  const dx = b.x - a.x, dz = b.z - a.z, L = Math.hypot(dx, dz);
+  if (L < 0.3) return true;
+  const px = Math.round(-dz / L), pz = Math.round(dx / L), x = Math.floor(b.x), y = Math.floor(b.y + 0.01), z = Math.floor(b.z);
+  const k = `${bkey(dim.id, x, y, z)}|${px},${pz}`, now = tick(), c = LEDGE.get(k);
+  if (c && now - c.t < 600) return c.v;
+  let v = true;
+  try { v = sideShut(dim, x + px, y, z + pz) && sideShut(dim, x - px, y, z - pz); } catch {}
+  LEDGE.set(k, { v, t: now }); if (LEDGE.size > 20000) LEDGE.clear();
+  return v;
 }
 const PROGMEM = new Map(); // soldier id -> { i, t }: his furthest point along his march's route, and when he got there (v9.25)
 system.runInterval(() => { if (PROGMEM.size > 3000) PROGMEM.clear(); }, 1200);
@@ -9376,7 +9397,10 @@ function rescueTo(e, why, now) {
   const myP = m?.path ? routeProgress(m, e.location, e.id) : 0;
   for (const o of pool) {
     if (o.id === e.id || o.dimension.id !== e.dimension.id || !doingWell(o, now, m) || dist(o.location, e.location) < 3) continue;
-    const sc = m?.final && m.pos ? -flat(o.location, m.pos) : m?.path ? routeProgress(m, o.location, o.id) - myP : -dist(o.location, e.location) / 10;
+    // (v9.27: on the march, beside the NEAREST man ahead of him on the route, not the one furthest along it: a rescue
+    //  put a man stuck at the start next to the front man 40 blocks off, down in a ravine the route went through)
+    const dp = m?.path && !m.final ? routeProgress(m, o.location, o.id) - myP : 0;
+    const sc = m?.final && m.pos ? -flat(o.location, m.pos) : m?.path ? (dp > 0 ? 1000 - dp : dp - dist(o.location, e.location) / 10) : -dist(o.location, e.location) / 10;
     if (sc > bs) { bs = sc; best = o; }
   }
   if (!best) return false;
@@ -10099,7 +10123,7 @@ system.runInterval(() => {
         const queued = !open && queuedBehind(e, pts, i);
         const wait = queued ? (g?.wait ?? 0) + 4 : 0;
         const k = g && g.pts === pts ? g.k : glideStart(pts, i, e.location);
-        gliders.set(e.id, { yaw: g?.yaw, pts, k, t: now, paused: queued && wait < 50 && floorUnder(e.dimension, e.location.x, e.location.y, e.location.z), wait, blocked: g && g.pts === pts ? g.blocked : 0, lane: open ? laneOf2(e.id) : 0 });   // (v6.2: blocked kept: it was reset every refresh, so a man below his route was never let go)   // (never paused over a gap)   // never waits more than 2.5 s for anyone (no deadlocks)
+        gliders.set(e.id, { yaw: g?.yaw, pts, k, t: now, paused: queued && wait < 50 && floorUnder(e.dimension, e.location.x, e.location.y, e.location.z), wait, blocked: g && g.pts === pts ? g.blocked : 0, lane: open && !((g?.laneOff ?? 0) > now) ? laneOf2(e.id) : 0, laneOff: g?.laneOff });   // (v6.2: blocked kept: it was reset every refresh, so a man below his route was never let go)   // (never paused over a gap)   // never waits more than 2.5 s for anyone (no deadlocks)
         myMarker(e, e.location);
         note(e, queued && wait < 50 ? "waiting his turn" : remote ? "marching (out of range)" : "on the way through");
         continue;
@@ -10854,7 +10878,9 @@ const glideBan = new Map(); // id -> tick until which the glider leaves him alon
 const glideFails = new Map(); // id -> { n, t, at }: carried and blocked at the same spot, again and again (v9.26)
 // the glider can't take him on: off it, and the brain / settle work out a new way. Blocked at the same spot again and again
 // (every new route from there hits the same step): his own walking gets a proper try, then he scrambles a few points on
+const glr = (k) => { const G = globalThis.__GLR; if (G) G[k] = (G[k] ?? 0) + 1; };   // (test servers only: why glides stall)
 function glideGiveUp(e, id, g, pts, p, now) {
+  glr("giveUp");
   gliders.delete(id); glideBan.set(id, now + 60); personal.delete(id); travelTo.delete(id);
   const gf = glideFails.get(id), n = gf && now - gf.t < 300 && flat(gf.at, p) < 2 ? gf.n + 1 : 1;
   glideFails.set(id, { n, t: now, at: { x: p.x, z: p.z } });
@@ -10931,7 +10957,7 @@ system.runInterval(() => {
         if (b.w) y = Math.max(y, surf - 1);
       }
       if (y > p.y + 1.1 && !(surf !== undefined && inWater(e) && y <= surf + 1.2)) {   // v6.0: he's below his route (fell off it): never lifted up to it
-        g.blocked = (g.blocked ?? 0) + 1;
+        g.blocked = (g.blocked ?? 0) + 1; glr(g.lane ? "belowL" : "below");
         if (g.blocked > 10) {                                      // v6.2: a short route of his own back up onto it (out of a trench, off a ledge below)
           gliders.delete(id); personal.delete(id); travelTo.delete(id);
           const bt = belowRoute.get(id); belowRoute.set(id, { n: bt && now - bt.t < 300 ? bt.n + 1 : 1, t: now });   // (again and again: no way up: the rescue lifts him out)
@@ -10949,17 +10975,28 @@ system.runInterval(() => {
       // free; blocked for a moment: off the glider, and a personal route is worked out again from where he stands.
       // v6.0: and never out over thin air (a diagonal across the corner of a trench or a gap beside a bridge): the step
       // must have ground under it, unless the route itself drops there (or swims)
+      // (v9.27: he's up on a bank 2-5 blocks above his route, right over it: he jumps down onto it. He used to walk into
+      //  the bank face at his route's height, step after step, till the glide was given up, then again)
+      if (p.y - b.y > 1.5 && p.y - b.y <= 5 && L < 2.5 && !b.climb && glideFree(e.dimension, b.x, b.y, b.z) && floorUnder(e.dimension, b.x, b.y, b.z) && !dangerNear(e.dimension, b)) {
+        try { e.teleport({ x: b.x, y: b.y, z: b.z }, { rotation: faceRot(e, b, nb, 22, undefined, g.yaw) }); } catch {}
+        g.k++; g.blocked = 0; glr("jumpDown"); continue;
+      }
       const dropOk = b.y < a.y - 0.5 || b.w || a.w;
       const ok = (x, z) => glideFree(e.dimension, x, y, z) && (dropOk || floorUnder(e.dimension, x, y, z));
       let tx = nx, tz = nz;
+      // (v9.27: a step down of one block is a step, not a wall: in his lane on a hillside the ground beside the route
+      //  is a block lower, and every step there counted as blocked: the glide was given up ~200 times in two minutes)
+      if (!ok(tx, tz) && !dropOk && glideFree(e.dimension, nx, y, nz) && glideFree(e.dimension, nx, y - 1, nz) && floorUnder(e.dimension, nx, y - 1, nz) && y - 1 >= p.y - 1.1) y -= 1;
       if (!ok(tx, tz)) {
         if (ok(nx, p.z)) tz = p.z;
         else if (ok(p.x, nz)) tx = p.x;
         else if (L <= 1.6 && b.y <= p.y + 1.1 && glideFree(e.dimension, b.x, b.y, b.z) && floorUnder(e.dimension, b.x, b.y, b.z)) {   // right by the point: one step onto it
           { const r = faceRot(e, b, nb, 22, undefined, g.yaw); g.yaw = r.y; e.teleport({ x: b.x, y: b.y, z: b.z }, { rotation: r }); }
           g.k++; g.blocked = 0; continue;
+        } else if (g.lane) {
+          g.lane = 0; g.laneOff = now + 60; glr("laneDrop"); continue;                    // (no way along his lane here: back onto the route itself)
         } else {
-          g.blocked = (g.blocked ?? 0) + 1;
+          g.blocked = (g.blocked ?? 0) + 1; if (globalThis.__GLR) glr(`wall${glideFree(e.dimension, nx, y, nz) ? "-floor" : ""}`);
           if (g.blocked > 10) {
             glideGiveUp(e, id, g, pts, p, now);
             // v6.2: on a bridge / ledge he can't just be left there: a fresh short route from exactly where he stands
@@ -10970,7 +11007,12 @@ system.runInterval(() => {
       }
       // (v9.26: a "step" that goes nowhere (slid along a wall into the corner) is a blocked step, not progress: it used
       //  to reset the count, and he stood there being moved by nothing for good)
-      if (L > 0.05 && Math.hypot(tx - p.x, tz - p.z) < 0.01 && Math.abs(y - p.y) < 0.05) { g.blocked = (g.blocked ?? 0) + 1; if (g.blocked > 10) glideGiveUp(e, id, g, pts, p, now); continue; }
+      if (L > 0.05 && Math.hypot(tx - p.x, tz - p.z) < 0.01 && Math.abs(y - p.y) < 0.05) {
+        if (g.lane) { g.lane = 0; g.laneOff = now + 60; glr("laneDrop"); continue; }          // (his lane runs into something: back onto the route)
+        g.blocked = (g.blocked ?? 0) + 1; glr("nowhere"); if (globalThis.__GLR) glr(`nw@${Math.floor(p.x)},${Math.floor(p.y)},${Math.floor(p.z)}>${b.x.toFixed(1)},${b.y},${b.z.toFixed(1)}${b.w ? "w" : ""}${inWater(e) ? "W" : ""}`);
+        if (g.blocked > 10) glideGiveUp(e, id, g, pts, p, now);
+        continue;
+      }
       g.blocked = 0;
       const gt = gunState.get(id)?.target;                          // (v7.0: a target in sight: he faces him as he goes, and can fire)
       const aimT = gt?.isValid && dist(gt.location, e.location) < 40;
@@ -13487,7 +13529,10 @@ system.runInterval(() => {
         if (moving) {
           const c = S.ourC ?? lead.location, v = lead.getVelocity(), L = Math.hypot(v.x, v.z);
           if (L > 0.05) {
-            const to = walkableNear(lead.dimension, c.x + (v.x / L) * 30, c.z + (v.z / L) * 30, c.y);
+            // (v9.27: on a march, ahead along its route, where the squad is going: sent off straight along the way they
+            //  happened to be walking, round a bend in the route he went somewhere else and fell 60 blocks behind)
+            const mq = marchOfE(lead), rp = mq?.path && !mq.path.guess && !mq.final ? mq.path[Math.min(mq.path.length - 1, (mq.leadIdx ?? 0) + 15)] : undefined;
+            const to = rp && flat(rp, c) > 12 ? { x: rp.x, y: rp.y, z: rp.z } : walkableNear(lead.dimension, c.x + (v.x / L) * 30, c.z + (v.z / L) * 30, c.y);
             const sc = S.ours.filter((o) => o.isValid && !OFFICER_IDS.has(o.id) && GUNS.includes(sd(o).weapon) && sd(o).div !== "medic" && !isRiding(o) && !personal.has(o.id))
               .sort((a, b) => (traitOf(b) === "brave") - (traitOf(a) === "brave"))[0];
             if (to && sc) {
