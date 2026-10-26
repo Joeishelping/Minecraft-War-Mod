@@ -1,5 +1,39 @@
 # War Engine changelog
 
+## v9.29.0 (A full line-by-line review of the code, and the bugs it found)
+
+Every line of the add-on's scripts was read again, looking for bugs that may have been there since the earliest
+versions. These are the ones that were real. The biggest were checked in the game on their own, and
+everything ran through the full test suites (62 game scenarios and the ten acceptance checks).
+
+- **Squads on Hold fire now fire back at enemy soldiers.** Since v8.0 (precise hits) a soldier's round lands with no
+  shooter attached, so nothing knew who had fired it. A squad told to hold fire until attacked was never "attacked" by
+  enemy soldiers: in a 30-second test it lost 5 of 6 men without firing a shot back. Now it opens up within a couple of
+  seconds of the first rounds coming in. The same fix means the man hit turns on his shooter at once and looks for
+  cover, his comrades come to help, the right man calls "Target down!", friendly fire between soldiers is a quarter
+  as bad (it was full damage), and battles between soldiers alone are written in the war chronicle.
+- **Soldiers no longer walk off to the wrong place after land reloads.** A marker in land that had unloaded looked
+  free; its number went to a new marker, and when the land loaded again two markers shared a number, so men could walk
+  to the old one hundreds of blocks away. Numbers are now held while their marker is away, and a stale copy is removed
+  when it loads. The same for a hunted enemy: a player who logged off while being hunted kept the hunt's tags, and men
+  sent to a new marker could walk to him instead.
+- **Timers that never ran.** About a dozen jobs were written to run "on every 20th tick" inside loops that only look
+  every few ticks, so they ran only if the loop happened to start on a matching tick. The game's tick count carries on
+  from the saved world, so a loop starts on any tick at all, and most of the time they never ran: the map of trouble
+  spots the army learns was never saved or loaded, the wounded stopped calling for a medic after the first time, and
+  more. They now run on time whatever tick the game started on.
+- **Damage is applied before deciding if a man goes down.** The Realism damage setting and the friendly-fire rule were
+  applied after the check, so a man could be downed by a hit that, scaled, wouldn't have downed him.
+- **A soldier taken over by another player keeps who he is** (name, rank, medals, stance, mount, kit).
+- **Poses and tags left behind.** A man sitting at a campfire or crawling wounded when his land unloaded was drawn that
+  way for good; the neutral-zone tag stayed on anyone who unloaded or logged off inside a zone after it was removed (no
+  soldier would ever fight him hand to hand again). Both are cleared now.
+- **Smaller ones.** The same radio message to two factions within 3 s reached only the first. A sleeper killed in his
+  bed kept it taken all session. The shield wall and bodyguards could be given a move to nowhere. The war chronicle no
+  longer grows without limit in a long war. About 40 kinds of per-soldier records, and each squad's memory, are now
+  freed when the soldier or squad is gone (they grew all session). "Settings saved" was said twice.
+- New game-server test: a squad on Hold fire under enemy fire.
+
 ## v9.28.0 (Cavalry and village attacks over real land)
 
 Tested on a natural village (houses, fences, paths, farms) and the hills around it: a squad marching 210 blocks to take
