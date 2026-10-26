@@ -343,6 +343,13 @@ const dist = (a, b) => Math.hypot(a.x - b.x, a.y - b.y, a.z - b.z);
 const flat = (a, b) => Math.hypot(a.x - b.x, a.z - b.z);
 const findPlayer = (id) => (id ? world.getAllPlayers().find((p) => p.id === id) ?? globalThis.__fakeLeader?.(id) : undefined);   // (__fakeLeader: test kits only)
 const tick = () => TICK_NOW || system.currentTick;
+// (v9.29: "once every P ticks" from a loop that runs every I ticks. A test like now % P === 0 only ever came true if the
+//  script happened to start on a tick that lined up with it; after a /reload it mostly didn't, and the job never ran at
+//  all: the learned trouble spots were never saved or loaded, the downed never called for a medic again. This one
+//  comes true once in every P ticks whatever tick the loop started on.)
+const crossed = (now, P, I) => Math.floor(now / P) !== Math.floor((now - I) / P);
+const EVERY = new Map();   // key -> tick it last came true (every(): once every n ticks for a caller with no fixed rhythm)
+function every(k, n, now = tick()) { const t = EVERY.get(k); if (t !== undefined && now >= t && now - t < n) return false; EVERY.set(k, now); if (EVERY.size > 4000) EVERY.clear(); return true; }
 const DIMS = ["overworld", "nether", "the_end"];
 const allOfCache = new Map(); // type -> { t, list }  (one world search per type per tick)
 // v6.3: soldiers picked up with the TP wand (soldier id -> { by: player id }). They are left out of allOf, so nothing
@@ -2059,7 +2066,7 @@ world.beforeEvents.entityHurt.subscribe((ev) => {
       const noDown = ["houndmaster"].includes(String(gdp(v, "war:div") ?? ""));   // (v6.9.3: dog handlers just die; v9.14: riders go down, thrown from the saddle)
       if (h && ev.damage >= hpBefore(v, h, dmg0) && cause !== "void" && !dying.has(v.id) && !noDown && !oneShot(v, ev, cause, dmg0)) {   // (v9.7: some hits kill outright)
         ev.cancel = true;                                            // falls wounded instead of dying
-        let killer; try { killer = ev.damageSource?.damagingEntity; } catch {}
+        let killer; try { killer = hurtAttacker(ev); } catch {}   // (v9.29: a soldier's round too: he fell the way it pushed him, and the man who dropped him calls it)
         const bd = hitDir(v, killer);
         system.run(() => { try { if (v.isValid) { const hh = hpOf(v); if (hh) hh.setCurrentValue(1); bleed(v, bd, false); goDown(v, killer); } } catch {} });
         return;
@@ -2092,17 +2099,16 @@ function scaleHurt(ev) {
     if (k !== 1 && (hv?.typeId === SOLDIER || bySoldier) && hv?.typeId !== "war:tank") ev.damage = ev.damage * k;
   } catch {}
   try {
-    const v = ev.hurtEntity; let a = ev.damageSource.damagingEntity;
-    // (v9.29: a soldier's own round hits with no damaging entity (on purpose, see hitscan): who fired it is in SHOT_BY.
-    //  Without this, a round into a squad mate always did full damage: the quarter rule never applied to soldiers' fire)
-    if (!a && v) { const sb = SHOT_BY.get(v.id); if (sb && tick() - sb.t <= 1) a = world.getEntity(sb.id); }
+    // (v9.29: a soldier's own round hits with no damaging entity: see hurtAttacker. Without it, a round into a squad mate
+    //  always did full damage: the quarter rule never applied to soldiers' fire)
+    const v = ev.hurtEntity, a = hurtAttacker(ev);
     if (!a || !v || a.id === v.id || v.typeId === "war:tank") return;
     const fa = factionOf(a), fv = factionOf(v);
     if (fa && fv && isFriendly(fa, fv)) ev.damage = ev.damage * 0.25;
   } catch {}
 }
 world.afterEvents.entityHurt.subscribe((ev) => {
-  try { chronHit(ev.damageSource.damagingEntity, ev.hurtEntity); } catch {}
+  try { chronHit(hurtAttacker(ev), ev.hurtEntity); } catch {}   // (v9.29: soldiers' rounds too: a battle between soldiers alone was never written down)
   try { repHit(ev.damageSource.damagingEntity, ev.hurtEntity); } catch {}
   const v = ev.hurtEntity;
   if (!v?.isValid || (v.typeId !== SOLDIER && v.typeId !== "minecraft:player" && v.typeId !== HOUND)) return;
@@ -4822,7 +4828,7 @@ system.runInterval(() => {
       if (GUNS.includes(String(gdp(e, "war:weapon") ?? "")) || ridingNest(e)) gunTick(e, now);
     } catch {}
   }
-  if (now % 200 === 0) for (const id of [...gunState.keys()]) if (!world.getEntity(id)) gunState.delete(id);
+  if (crossed(now, 200, 2)) for (const id of [...gunState.keys()]) if (!world.getEntity(id)) gunState.delete(id);
 }, 2);   // v5.7: every other tick (no gun fires faster than that)
 world.afterEvents.entitySpawn.subscribe((ev) => { try { if (ev.entity.typeId === "war:blank") ev.entity.remove(); } catch {} });
 
@@ -4830,7 +4836,7 @@ world.afterEvents.entitySpawn.subscribe((ev) => { try { if (ev.entity.typeId ===
 const coverClaim = new Map(); // id -> { x, z, t } : cover spots already taken
 // A gunner hit from range looks within ~3 blocks for a spot with a block between him and the shooter.
 world.afterEvents.entityHurt.subscribe((ev) => {
-  const e = ev.hurtEntity, a = ev.damageSource.damagingEntity;
+  const e = ev.hurtEntity, a = hurtAttacker(ev);   // (v9.29: shot by a soldier counts: only players' and mobs' hits ever sent a man to cover)
   if (!e?.isValid || e.typeId !== SOLDIER || !a?.isValid) return;
   system.run(() => {
     try {
@@ -5136,8 +5142,19 @@ function hearNoise(dim, loc, maker) {
     try { if (!mf || isHostile(c.f, mf)) { const s = perc.get(c.id) ?? pstate(c.e); s.noise = { x: loc.x, y: loc.y, z: loc.z }; s.noiseT = now; } } catch {}
   }
 }
+// v9.29: who hurt him. A soldier's precise round lands with no damaging entity (on purpose: see hitscan), so since v8.0
+// every listener asking "who did this" saw nobody when soldiers shot soldiers: a squad on Hold fire was never provoked
+// by the enemy soldiers shooting it, its comrades weren't called to help, and the man hit didn't turn on his shooter.
+// The hitscan writes down who fired the round that hit him (SHOT_BY), the same tick.
+function hurtAttacker(ev) {
+  const a = ev.damageSource?.damagingEntity;
+  if (a) return a;
+  const v = ev.hurtEntity, sb = v ? SHOT_BY.get(v.id) : undefined;
+  if (!sb || tick() - sb.t > 1) return undefined;
+  try { const o = world.getEntity(sb.id); return o?.isValid ? o : undefined; } catch { return undefined; }
+}
 world.afterEvents.entityHurt.subscribe((ev) => {
-  const v = ev.hurtEntity, a = ev.damageSource.damagingEntity;
+  const v = ev.hurtEntity, a = hurtAttacker(ev);
   if (!v?.isValid || !a) return;
   const now = tick();
   hurtBy.set(v.id, { id: a.id, t: now });
@@ -5257,7 +5274,7 @@ function faceRot(e, from, at, maxStep = 22, pitchTo, cur0) {
 const threatSlot = new Map(); // entity id -> slot
 function slotForThreat(t) {
   if (threatSlot.has(t.id)) return threatSlot.get(t.id);
-  const used = new Set([...markers().map(slotOf), ...threatSlot.values()]);
+  const used = new Set([...markers().map(slotOf), ...threatSlot.values(), ...usedSlotsTick()]);   // (v9.29: and numbers held by markers in unloaded land)
   for (let i = 1; i <= NSLOT; i++) if (!used.has(i)) { try { tagMarker(t, i); } catch { return 0; } threatSlot.set(t.id, i); return i; }
   return 0;
 }
@@ -5544,8 +5561,9 @@ const orderLimit = () => Math.max(50, Number(setting("olimit", 500)));
 const msgSeen = new Map(); // text -> tick (the same message at most every 3 s)
 function factionMsg(f, text, fallback) {
   const now = tick();
-  if (now - (msgSeen.get(text) ?? -999) < 60) return;
-  msgSeen.set(text, now);
+  const key = `${f ?? ""}|${text}`;   // (v9.29: per faction: the same words to another faction within 3 s were swallowed)
+  if (now - (msgSeen.get(key) ?? -999) < 60) return;
+  msgSeen.set(key, now);
   if (msgSeen.size > 200) msgSeen.clear();
   let sent = false;
   if (f) for (const p of world.getAllPlayers()) { try { if (playerFaction(p) === f) { p.sendMessage(text); sent = true; } } catch {} }
@@ -7172,7 +7190,7 @@ system.runInterval(() => {
       for (const [id, q] of B2.known) if (!A.known.has(id) && now - q.t < 100) A.known.set(id, { ...q, t: q.t - 20, heard: true });
     }
   }
-  for (const [k, S] of [...squads]) if (now - S.t > 600) { learnEnd(S, 0, now); squads.delete(k); }   // a squad gone (wiped out / out of range) ends its fight
+  for (const [k, S] of [...squads]) if (now - S.t > 600) { learnEnd(S, 0, now); squads.delete(k); squadMemory.delete(k); squadMorale.delete(k); helpCall.delete(k); }   // a squad gone (wiped out / out of range) ends its fight (v9.29: and what it remembered: men without a squad are keyed by where they are, and those keys piled up all session)
   for (const [id, v] of [...suppB]) { const nv = v - 2; if (nv <= 0) suppB.delete(id); else suppB.set(id, nv); }
 }, 20);
 // suppression: fire landing on or near a soldier (hits or misses) shakes his aim and pushes him to cover
@@ -8028,7 +8046,7 @@ system.runInterval(() => {
     // calling for a medic: at once when he drops (goDown), then every ~10 s while no medic is on his way (v6.9.1: was
     // every 18 s and only half the wounded). Two men down side by side don't both yell it: a "Medic!" heard within 40
     // blocks in the last 12 s keeps the others quiet.
-    if (now % 20 === 0 && now - Number(medicCall.get(id) ?? -9999) > 200) {
+    if (crossed(now, 20, 10) && now - Number(medicCall.get(id) ?? -9999) > 200) {
       medicCall.set(id, now);
       if (!medicComing(id, now)) callout(e, "Medic!");
     }
@@ -8041,7 +8059,7 @@ system.runInterval(() => {
       const hh = hpOf(e); if (hh && hh.currentValue !== 1) hh.setCurrentValue(1);
       if (!P(e, "war:down")) setP(e, "war:down", true);
     } catch {}
-    try { if (now % 20 === 0) e.dimension.spawnParticle("minecraft:basic_smoke_particle", { x: e.location.x, y: e.location.y + 0.3, z: e.location.z }); } catch {}
+    try { if (crossed(now, 20, 10)) e.dimension.spawnParticle("minecraft:basic_smoke_particle", { x: e.location.x, y: e.location.y + 0.3, z: e.location.z }); } catch {}
   }
 }, 10);
 world.afterEvents.playerInteractWithEntity.subscribe((ev) => {
@@ -10457,7 +10475,7 @@ world.afterEvents.playerInteractWithEntity.subscribe((ev) => {
 // in the world, per 2x2 cell, with a weight. Routes go round remembered trouble when there's another way, and fight
 // moves don't pick those spots. It persists with the world, fades if a spot stops causing trouble, and is capped.
 const TROUBLE = new Map(); // "dim|cx|cz" -> { n, t }
-let troubleDirty = false;
+let troubleDirty = false, troubleLoadT;
 const troubleKey = (dimId, x, z) => `${dimId}|${Math.floor(x) >> 1}|${Math.floor(z) >> 1}`;
 function noteTrouble(dim, l, w = 1) {
   try {
@@ -10470,12 +10488,13 @@ function noteTrouble(dim, l, w = 1) {
 const troubleAt = (dimId, x, z) => TROUBLE.size ? (TROUBLE.get(troubleKey(dimId, x, z))?.n ?? 0) : 0;
 system.runInterval(() => {
   const now = tick();
-  if (now === 40 || (TROUBLE.size === 0 && now % 600 === 40)) {            // load once (after the world is up)
+  if (now >= 40 && (troubleLoadT === undefined || (TROUBLE.size === 0 && now - troubleLoadT >= 600))) {   // load once (after the world is up)
+    troubleLoadT = now;
     try { if (world.getDynamicProperty("war:troublever") !== 71) { world.setDynamicProperty("war:trouble", undefined); world.setDynamicProperty("war:troublever", 71); } } catch {}   // v7.1: the old memory (piled up on stairs) is wiped once
     try { const raw = world.getDynamicProperty("war:trouble"); if (typeof raw === "string" && !TROUBLE.size) for (const [k, n] of Object.entries(JSON.parse(raw))) TROUBLE.set(k, { n: Number(n) || 0, t: now }); } catch {}
   }
-  if (now % 6000 === 0) for (const [k, v] of [...TROUBLE]) if (now - v.t > 6000) { v.n -= 1; v.t = now; troubleDirty = true; if (v.n <= 0) TROUBLE.delete(k); }   // fades: -1 every 5 min untouched
-  if (troubleDirty && now % 600 === 0) {
+  if (crossed(now, 6000, 20)) for (const [k, v] of [...TROUBLE]) if (now - v.t > 6000) { v.n -= 1; v.t = now; troubleDirty = true; if (v.n <= 0) TROUBLE.delete(k); }   // fades: -1 every 5 min untouched
+  if (troubleDirty && crossed(now, 600, 20)) {
     troubleDirty = false;
     try { const o = {}; for (const [k, v] of TROUBLE) o[k] = v.n; world.setDynamicProperty("war:trouble", JSON.stringify(o)); } catch {}
   }
@@ -11224,7 +11243,7 @@ function followLeader(e, d, now) {
 // ---- instant self-defence: the moment an enemy hurts a soldier, that enemy is his target (no waiting for his next
 // look), his gun re-aims at once, and if the attacker is within arm's reach he fights hand-to-hand right away.
 world.afterEvents.entityHurt.subscribe((ev) => {
-  const v = ev.hurtEntity, a = ev.damageSource.damagingEntity;
+  const v = ev.hurtEntity, a = hurtAttacker(ev);
   if (v?.typeId !== SOLDIER || !a?.isValid || a.id === v.id || downed.has(v.id)) return;
   system.run(() => {
     try {
@@ -11717,7 +11736,7 @@ function casevacMove(e, d, now) {
     }
     else {
       note(e, D.carry ? "carrying a wounded mate to cover" : "dragging a wounded mate to cover");
-      try { if (now % 20 === 0) e.addEffect("slowness", 24, { amplifier: D.carry ? 0 : 1, showParticles: false }); } catch {}
+      try { if (every(`drag${e.id}`, 20, now)) e.addEffect("slowness", 24, { amplifier: D.carry ? 0 : 1, showParticles: false }); } catch {}
       const mv = travel(e, D.to, "medic", now, true);
       return mv ? { ...mv, t: "t_off" } : undefined;
     }
@@ -12618,7 +12637,12 @@ system.runInterval(() => {
     const live = new Set();
     for (const t of [SOLDIER, HOUND]) for (const e of allOf(t)) live.add(e.id);
     for (const p of world.getAllPlayers()) live.add(p.id);
-    for (const m of [crawlTo, stillSince, campOf, seated, ARM, breachFragUsed, smokeUsed, dragCool, firedAt, lastPos, noiseFrom, noiseT, alertUntil, modeMemo, propSync, mountedAt, wetTrack, swimGiveUp, breakCool, recentHits, wetMemo, medicCall, lastHp, buildBudget, shotAtPlayer, doorLook, hopT, settleT, flinchT, edgeFearT, kiteT, fleeFire, lastUse, hurtBy, perc, brain, gunState, notes, sweep, marchWatch, forceGlide, glideBan, aimedBy, hpMemo]) {
+    for (const m of [crawlTo, stillSince, campOf, seated, ARM, breachFragUsed, smokeUsed, dragCool, firedAt, lastPos, noiseFrom, noiseT, alertUntil, modeMemo, propSync, mountedAt, wetTrack, swimGiveUp, breakCool, recentHits, wetMemo, medicCall, lastHp, buildBudget, shotAtPlayer, doorLook, hopT, settleT, flinchT, edgeFearT, kiteT, fleeFire, lastUse, hurtBy, perc, brain, gunState, notes, sweep, marchWatch, forceGlide, glideBan, aimedBy, hpMemo,
+      // (v9.29: these were never swept: a man killed or unloaded while in a fight, a climb, a swim, a march or a panic
+      //  left his record behind for good)
+      combatLock, formMode, driveOn, wetSince, crossing, exitSpot, shaken, reinforcing, hornCone, suppB, climbing, travelTo, gliders, personal,
+      SHIELD_HIT, BASH_T, assist, LIMP, REACT_T, SNIPE, REARGUARD, GRIEF, ARM_HIT, HURRY, glideFails, reflexHits, shotsAtMe, stagger, KICK, PARRY_T,
+      SHY_T, ladderFail, rescueT, pressing, belowRoute, failSpots, walkWatch, poseSeen, IDLE]) {
       if (!m?.size) continue;
       for (const k of [...m.keys()]) if (typeof k === "string" && k.length > 3 && !k.includes(":") && !live.has(k)) m.delete(k);
     }
@@ -14051,7 +14075,7 @@ system.runInterval(() => {
         continue;
       }
       const held = p.getComponent("minecraft:equippable")?.getEquipment(EquipmentSlot.Mainhand)?.typeId === "war:signal_flag";
-      if (held) { SIG_SLOT.set(p.id, slot); if (last === undefined || now % 20 === 0) sigBar(p); } else SIG_SLOT.delete(p.id);
+      if (held) { SIG_SLOT.set(p.id, slot); if (last === undefined || crossed(now, 20, 2)) sigBar(p); } else SIG_SLOT.delete(p.id);
     } catch {}
   }
 }, 2);
@@ -14340,7 +14364,7 @@ system.runInterval(() => {
     try {
       const v = e.getVelocity();
       if (now >= I.until || perc.get(id)?.threat || personal.has(id) || downed.has(id) || Math.hypot(v.x, v.z) > 0.05 || now - Number(gdp(e, "war:ordt") ?? -99999) < 40) { idleEnd(e); continue; }
-      if (I.act === 4 && now % 20 === 0) {
+      if (I.act === 4 && crossed(now, 20, 10)) {
         const h = headLoc(e), f = fwdFromYaw(e.getRotation().y);
         if (I.smoke) e.dimension.spawnParticle("minecraft:basic_smoke_particle", { x: h.x + f.x * 0.3, y: h.y - 0.1, z: h.z + f.z * 0.3 });
         else if (Math.random() < 0.5) e.dimension.playSound("random.eat", e.location, { volume: 0.3 });
@@ -14627,7 +14651,7 @@ WarAPI.registerBehavior({
     if (!want || Math.abs(want.y - c.y) > 2) return undefined;
     const gap = flat(want, e.location);
     if (gap > 1.3) { const slot = myMarker(e, want, "war:mymk", 0.5); return slot ? { g: gap > 6 ? "g_wp" : "g_post", slot, t: "t_mid", urgent: false, note: "going on watch" } : undefined; }   // (v9.20.3: the last blocks with the walking that stops at a block, not 3: pushed the last steps, he stood 5 blocks out "going on watch")
-    if (now % 20 === 0) turnTo(e, { x: e.location.x + Math.cos(a) * 8, z: e.location.z + Math.sin(a) * 8 }, 8);
+    if (every(`watch${e.id}`, 20, now)) turnTo(e, { x: e.location.x + Math.cos(a) * 8, z: e.location.z + Math.sin(a) * 8 }, 8);
     return { g: "g_none", t: "t_long", urgent: false, note: "on watch" };
   },
 });
@@ -14745,7 +14769,7 @@ system.runInterval(() => {
         system.runTimeout(() => msMarch(p, men, M0.ef, MS_SQ.wave, { ...p.location }), 30);
         try { p.onScreenDisplay.setTitle(`§cWave ${M0.wave}`, { subtitle: `${n} coming from the ${["east", "south", "west", "north"][Math.floor(((a + Math.PI / 4) % (Math.PI * 2)) / (Math.PI / 2)) % 4]}`, fadeInDuration: 5, stayDuration: 40, fadeOutDuration: 10 }); } catch {}
       }
-      if (now % 200 === 0 && alive.length) msMarch(p, alive.filter((e) => flat(e.location, p.location) > 20), M0.ef, MS_SQ.wave, { ...p.location });   // (they keep coming for you)
+      if (crossed(now, 200, 20) && alive.length) msMarch(p, alive.filter((e) => flat(e.location, p.location) > 20), M0.ef, MS_SQ.wave, { ...p.location });   // (they keep coming for you)
       M0.men = M0.men.filter((e) => e.isValid);
       msHud(`§cWave ${M0.wave}§7  ·  enemies left: §f${alive.length}§7  ·  next wave: §f${Math.max(0, Math.ceil((M0.next - now) / 20))}s`, p.location, p.dimension.id);
     } else if (M0.type === "esc") {

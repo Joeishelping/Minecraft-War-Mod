@@ -1230,6 +1230,25 @@ KS.load = async (o, ox, oz) => {                                      // how fas
   if (o.cow) kcmd("kill @e[type=cow]");
   return { n: N, cow: !!o.cow, tps: tpsA, tpsNoWaypoints: tpsB, waypoints: allOf(WAYPOINT).length };
 };
+// v9.29: a squad on Hold fire, shot at by enemy soldiers, fires back (their precise rounds carry no damaging entity, and
+// until v9.29 that meant nobody was ever provoked by them). Side 1 holds fire; side 2 opens up 40 blocks off.
+KS.provoke = async (o, ox, oz) => {
+  floorAt(ox - 30, oz - 40, ox + 30, oz + 40);
+  setRelPair(1, 2, "1", false);
+  const A = [], B = [];
+  for (let i = 0; i < 6; i++) { const e = kitSoldier(1, { x: ox - 6 + i * 2 + 0.5, y: Y, z: oz - 20 + 0.5 }, "rifle", "hold"); sdp(e, "war:stance", "holdfire"); A.push(e); }
+  for (let i = 0; i < 4; i++) B.push(kitSoldier(2, { x: ox - 4 + i * 2 + 0.5, y: Y, z: oz + 20 + 0.5 }, "rifle", "hold"));
+  const t0 = tick(); let firstA, firstB, hitA = 0;
+  const hp0 = new Map(A.map((e) => [e.id, hpOf(e)?.currentValue ?? 20]));
+  await kitLoop(Number(o.ticks ?? 600), () => {
+    const sa = KSHOTS.filter((x) => x.t >= t0 && x.f === 1).length, sb = KSHOTS.filter((x) => x.t >= t0 && x.f === 2).length;
+    if (sa && firstA === undefined) firstA = tick() - t0;
+    if (sb && firstB === undefined) firstB = tick() - t0;
+    return false; });
+  for (const e of A) { try { if (!e.isValid || downed.has(e.id) || (hpOf(e)?.currentValue ?? 20) < hp0.get(e.id)) hitA++; } catch { hitA++; } }
+  const st = kitShotStats(t0);
+  return { shotsA: st.s1.n, shotsB: st.s2.n, firstA, firstB, hitA, provokedA: (provokedT.get(1) ?? -1) >= t0, hurtByA: A.filter((e) => hurtBy.has(e.id)).length };
+};
 KS.big = async (o, ox, oz) => {
   const N = Number(o.n ?? 90);
   if (o.view !== undefined) KIT.view = Number(o.view);
