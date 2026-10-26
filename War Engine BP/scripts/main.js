@@ -554,6 +554,10 @@ function marker(slot) {
 function claimSlot(m) {
   const taken = new Set(markers().map(slotOf));
   for (const v of threatSlot.values()) taken.add(v);
+  // (v9.29: and every number a soldier or a march still holds, loaded or not. Only loaded markers were counted: one in
+  //  land that had unloaded looked free, its number went to a new marker, and when that land loaded again two markers
+  //  shared the number: men whose goal it was could walk off to the old one, hundreds of blocks away)
+  for (const v of usedSlotsTick()) taken.add(v);
   const assign = (i) => { sdp(m, "war:slot", i); tagMarker(m, i); sdp(m, "war:born", Date.now()); markerCache.set(i, m); return i; };
   for (let i = 1; i <= NSLOT; i++) if (!taken.has(i)) return assign(i);
   // all slots taken: recycle the oldest marker nobody uses any more
@@ -602,6 +606,8 @@ function noteRefs(e) {
   getRefs()[e.id] = [...new Set(r)];
   refSeen.set(e.id, tick());
 }
+let usedMemo = { t: -1, s: null };
+function usedSlotsTick() { const now = tick(); if (usedMemo.t !== now) usedMemo = { t: now, s: usedSlots() }; return usedMemo.s; }
 function usedSlots() {
   const used = new Set();
   for (const list of Object.values(getRefs())) for (const sl of list) used.add(sl);
@@ -694,13 +700,20 @@ function setupSoldier(e, s, player, { heal = true } = {}) {
   return giveFunction(e, ok ? s.func : FUNCS[div][0][0], player);
 }
 
+// (v9.29: he stays who he is: his name, experience and temperament, medals, stance and his horse go with him. Re-made
+//  for another player (told to follow someone else), he used to come back as a stranger with a new name and no record.)
+const KEEP_ON_REPLACE = ["war:id", "war:stance", "war:mount", "war:mountId", "war:kit"];
 function replaceSoldier(e) {
   const s = { ...snapshot(e), owner: gdp(e, "war:owner") };
   const hp = hpOf(e);
   const cur = hp ? hp.currentValue : undefined;
+  const kept = KEEP_ON_REPLACE.map((k) => [k, gdp(e, k)]), med = P(e, "war:medals");
   const n = e.dimension.spawnEntity(SOLDIER, e.location, { spawnEvent: "war:init" });
+  for (const [k, v] of kept) if (v !== undefined) sdp(n, k, v);
   setupSoldier(n, { ...s, func: "__none" }, undefined);
+  try { if (med) setP(n, "war:medals", med); ID_CACHE.delete(n.id); showRank(n); } catch {}
   try { if (cur !== undefined) hpOf(n).setCurrentValue(cur); } catch {}
+  try { n.teleport(e.location, { rotation: e.getRotation() }); } catch {}
   e.remove();
   return n;
 }
@@ -1546,12 +1559,12 @@ function hpBefore(v, h, dmg) {
   if (pre !== undefined) { if (Math.abs(seen - (pre - dmg)) < 0.05) PRE_SUB = true; else if (Math.abs(seen - pre) < 0.05 && dmg > 0.1) PRE_SUB = false; return pre; }
   return PRE_SUB ? seen + dmg : seen;
 }
-function oneShot(v, ev, cause) {
+function oneShot(v, ev, cause, dmg0 = ev.damage) {
   // v9.7 (rev.): it's the force of the blow that decides. A blow far bigger than what he had left (a second round
   // into a man already hurt, buckshot at close range) kills outright; one that only just takes him down leaves him
   // wounded. A blast kills outright and throws him away from it the closer he was, and very close tears him apart.
   const now = tick(), lh = lastHit.get(v.id), fresh = !!lh && now - lh.t <= 1;
-  const hp = hpBefore(v, hpOf(v), ev.damage), over = ev.damage - hp;
+  const hp = hpBefore(v, hpOf(v), dmg0), over = ev.damage - hp;
   const src = ev.damageSource?.damagingEntity;
   const away = (from) => { const dx = v.location.x - from.x, dz = v.location.z - from.z, L = Math.hypot(dx, dz) || 1; return { x: dx / L, y: 0, z: dz / L }; };
   let how;
@@ -1994,7 +2007,18 @@ system.runInterval(() => { try { sweepBodies(); } catch {} }, 600);
 try {
   world.afterEvents.entityLoad.subscribe((ev) => {
     try {
-      const c = ev.entity; if (c?.typeId !== "war:corpse") return;
+      const c = ev.entity;
+      // (v9.29: a marker coming back with land that loads, whose number has since gone to a newer marker: it's a stale
+      //  copy (two markers sharing a number send men to the wrong one), and goes)
+      if (c?.typeId === WAYPOINT) {
+        system.runTimeout(() => { try {
+          if (!c.isValid) return; const sl = slotOf(c); if (!sl) return;
+          const mine = Number(gdp(c, "war:born") ?? 0);   // (born is kept in memory only: one that's been out of loaded land has none)
+          if (allOf(WAYPOINT).some((o) => o.id !== c.id && o.isValid && slotOf(o) === sl && Number(gdp(o, "war:born") ?? 0) > mine)) { markerCache.delete(sl); c.remove(); v9stat("staleMarker"); }
+        } catch {} }, 5);
+        return;
+      }
+      if (c?.typeId !== "war:corpse") return;
       system.runTimeout(() => { try { if (c.isValid && ![...FALLS.values()].includes(c.id) && bodyState(c, tick()) !== "ok") clearBody(c); } catch {} }, 10);
     } catch {}
   });
@@ -2024,11 +2048,16 @@ world.beforeEvents.entityHurt.subscribe((ev) => {
       if (r >= 1) { ev.cancel = true; return; }
       if (r > 0) ev.damage = ev.damage * (1 - r);
     }
+    // (v9.29: the realism damage setting and friendly fire's quarter damage are applied FIRST, then "does this drop him?"
+    //  is asked of what the blow really does. They used to be applied after: a friendly round that did 2.5 dropped a man
+    //  on 8 health as if it had been lethal, and on lighter damage settings men went down from hits that only grazed them)
+    const dmg0 = ev.damage;
+    scaleHurt(ev);
     if (v?.typeId === SOLDIER && !downed.has(v.id)) {
       const cause = String(ev.damageSource.cause ?? "");
       const h = hpOf(v);
       const noDown = ["houndmaster"].includes(String(gdp(v, "war:div") ?? ""));   // (v6.9.3: dog handlers just die; v9.14: riders go down, thrown from the saddle)
-      if (h && ev.damage >= hpBefore(v, h, ev.damage) && cause !== "void" && !dying.has(v.id) && !noDown && !oneShot(v, ev, cause)) {   // (v9.7: some hits kill outright)
+      if (h && ev.damage >= hpBefore(v, h, dmg0) && cause !== "void" && !dying.has(v.id) && !noDown && !oneShot(v, ev, cause, dmg0)) {   // (v9.7: some hits kill outright)
         ev.cancel = true;                                            // falls wounded instead of dying
         let killer; try { killer = ev.damageSource?.damagingEntity; } catch {}
         const bd = hitDir(v, killer);
@@ -2042,13 +2071,6 @@ world.beforeEvents.entityHurt.subscribe((ev) => {
     if (v && CIVILIANS.includes(v.typeId) && setting("civil", true) && a &&
         (a.typeId === SOLDIER || a.typeId === HOUND || (a.typeId === "minecraft:player" && String(ev.damageSource.cause ?? "").includes("xplosion")))) { ev.cancel = true; return; }
   } catch {}
-  try {   // realism: damage in soldier combat
-    const k = realism().dmg;
-    const hv = ev.hurtEntity;
-    const bySoldier = ev.damageSource.damagingEntity?.typeId === SOLDIER ||
-      (hv?.typeId === "minecraft:player" && !ev.damageSource.damagingEntity && tick() - (shotAtPlayer.get(hv.id) ?? -999) < 12);
-    if (k !== 1 && (hv?.typeId === SOLDIER || bySoldier)) ev.damage = ev.damage * k;
-  } catch {}
   // tanks shrug off small arms; no single hit takes more than ~a third of one
   try {
     if (ev.hurtEntity?.typeId === "war:tank") {
@@ -2059,13 +2081,26 @@ world.beforeEvents.entityHurt.subscribe((ev) => {
       return;
     }
   } catch {}
-  try {
-    const v = ev.hurtEntity, a = ev.damageSource.damagingEntity;
-    if (!a || !v || a.id === v.id) return;
-    const fa = factionOf(a), fv = factionOf(v);
-    if (fa && fv && isFriendly(fa, fv)) ev.damage = ev.damage * 0.25; // friendly fire: possible, but difficult
-  } catch {}
 });
+// the realism damage setting (soldier combat), and friendly fire: possible, but a quarter as bad (not for vehicles: a
+// tank's crew shooting it isn't a thing; the tank's own rule applies)
+function scaleHurt(ev) {
+  try {
+    const k = realism().dmg, hv = ev.hurtEntity;
+    const bySoldier = ev.damageSource.damagingEntity?.typeId === SOLDIER ||
+      (hv?.typeId === "minecraft:player" && !ev.damageSource.damagingEntity && tick() - (shotAtPlayer.get(hv.id) ?? -999) < 12);
+    if (k !== 1 && (hv?.typeId === SOLDIER || bySoldier) && hv?.typeId !== "war:tank") ev.damage = ev.damage * k;
+  } catch {}
+  try {
+    const v = ev.hurtEntity; let a = ev.damageSource.damagingEntity;
+    // (v9.29: a soldier's own round hits with no damaging entity (on purpose, see hitscan): who fired it is in SHOT_BY.
+    //  Without this, a round into a squad mate always did full damage: the quarter rule never applied to soldiers' fire)
+    if (!a && v) { const sb = SHOT_BY.get(v.id); if (sb && tick() - sb.t <= 1) a = world.getEntity(sb.id); }
+    if (!a || !v || a.id === v.id || v.typeId === "war:tank") return;
+    const fa = factionOf(a), fv = factionOf(v);
+    if (fa && fv && isFriendly(fa, fv)) ev.damage = ev.damage * 0.25;
+  } catch {}
+}
 world.afterEvents.entityHurt.subscribe((ev) => {
   try { chronHit(ev.damageSource.damagingEntity, ev.hurtEntity); } catch {}
   try { repHit(ev.damageSource.damagingEntity, ev.hurtEntity); } catch {}
@@ -3461,7 +3496,6 @@ async function warTable(player, pre) {
     if (contentMode() !== cm0) player.sendMessage(`§eContent set to ${contentMode()}: soldiers switch their weapons and mounts over as they're near.`);
     player.sendMessage("§aSettings saved.");
     return warTable(player, 5);
-    player.sendMessage("§aSettings saved.");
   }
 }
 
@@ -3707,9 +3741,14 @@ function chronSave() {
   saveChunks("war:chronE", JSON.stringify(chronEvents));
   chronDirty = false;
 }
+const CHRON_MAX = 1500;   // (v9.29: a war that runs for weeks of play kept every line forever, all of it written out again every 5 s)
 function chronLog(text) {
   if (!chron) return;
   chronEvents.push({ d: day(), t: strip(text) });
+  if (chronEvents.length > CHRON_MAX) {                                  // the oldest ordinary lines go first; players' own entries stay
+    let drop = chronEvents.length - CHRON_MAX;
+    chronEvents = chronEvents.filter((ev) => ev.entry || drop-- <= 0);
+  }
   chronDirty = true;
 }
 function say(msg) { world.sendMessage(msg); chronLog(msg); }
