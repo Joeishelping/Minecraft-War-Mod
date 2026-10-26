@@ -1499,7 +1499,7 @@ function freshSeen(e) {
   try { if (P(e, "war:idle") || P(e, "war:sleep")) { setP(e, "war:idle", 0); setP(e, "war:sleep", false); if (!pows.has(e.id) && !gdp(e, "war:surr") && !downed.has(e.id)) equip(e, weaponItem(e)); } } catch {}
   // (v9.29: and sitting at a fire, or crawling wounded: the fire and the crawl are this session's, so after the land
   //  unloaded and loaded again he was drawn sitting (or crawling) for good, with no fire and no wound)
-  try { if (P(e, "war:sit") && !seated.has(e.id)) setP(e, "war:sit", false); if (P(e, "war:crawl") && !crawlTo.has(e.id)) setP(e, "war:crawl", false); } catch {}
+  try { if (P(e, "war:sit") && !seated.has(e.id)) setP(e, "war:sit", false); if (P(e, "war:crawl") && !crawlTo.has(e.id)) setP(e, "war:crawl", false); if (P(e, "war:react") && !REACT_T.has(e.id)) setP(e, "war:react", 0); } catch {}   // (and a flinch cut short)
   try { if (gdp(e, "war:div") === "guard") { const h = hpOf(e); if (h && h.effectiveMax < 40) e.triggerEvent("war:hp_60"); } } catch {}
   try { setP(e, "war:role", roleFor(e)); } catch {}
 }

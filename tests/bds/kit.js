@@ -1232,6 +1232,12 @@ KS.load = async (o, ox, oz) => {                                      // how fas
 };
 // v9.29: a squad on Hold fire, shot at by enemy soldiers, fires back (their precise rounds carry no damaging entity, and
 // until v9.29 that meant nobody was ever provoked by them). Side 1 holds fire; side 2 opens up 40 blocks off.
+// v9.29: what the game's script engine offers for the settings code (export / import)
+KS.b64 = async () => {
+  const r = { btoa: typeof globalThis.btoa, atob: typeof globalThis.atob, escape: typeof globalThis.escape, unescape: typeof globalThis.unescape };
+  try { const code = settingsCode(); r.codeStart = code.slice(0, 12); r.roundTrip = loadSettingsCode(code) >= 0; } catch (err) { r.err = String(err); }
+  return r;
+};
 KS.provoke = async (o, ox, oz) => {
   floorAt(ox - 30, oz - 40, ox + 30, oz + 40);
   setRelPair(1, 2, "1", false);
