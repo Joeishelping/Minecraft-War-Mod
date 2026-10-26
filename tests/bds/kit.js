@@ -1307,7 +1307,9 @@ system.afterEvents.scriptEventReceive.subscribe((ev) => {
       for (let k = 0; k < 60; k++) { let ok = true; for (const [x, z] of [[r[0], r[1]], [r[2], r[1]], [r[0], r[3]], [r[2], r[3]], [(r[0] + r[2]) >> 1, (r[1] + r[3]) >> 1]]) { try { if (!ow().getBlock({ x, y: Y, z })) ok = false; else { const t = ow().spawnEntity("war:blank", { x: x + 0.5, y: Y + 1, z: z + 0.5 }); t.remove(); } } catch { ok = false; } } if (ok) break; await kitWait(10); }   // (loaded AND ticking: something can be spawned there)
       await kitWait(20);
       globalThis.__v9 = {};
+      const inv = o.inv ? invStart(ox, oz) : undefined;
       const res = await KS[name](o, ox, oz);
+      if (inv) res.inv = invStop(inv);
       const dpSize = {}; try { const sizes = allOf(SOLDIER).map((e) => e.getDynamicPropertyTotalByteCount()); dpSize.soldierAvg = Math.round(sizes.reduce((t, v) => t + v, 0) / Math.max(1, sizes.length)); dpSize.soldierMax = Math.max(0, ...sizes); dpSize.world = world.getDynamicPropertyTotalByteCount(); const big = allOf(SOLDIER)[0]; if (big) dpSize.keys = big.getDynamicPropertyIds().map((k) => `${k}:${String(big.getDynamicProperty(k) ?? "").length}`).sort((x, y) => Number(y.split(":").pop()) - Number(x.split(":").pop())).slice(0, 8); const wk = world.getDynamicPropertyIds().map((k) => `${k}:${String(world.getDynamicProperty(k) ?? "").length}`).sort((x, y) => Number(y.split(":").pop()) - Number(x.split(":").pop())).slice(0, 8); dpSize.worldKeys = wk; } catch (err) { dpSize.err = String(err); }
       console.warn(`WARTEST ${JSON.stringify({ scenario: name, args: o, ...res, v9: globalThis.__v9, dpSize, errors: ERRS.size, errList: [...ERRS].slice(0, 3) })}`);
     } catch (err) { console.warn(`WARTEST ${JSON.stringify({ scenario: name, args: o, crash: String(err), stack: String(err?.stack ?? "").slice(0, 300) })}`); }
@@ -2224,6 +2226,59 @@ KS.skinmix = async (o, ox, oz) => {
 // v9.19: second-guessing meter: decision changes, flip-flops (A->B->A within 3 s) and which pairs flip, movement
 // reversals, yaw flicks, target switches, goal-group changes (the game's own movement switching)
 let o_detail = false;
+// v9.29: the invariant watcher (any scenario with inv=1). Once a second it checks what must always hold and records
+// every breach with where and what the man was doing: duplicate marker numbers, a goal with no marker, a man meant to be
+// walking who hasn't moved for 15 s (not fighting), a man inside a block, a pose with nothing behind it, the downed
+// sliding off where they fell. At the end: how the per-soldier records grew, and markers nobody refers to any more.
+const INV_MAPS = () => ({ perc, brain, gunState, personal, gliders, climbing, combatLock, suppB, hurtBy, firedAt, notes, sweep, rescueMark, pressing, PROGMEM, rTrack, GOAL_SET, threatSlot, spotClaims, reachMemo, TERRAIN, STAND, WALKC, DANGER, routeCache: { size: routeCache.length }, planJobs: { size: planJobs.length }, markerCache, squads, squadMemory, helpCall, lastCall, SHOT_BY, PRE_HP });
+function invStart(ox, oz) {
+  const W = { v: {}, ex: {}, t0: tick(), stop: false, st: new Map(), ox, oz, maps0: Object.fromEntries(Object.entries(INV_MAPS()).map(([k, m]) => [k, m.size])) };
+  const hit = (k, e, extra) => { W.v[k] = (W.v[k] ?? 0) + 1; const L = (W.ex[k] ??= []); if (L.length < 12) { let at = ""; try { const l = e.location; at = `${Math.round(l.x - ox)},${Math.round(l.y)},${Math.round(l.z - oz)}`; } catch {} L.push(`${at} ${notes.get(e?.id)?.text ?? "-"}${extra ? ` ${extra}` : ""}`); } };
+  (async () => {
+    while (!W.stop) {
+      const now = tick();
+      try {
+        const seen = new Map();
+        for (const m of allOf(WAYPOINT)) { const sl = slotOf(m); if (!sl) continue; if (seen.has(sl)) hit("dupMarker", m, `slot ${sl}`); seen.set(sl, m); }
+        for (const e of allOf(SOLDIER)) {
+          if (!e.isValid) continue;
+          const id = e.id, l = e.location;
+          let S = W.st.get(id); if (!S) { S = { x: l.x, y: l.y, z: l.z, t: now, flags: {} }; W.st.set(id, S); }
+          const flag = (k, bad, extra) => { if (!bad) { S.flags[k] = undefined; return; } S.flags[k] ??= now; if (now - S.flags[k] >= 40 && S.flags[k] !== -1) { hit(k, e, extra); S.flags[k] = -1; } };
+          const g = getJSON(e, "war:st", {}).g, goal = Number(gdp(e, "war:goal") ?? 0), mk = goal ? marker(goal) : undefined;
+          const busy = downed.has(id) || pows.has(id) || isRiding(e) || climbing.has(id) || held.has(id) || now - (gunState.get(id)?.lastShot ?? -999) < 60 || !!perc.get(id)?.threat?.isValid;
+          if (Math.hypot(l.x - S.x, l.z - S.z) > 0.5 || Math.abs(l.y - S.y) > 1) { S.x = l.x; S.y = l.y; S.z = l.z; S.t = now; }
+          const wk = `${g}|${goal}`; if (S.wk !== wk) { S.wk = wk; S.t = Math.max(S.t, now); }   // (timed from when this walk was given, not from when he last moved)
+          if (!busy && g === "g_wp" && mk && dist(mk.location, l) > 4 && now - S.t >= 300) { if (!S.stuckSaid) {
+            const pr = personal.get(id), ml = mk.location;
+            const why = `goal ${Math.round(flat(ml, l))} off dy${(ml.y - l.y).toFixed(1)} ${pr ? (pr.planning ? "planning" : pr.pts ? `route ${pr.idx}/${pr.pts.length}` : "noroute") : "nopr"} glide${gliders.has(id) ? (gliders.get(id).paused ? "P" : "1") : "0"} ${mk.hasTag("war_mine") ? "own" : "shared"} straight${straightReach(e.dimension, l, ml) ? 1 : 0} reach${localReach(e.dimension, l, ml) ? 1 : 0} in${isIndoors(e) ? 1 : 0} f=${sd(e).func} B=${brain.get(id)?.act ?? "-"} ban${(glideBan.get(id) ?? 0) > now ? 1 : 0} cu${gdp(e, "war:catchup") ?? "-"}/${goal}`;
+            hit("stuck15s", e, why); S.stuckSaid = true; } } else if (now - S.t < 300) S.stuckSaid = false;
+          flag("orphanGoal", g === "g_wp" && goal > 0 && !mk && !threatSlot.has(id), `slot ${goal}`);
+          flag("insideBlock", !climbing.has(id) && !held.has(id) && insideBlock(e));
+          flag("sitNoFire", !!P(e, "war:sit") && !seated.has(id));
+          flag("crawlNotDown", !!P(e, "war:crawl") && !downed.has(id));
+          flag("downPropNotDown", !!P(e, "war:down") && !downed.has(id) && !held.has(id));
+          flag("downNoProp", downed.has(id) && !P(e, "war:down"));
+          flag("idleNoRecord", Number(P(e, "war:idle") ?? 0) !== 0 && !IDLE.has(id));
+          flag("sleepNoRecord", !!P(e, "war:sleep") && !SLEEP.has(id));
+          flag("blockNoShield", !!P(e, "war:block") && !SHIELD_ON.get(id));
+          flag("hiddenNoFall", !!P(e, "war:hide") && !FALLS.has(id));
+          flag("downedSlid", downed.has(id) && !DRAG.has(id) && !FALLS.has(id) && !!downPos.get(id) && dist(downPos.get(id), l) > 1.6, `${dist(downPos.get(id) ?? l, l).toFixed(1)} off`);
+          flag("headTipped", !busy && Math.abs(e.getRotation().x) > 45 && !gunState.get(id)?.target);
+        }
+      } catch (err) { W.v.watchErr = String(err).slice(0, 120); }
+      await kitWait(20);
+    }
+  })();
+  return W;
+}
+function invStop(W) {
+  W.stop = true;
+  const n = allOf(SOLDIER).length, maps1 = Object.fromEntries(Object.entries(INV_MAPS()).map(([k, m]) => [k, m.size]));
+  const grow = {}; for (const [k, v] of Object.entries(maps1)) if (v > Math.max(30, n * 3) && v > (W.maps0[k] ?? 0) * 1.5) grow[k] = `${W.maps0[k]}->${v}`;
+  const used = usedSlots(); let unref = 0, mine = 0; for (const m of allOf(WAYPOINT)) { const sl = slotOf(m); if (m.hasTag("war_mine")) mine++; else if (sl && !used.has(sl) && !laneOf.has(sl)) unref++; }
+  return { v: W.v, ex: W.ex, soldiers: n, markers: allOf(WAYPOINT).length, myMarkers: mine, unrefMarkers: unref, bigMaps: grow };
+}
 async function churn(list, T) {
   const st = new Map(), pairs = {}, ditherWhat = {}, stallWhat = {}; let want = 0, stall = 0, dither = 0, acts = 0, flips = 0, tsw = 0, gsw = 0, rev = 0, moves = 0, flick = 0, turns = 0, samples = 0, bigFlick = 0;
   for (let k = 0; k < T; k++) {

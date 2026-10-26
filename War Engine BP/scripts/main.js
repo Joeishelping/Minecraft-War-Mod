@@ -14335,7 +14335,8 @@ function battleSave(p, slot) {
 function battleLoad(p, slot, clear) {
   let txt = ""; for (let i = 0; i < 40; i++) { const c = world.getDynamicProperty(`war:bsave${slot}_${i}`); if (c === undefined) break; txt += String(c); }
   if (!txt) return -1;
-  const rows = JSON.parse(txt), meta = getJSON(world, "war:bsaves", {})[slot];
+  let rows; try { rows = JSON.parse(txt); } catch { return -2; }                // (v9.29: a damaged save: said so, not a silent failure)
+  const meta = getJSON(world, "war:bsaves", {})[slot];
   const dim = world.getDimension(meta?.dim ?? p.dimension.id);
   if (clear) for (const e of dim.getEntities({ type: SOLDIER, location: p.location, maxDistance: 200 })) { try { e.remove(); } catch {} }
   let n = 0;
@@ -14365,7 +14366,7 @@ async function battleSaveMenu(p) {
   if (meta[slot]) a.button("Load it (keep the soldiers here now)").button("Load it, removing the soldiers here now").button("§cDelete this save");
   const ar = await show(a, p); if (!ar || ar.canceled || ar.selection === undefined) return;
   if (ar.selection === 0) { const n = battleSave(p, slot); p.sendMessage(`§aSaved ${n} soldiers to slot ${slot}.`); }
-  else if (ar.selection === 1 || ar.selection === 2) { const n = battleLoad(p, slot, ar.selection === 2); p.sendMessage(n < 0 ? "§cThat slot is empty." : `§aLoaded ${n} soldiers from slot ${slot}.`); }
+  else if (ar.selection === 1 || ar.selection === 2) { const n = battleLoad(p, slot, ar.selection === 2); p.sendMessage(n === -1 ? "§cThat slot is empty." : n < 0 ? "§cThat save is damaged and can't be loaded." : `§aLoaded ${n} soldiers from slot ${slot}.`); }
   else { for (let i = 0; i < 40; i++) world.setDynamicProperty(`war:bsave${slot}_${i}`, undefined); delete meta[slot]; setJSON(world, "war:bsaves", meta); p.sendMessage(`§7Slot ${slot} deleted.`); }
 }
 
