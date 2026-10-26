@@ -1497,6 +1497,9 @@ function freshSeen(e) {
   poseOf.delete(e.id);
   // v9.19: an off-duty moment or a sleep cut short by the reload: on his feet with his rifle again
   try { if (P(e, "war:idle") || P(e, "war:sleep")) { setP(e, "war:idle", 0); setP(e, "war:sleep", false); if (!pows.has(e.id) && !gdp(e, "war:surr") && !downed.has(e.id)) equip(e, weaponItem(e)); } } catch {}
+  // (v9.29: and sitting at a fire, or crawling wounded: the fire and the crawl are this session's, so after the land
+  //  unloaded and loaded again he was drawn sitting (or crawling) for good, with no fire and no wound)
+  try { if (P(e, "war:sit") && !seated.has(e.id)) setP(e, "war:sit", false); if (P(e, "war:crawl") && !crawlTo.has(e.id)) setP(e, "war:crawl", false); } catch {}
   try { if (gdp(e, "war:div") === "guard") { const h = hpOf(e); if (h && h.effectiveMax < 40) e.triggerEvent("war:hp_60"); } } catch {}
   try { setP(e, "war:role", roleFor(e)); } catch {}
 }
@@ -2025,6 +2028,7 @@ try {
         } catch {} }, 5);
         return;
       }
+      if (c?.typeId === SOLDIER) { system.runTimeout(() => { try { if (c.isValid) stripThreatTags(c); } catch {} }, 2); return; }
       if (c?.typeId !== "war:corpse") return;
       system.runTimeout(() => { try { if (c.isValid && ![...FALLS.values()].includes(c.id) && bodyState(c, tick()) !== "ok") clearBody(c); } catch {} }, 10);
     } catch {}
@@ -2219,6 +2223,7 @@ function warFlagPlaced(f) {
 world.afterEvents.playerSpawn.subscribe((ev) => {
   const p = ev.player;
   setPlayerFaction(p, playerFaction(p));
+  try { stripThreatTags(p); } catch {}
   if (ev.initialSpawn) return;
   system.runTimeout(() => {
     for (const g of allOf(SOLDIER)) {
@@ -5278,13 +5283,20 @@ function slotForThreat(t) {
   for (let i = 1; i <= NSLOT; i++) if (!used.has(i)) { try { tagMarker(t, i); } catch { return 0; } threatSlot.set(t.id, i); return i; }
   return 0;
 }
+// (v9.29: a hunted man who logged off, or whose land unloaded, still wore the number's tags. The number was let go at
+//  once, given to a new marker, and men sent to that marker could walk off after him instead. Now the number is held
+//  while he's away (10 min at most), and anyone carrying such tags with no hunt on him loses them when he comes back.)
+const threatGone = new Map(); // entity id -> tick he was first missed
+function stripThreatTags(ent) { if (!threatSlot.has(ent.id) && ent.getTags().some((t) => t.startsWith("war_wr") || t.startsWith("war_wc"))) untagMarker(ent); }
 system.runInterval(() => {
   const goals = new Set(allOf(SOLDIER).map((s) => Number(gdp(s, "war:goal") ?? 0)));
+  const now = tick();
   for (const [id, slot] of [...threatSlot]) {
-    if (goals.has(slot)) continue;
+    if (goals.has(slot)) { threatGone.delete(id); continue; }
     const t = world.getEntity(id);
-    try { if (t) untagMarker(t); } catch {}
-    threatSlot.delete(id);
+    if (t) { try { untagMarker(t); } catch {} threatSlot.delete(id); threatGone.delete(id); continue; }
+    const g0 = threatGone.get(id) ?? now; threatGone.set(id, g0);
+    if (now - g0 > 12000) { threatSlot.delete(id); threatGone.delete(id); }
   }
 }, 40);
 
@@ -12573,8 +12585,16 @@ let ZONES = null;           // [{ id, name, dim, x, z, r }]
 const getZones = () => (ZONES ??= getJSON(world, "war:zones", []));
 const saveZones = () => setJSON(world, "war:zones", ZONES ?? []);
 function zoneAt(dimId, loc) { for (const z of getZones()) if (z.dim === dimId && Math.hypot(loc.x - z.x, loc.z - z.z) <= z.r) return z; return undefined; }
+let zoneSweepT = -9999;
 system.runInterval(() => {
   try {
+    // (v9.29: a man inside a zone when his land unloaded, or a player who logged off there, kept the tag (the game's own
+    //  targeting reads it) after the zone was removed: never a melee target for anyone again. Every 10 s, anyone tagged
+    //  who is in no zone loses it.)
+    if (tick() - zoneSweepT >= 200) {
+      zoneSweepT = tick();
+      for (const e of [...allOf(SOLDIER), ...allOf(HOUND), ...world.getAllPlayers()]) { try { if (!SAFE.has(e.id) && e.hasTag("war_safe") && !zoneAt(e.dimension.id, e.location)) e.removeTag("war_safe"); } catch {} }
+    }
     if (!getZones().length) { if (SAFE.size) { for (const id of SAFE) { try { world.getEntity(id)?.removeTag("war_safe"); } catch {} } SAFE.clear(); } return; }
     const now = new Set();
     for (const e of [...allOf(SOLDIER), ...allOf(HOUND), ...world.getAllPlayers()]) {
@@ -12807,7 +12827,7 @@ WarAPI.registerBehavior({
     if (dist(sp, e.location) < 3.2 && dist(sp, e.location) >= 0.7) push(e, { x: (sp.x - e.location.x) * 0.2, y: 0.02, z: (sp.z - e.location.z) * 0.2 }, 3);
     if (dist(sp, e.location) < 0.7) { try { e.setRotation({ x: 0, y: Math.atan2(-W.ux, W.uz) * 180 / Math.PI }); } catch {} return { g: "g_none", t, urgent: false, note: "holding the shield wall" }; }
     const slot = myMarker(e, sp, "war:mymk", 0.6);
-    return slot !== undefined ? { g: "g_wp", slot, t, urgent: true, note: "forming the shield wall" } : undefined;
+    return slot ? { g: "g_wp", slot, t, urgent: true, note: "forming the shield wall" } : undefined;
   },
 });
 
@@ -12905,7 +12925,7 @@ WarAPI.registerBehavior({
     const gap = Math.hypot(sp.x - e.location.x, sp.z - e.location.z);
     if (gap < 8 && Math.abs(sp.y - e.location.y) < 1.6) return { g: "g_none", t: sp.t, urgent: false, note: sp.what };   // (close: the detail driver holds him on his spot)
     const slot = myMarker(e, { x: sp.x, y: sp.y, z: sp.z }, "war:mymk", 0.8);               // (far or another level: he walks there)
-    return slot !== undefined ? { g: "g_wp", slot, t: sp.t, urgent: true, note: sp.what } : undefined;
+    return slot ? { g: "g_wp", slot, t: sp.t, urgent: true, note: sp.what } : undefined;
   },
 });
 // v9.15.1: the detail driver. Every tick each man near his spot is carried onto it at your pace (a little faster, to
@@ -13832,6 +13852,8 @@ const SLEEP = new Map();     // id -> tick he lay down
 const WATCH = new Map();     // squad key -> { ids: Set, t }
 function wake(e) { if (!SLEEP.has(e.id)) return; const b = SLEEP.get(e.id)?.bed; SLEEP.delete(e.id); if (b) BEDS_TAKEN.delete(b); try { setP(e, "war:sleep", false); if (!pows.has(e.id) && !sd(e).surr) equip(e, weaponItem(e)); } catch {} }   // (v9.23: he picks his rifle back up)
 const BEDS_TAKEN = new Set();   // "x,y,z" of beds a man is sleeping in or walking to
+// (v9.29: a sleeper killed or unloaded let go of his bed too: it stayed taken all session and nobody else slept in it)
+function forgetSleeper(id) { const b = SLEEP.get(id)?.bed; if (b) BEDS_TAKEN.delete(b); SLEEP.delete(id); }
 const GOING_TO_BED = new Map(); // id -> { at, key, t }
 function lieDown(o, now, bed) {
   try { if (IDLE.has(o.id)) { IDLE.delete(o.id); setP(o, "war:idle", 0); } } catch {}
@@ -13855,7 +13877,7 @@ function findBed(o) {
 }
 system.runInterval(() => {
   const now = tick();
-  if (!NIGHT) { for (const id of [...SLEEP.keys()]) { const e = world.getEntity(id); if (e?.isValid) wake(e); else SLEEP.delete(id); } return; }
+  if (!NIGHT) { for (const id of [...SLEEP.keys()]) { const e = world.getEntity(id); if (e?.isValid) wake(e); else forgetSleeper(id); } return; }
   for (const [k, S] of squads) {
     try {
       if (!S.ours?.length) continue;
@@ -13898,7 +13920,7 @@ system.runInterval(() => {
   if (!SLEEP.size) return;
   const now = tick();
   for (const [id] of [...SLEEP]) {
-    const e = world.getEntity(id); if (!e?.isValid) { SLEEP.delete(id); continue; }
+    const e = world.getEntity(id); if (!e?.isValid) { forgetSleeper(id); continue; }
     try {
       const S = squads.get(squadKey(e, sd(e)));
       if (S?.known?.size || perc.get(id)?.threat || now - Number(gdp(e, "war:ordt") ?? -99999) < 40 || SHOTS.some((sh) => now - sh.t < 20 && Math.hypot(sh.x - e.location.x, sh.z - e.location.z) < 40)) { wake(e); note(e, "woken up"); }

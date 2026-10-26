@@ -3,15 +3,17 @@
 // looking where trouble comes from. Shows: registerBehavior, the helpers on WarAPI.lib, and returning a move.
 import { WarAPI } from "../api.js";
 
+const lastTurn = new Map();   // soldier id -> tick he last turned to the door (a soldier thinks every few ticks, at no fixed tick)
+
 WarAPI.registerBehavior({
   name: "face the door",
   when: "last",           // only when nothing else (fighting, orders, routes) wants him
   priority: 10,
   decide(e, d, now, lib) {
-    if (!["hold", "post", "sentry"].includes(d.func) || now % 40 !== 0) return undefined;
+    if (!["hold", "post", "sentry"].includes(d.func) || now - (lastTurn.get(e.id) ?? -99) < 40) return undefined;
     if (lib.perc.get(e.id)?.threat || !lib.isIndoors(e)) return undefined;
     const door = lib.nearestBlock(e, (b) => b.typeId.includes("door"), 8);
-    if (door) lib.turnTo(e, door, 30);
+    if (door) { lib.turnTo(e, door, 30); lastTurn.set(e.id, now); }
     return undefined;     // turning only: he keeps his spot
   },
 });
